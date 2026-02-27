@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -25,7 +26,8 @@ type Manager struct {
 }
 
 // Load loads or generates CA and server certificates.
-func Load(caCertPath, caKeyPath, serverCertPath, serverKeyPath string) (*Manager, error) {
+// serverIPs is an optional list of IP addresses to include as IP SANs in the server cert.
+func Load(caCertPath, caKeyPath, serverCertPath, serverKeyPath string, serverIPs []net.IP) (*Manager, error) {
 	if err := os.MkdirAll(filepath.Dir(caCertPath), 0755); err != nil {
 		return nil, err
 	}
@@ -46,7 +48,7 @@ func Load(caCertPath, caKeyPath, serverCertPath, serverKeyPath string) (*Manager
 	}
 
 	if _, err := os.Stat(serverCertPath); os.IsNotExist(err) {
-		if err := m.generateServerCert(serverCertPath, serverKeyPath); err != nil {
+		if err := m.generateServerCert(serverCertPath, serverKeyPath, serverIPs); err != nil {
 			return nil, fmt.Errorf("generate server cert: %w", err)
 		}
 	}
@@ -125,10 +127,18 @@ func (m *Manager) loadCA(certPath, keyPath string) error {
 	return nil
 }
 
-func (m *Manager) generateServerCert(certPath, keyPath string) error {
+func (m *Manager) generateServerCert(certPath, keyPath string, extraIPs []net.IP) error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
+	}
+
+	// Always include localhost IPs so health checks and local tools work.
+	ips := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	for _, ip := range extraIPs {
+		if ip != nil {
+			ips = append(ips, ip)
+		}
 	}
 
 	template := &x509.Certificate{
@@ -142,9 +152,10 @@ func (m *Manager) generateServerCert(certPath, keyPath string) error {
 			"*.youtube.com",
 			"www.youtube.com",
 		},
-		NotBefore: time.Now().Add(-time.Hour),
-		NotAfter:  time.Now().Add(5 * 365 * 24 * time.Hour),
-		KeyUsage:  x509.KeyUsageDigitalSignature,
+		IPAddresses: ips,
+		NotBefore:   time.Now().Add(-time.Hour),
+		NotAfter:    time.Now().Add(5 * 365 * 24 * time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{
 			x509.ExtKeyUsageServerAuth,
 		},

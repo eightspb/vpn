@@ -189,6 +189,7 @@ mkdir -p /etc/amnezia/amneziawg
 cat > /etc/amnezia/amneziawg/awg0.conf << 'WGEOF'
 [Interface]
 Address = ${TUN_NET}.1/24
+MTU = 1420
 PrivateKey = ${VPS1_TUNNEL_PRIV}
 ListenPort = ${VPS1_PORT_TUNNEL}
 Table = off
@@ -200,21 +201,22 @@ PostDown = iptables -t nat -D POSTROUTING -o awg0 -j MASQUERADE
 PublicKey           = ${VPS2_TUNNEL_PUB}
 Endpoint            = ${VPS2_IP}:${VPS2_PORT}
 AllowedIPs          = 0.0.0.0/0
-PersistentKeepalive = 25
+PersistentKeepalive = 60
 WGEOF
 
 cat > /etc/amnezia/amneziawg/awg1.conf << 'WGEOF'
 [Interface]
 Address = ${CLIENT_NET}.1/24
+MTU = 1360
 PrivateKey = ${VPS1_CLIENT_PRIV}
 ListenPort = ${VPS1_PORT_CLIENTS}
 DNS = ${TUN_NET}.2
 
-Jc   = 5
-Jmin = 50
-Jmax = 1000
-S1   = 30
-S2   = 40
+Jc   = 2
+Jmin = 20
+Jmax = 200
+S1   = 15
+S2   = 20
 H1   = ${H1}
 H2   = ${H2}
 H3   = ${H3}
@@ -223,13 +225,25 @@ H4   = ${H4}
 PostUp   = iptables -t nat -A POSTROUTING -s ${CLIENT_NET}.0/24 -o awg0 -j MASQUERADE
 PostUp   = iptables -A FORWARD -i awg1 -o awg0 -j ACCEPT
 PostUp   = iptables -A FORWARD -i awg0 -o awg1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+PostUp   = iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1320
 PostUp = ip rule add from ${CLIENT_NET}.0/24 table 200
 PostUp = ip route add default via ${TUN_NET}.2 dev awg0 table 200
 PostDown = iptables -t nat -D POSTROUTING -s ${CLIENT_NET}.0/24 -o awg0 -j MASQUERADE
 PostDown = iptables -D FORWARD -i awg1 -o awg0 -j ACCEPT
 PostDown = iptables -D FORWARD -i awg0 -o awg1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+PostDown = iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1320
 PostDown = ip rule del from ${CLIENT_NET}.0/24 table 200 || true
 PostDown = ip route del default via ${TUN_NET}.2 dev awg0 table 200 || true
+
+# Force all DNS traffic from clients to the Proxy DNS on VPS2
+PostUp   = iptables -t nat -A PREROUTING -i awg1 -p udp --dport 53 -j DNAT --to-destination ${TUN_NET}.2:53
+PostUp   = iptables -t nat -A PREROUTING -i awg1 -p tcp --dport 53 -j DNAT --to-destination ${TUN_NET}.2:53
+PostDown = iptables -t nat -D PREROUTING -i awg1 -p udp --dport 53 -j DNAT --to-destination ${TUN_NET}.2:53
+PostDown = iptables -t nat -D PREROUTING -i awg1 -p tcp --dport 53 -j DNAT --to-destination ${TUN_NET}.2:53
+
+# Block common DoH/DoT to force fallback to unencrypted DNS (which we intercept)
+PostUp   = iptables -A FORWARD -i awg1 -d 8.8.8.8,8.8.4.4,1.1.1.1,1.0.0.1 -p tcp -m multiport --dports 443,853 -j REJECT
+PostDown = iptables -D FORWARD -i awg1 -d 8.8.8.8,8.8.4.4,1.1.1.1,1.0.0.1 -p tcp -m multiport --dports 443,853 -j REJECT
 
 [Peer]
 PublicKey  = ${CLIENT_PUB}
@@ -256,7 +270,53 @@ SVCEOF
 sysctl -w net.ipv4.ip_forward=1
 sysctl -w net.ipv6.conf.all.disable_ipv6=1
 sysctl -w net.ipv6.conf.default.disable_ipv6=1
-printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\n' > /etc/sysctl.d/99-vpn.conf
+sysctl -w net.core.rmem_max=67108864
+sysctl -w net.core.wmem_max=67108864
+sysctl -w net.core.netdev_max_backlog=16384
+sysctl -w net.netfilter.nf_conntrack_max=524288 2>/dev/null || true
+sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
+sysctl -w net.core.default_qdisc=fq 2>/dev/null || true
+sysctl -w net.ipv4.tcp_rmem='4096 131072 16777216' 2>/dev/null || true
+sysctl -w net.ipv4.tcp_wmem='4096 65536 16777216' 2>/dev/null || true
+sysctl -w net.core.rmem_default=1048576 2>/dev/null || true
+sysctl -w net.core.wmem_default=1048576 2>/dev/null || true
+sysctl -w net.core.somaxconn=4096 2>/dev/null || true
+sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
+sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
+sysctl -w net.ipv4.tcp_mtu_probing=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_timestamps=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_sack=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_window_scaling=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null || true
+sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=7200 2>/dev/null || true
+sysctl -w net.ipv4.conf.all.rp_filter=0 2>/dev/null || true
+sysctl -w net.ipv4.conf.default.rp_filter=0 2>/dev/null || true
+cat > /etc/sysctl.d/99-vpn.conf << 'SYSCTLEOF'
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.core.rmem_max=67108864
+net.core.wmem_max=67108864
+net.core.netdev_max_backlog=16384
+net.netfilter.nf_conntrack_max=524288
+net.ipv4.tcp_congestion_control=bbr
+net.core.default_qdisc=fq
+net.ipv4.tcp_rmem=4096 131072 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+net.core.rmem_default=1048576
+net.core.wmem_default=1048576
+net.core.somaxconn=4096
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_slow_start_after_idle=0
+net.ipv4.tcp_mtu_probing=1
+net.ipv4.tcp_timestamps=1
+net.ipv4.tcp_sack=1
+net.ipv4.tcp_window_scaling=1
+net.ipv4.tcp_no_metrics_save=1
+net.netfilter.nf_conntrack_tcp_timeout_established=7200
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+SYSCTLEOF
 systemctl daemon-reload
 systemctl enable awg-quick@awg0 awg-quick@awg1
 systemctl restart awg-quick@awg0
@@ -297,12 +357,13 @@ cat > "$CLIENT_CONF" << EOF
 Address    = ${CLIENT_VPN_IP}/24
 PrivateKey = ${CLIENT_PRIV}
 DNS        = ${TUN_NET}.2
+MTU        = 1360
 
-Jc   = 5
-Jmin = 50
-Jmax = 1000
-S1   = 30
-S2   = 40
+Jc   = 2
+Jmin = 20
+Jmax = 200
+S1   = 15
+S2   = 20
 H1   = ${H1}
 H2   = ${H2}
 H3   = ${H3}

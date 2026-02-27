@@ -149,6 +149,7 @@ mkdir -p /etc/amnezia/amneziawg
 cat > /etc/amnezia/amneziawg/awg0.conf << WGEOF
 [Interface]
 Address = ${TUN_NET}.2/24
+MTU = 1420
 PrivateKey = ${VPS2_TUNNEL_PRIV}
 ListenPort = ${VPS2_PORT}
 
@@ -156,15 +157,17 @@ PostUp   = iptables -t nat -A POSTROUTING -s ${TUN_NET}.0/24 -o \${MAIN_IF} -j M
 PostUp   = iptables -t nat -A POSTROUTING -s ${CLIENT_NET}.0/24 -o \${MAIN_IF} -j MASQUERADE
 PostUp   = iptables -A FORWARD -i awg0 -o \${MAIN_IF} -j ACCEPT
 PostUp   = iptables -A FORWARD -i \${MAIN_IF} -o awg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+PostUp   = iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1320
 PostDown = iptables -t nat -D POSTROUTING -s ${TUN_NET}.0/24 -o \${MAIN_IF} -j MASQUERADE
 PostDown = iptables -t nat -D POSTROUTING -s ${CLIENT_NET}.0/24 -o \${MAIN_IF} -j MASQUERADE
 PostDown = iptables -D FORWARD -i awg0 -o \${MAIN_IF} -j ACCEPT
 PostDown = iptables -D FORWARD -i \${MAIN_IF} -o awg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+PostDown = iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1320
 
 [Peer]
 PublicKey  = ${VPS1_TUNNEL_PUB}
 AllowedIPs = ${TUN_NET}.1/32, ${CLIENT_NET}.0/24
-PersistentKeepalive = 25
+PersistentKeepalive = 60
 WGEOF
 
 chmod 600 /etc/amnezia/amneziawg/awg0.conf
@@ -187,7 +190,53 @@ SVCEOF
 sysctl -w net.ipv4.ip_forward=1
 sysctl -w net.ipv6.conf.all.disable_ipv6=1
 sysctl -w net.ipv6.conf.default.disable_ipv6=1
-printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\n' > /etc/sysctl.d/99-vpn.conf
+sysctl -w net.core.rmem_max=67108864
+sysctl -w net.core.wmem_max=67108864
+sysctl -w net.core.netdev_max_backlog=16384
+sysctl -w net.netfilter.nf_conntrack_max=524288 2>/dev/null || true
+sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
+sysctl -w net.core.default_qdisc=fq 2>/dev/null || true
+sysctl -w net.ipv4.tcp_rmem='4096 131072 16777216' 2>/dev/null || true
+sysctl -w net.ipv4.tcp_wmem='4096 65536 16777216' 2>/dev/null || true
+sysctl -w net.core.rmem_default=1048576 2>/dev/null || true
+sysctl -w net.core.wmem_default=1048576 2>/dev/null || true
+sysctl -w net.core.somaxconn=4096 2>/dev/null || true
+sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
+sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
+sysctl -w net.ipv4.tcp_mtu_probing=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_timestamps=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_sack=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_window_scaling=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null || true
+sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=7200 2>/dev/null || true
+sysctl -w net.ipv4.conf.all.rp_filter=0 2>/dev/null || true
+sysctl -w net.ipv4.conf.default.rp_filter=0 2>/dev/null || true
+cat > /etc/sysctl.d/99-vpn.conf << 'SYSCTLEOF'
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.core.rmem_max=67108864
+net.core.wmem_max=67108864
+net.core.netdev_max_backlog=16384
+net.netfilter.nf_conntrack_max=524288
+net.ipv4.tcp_congestion_control=bbr
+net.core.default_qdisc=fq
+net.ipv4.tcp_rmem=4096 131072 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+net.core.rmem_default=1048576
+net.core.wmem_default=1048576
+net.core.somaxconn=4096
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_slow_start_after_idle=0
+net.ipv4.tcp_mtu_probing=1
+net.ipv4.tcp_timestamps=1
+net.ipv4.tcp_sack=1
+net.ipv4.tcp_window_scaling=1
+net.ipv4.tcp_no_metrics_save=1
+net.netfilter.nf_conntrack_tcp_timeout_established=7200
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+SYSCTLEOF
 systemctl daemon-reload
 systemctl enable awg-quick@awg0
 systemctl restart awg-quick@awg0

@@ -77,11 +77,12 @@ body {
 #layout {
   flex: 1;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr 1fr;
   grid-template-columns: 1fr 1fr;
   grid-template-areas:
-    "v1   v2"
-    "log  conn";
+    "v1      v2"
+    "log     conn"
+    "log     activity";
   gap: 0;
   overflow: hidden;
   border-top: 1px solid var(--border);
@@ -125,7 +126,7 @@ body {
 
 /* Left column: ring gauge */
 .ring-col {
-  width: 72px; flex-shrink:0;
+  width: 80px; flex-shrink:0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -134,9 +135,10 @@ body {
   padding: 6px 4px;
   gap: 4px;
 }
-.ring-svg { width: 52px; height: 52px; }
+.ring-svg { width: 56px; height: 56px; }
 .ring-svg circle { transition: stroke-dasharray .4s ease; }
 .ring-label { font-size:9px; color:var(--dim); text-align:center; line-height:1.3; }
+.ring-sub { font-size:9px; color:var(--dim); text-align:center; line-height:1.5; font-family:monospace; }
 
 /* Right column: metrics */
 .metrics-col {
@@ -151,13 +153,23 @@ body {
 
 /* Thin progress bar */
 .bar-row { display:flex; align-items:center; gap:6px; }
-.bar-lbl { color:var(--dim); width:28px; flex-shrink:0; font-size:10px; }
+.bar-lbl { color:var(--dim); width:32px; flex-shrink:0; font-size:10px; }
 .bar-bg  { flex:1; height:4px; background:var(--s3); border-radius:2px; overflow:hidden; }
 .bar-fill { height:100%; border-radius:2px; transition:width .4s ease; }
-.bar-val { color:var(--dim); font-size:10px; font-family:monospace; white-space:nowrap; min-width:90px; text-align:right; }
+.bar-val { color:var(--dim); font-size:10px; font-family:monospace; white-space:nowrap; min-width:100px; text-align:right; }
 .bar-g  { background: var(--green); }
 .bar-y  { background: var(--yellow); }
 .bar-r  { background: var(--red); }
+
+/* Info row (key-value pairs) */
+.info-row {
+  display:flex; align-items:center;
+  padding-top: 2px; border-top: 1px solid rgba(48,54,61,.6);
+  margin-top: 1px; flex-wrap: wrap; gap: 8px;
+}
+.info-item { display:flex; align-items:center; gap:3px; }
+.info-key  { color:var(--dim); font-size:9px; }
+.info-val  { color:var(--text); font-size:10px; font-family:monospace; font-weight:600; }
 
 /* Net row */
 .net-row {
@@ -165,13 +177,22 @@ body {
   padding-top: 2px; border-top: 1px solid rgba(48,54,61,.6);
   margin-top: 1px;
 }
-.net-if   { color:var(--dim); font-size:10px; width:28px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; }
+.net-if   { color:var(--dim); font-size:10px; width:32px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; }
 .net-speed { display:flex; align-items:center; gap:3px; font-family:monospace; font-size:11px; font-weight:600; }
 .net-speed .arr { font-size:13px; }
 .arr-d { color:var(--green); }
 .arr-u { color:var(--blue); }
 .spark-wrap { flex:1; height:20px; overflow:hidden; }
 .spark-wrap svg { width:100%; height:100%; display:block; }
+
+/* Top connections row */
+.top-conn-row {
+  padding-top: 2px; border-top: 1px solid rgba(48,54,61,.6);
+  margin-top: 1px; display:flex; align-items:baseline; gap:4px;
+  overflow:hidden;
+}
+.top-conn-lbl { color:var(--dim); font-size:9px; flex-shrink:0; }
+.top-conn-val { color:var(--cyan); font-size:10px; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* Status row (WG / services) */
 .status-row {
@@ -197,8 +218,9 @@ body {
 .chip-sep { width:1px; height:12px; background:var(--border); margin:0 2px; }
 
 /* ======= BOTTOM PANELS ======= */
-#plog  { grid-area: log;  border-right: 1px solid var(--border); }
-#pconn { grid-area: conn; }
+#plog      { grid-area: log;      border-right: 1px solid var(--border); }
+#pconn     { grid-area: conn;     border-bottom: 1px solid var(--border); }
+#pactivity { grid-area: activity; }
 
 .panel {
   display:flex; flex-direction:column;
@@ -276,6 +298,40 @@ body {
 .conn-arrow  { color:var(--border); flex-shrink:0; }
 .conn-remote { color:var(--text); overflow:hidden; text-overflow:ellipsis; }
 .conn-none   { padding:4px 12px; color:var(--dim); font-size:11px; font-style:italic; }
+
+/* ---- Activity Log ---- */
+#activity-body { height:100%; overflow-y:auto; padding:4px 0; }
+.act-line {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 12px;
+  line-height: 1.6;
+  font-family: 'Consolas','Cascadia Code',monospace;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-left: 2px solid transparent;
+}
+.act-line:hover { background: var(--s2); }
+.act-line.filter  { border-color: var(--purple); background: rgba(188,140,255,.04); }
+.act-line.conn    { border-color: var(--cyan);   background: rgba(57,208,216,.04); }
+.act-line.warn    { border-color: var(--yellow); background: rgba(210,153,34,.04); }
+.act-line.error   { border-color: var(--red);    background: rgba(248,81,73,.06); }
+.act-ts   { color:var(--dim); flex-shrink:0; font-size:10px; }
+.act-tag  { flex-shrink:0; min-width:42px; font-size:9px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+.act-tag.filter { color:var(--purple); }
+.act-tag.conn   { color:var(--cyan); }
+.act-tag.warn   { color:var(--yellow); }
+.act-tag.error  { color:var(--red); }
+.act-msg  { color:var(--text); overflow:hidden; text-overflow:ellipsis; }
+.act-none { padding:6px 12px; color:var(--dim); font-size:11px; font-style:italic; }
+#act-clear {
+  padding:1px 7px; border-radius:10px; font-size:10px; cursor:pointer;
+  border:1px solid var(--border); background:transparent; color:var(--dim); transition:.15s;
+  margin-left:auto;
+}
+#act-clear:hover { border-color:var(--red); color:var(--red); }
 
 /* scrollbar */
 ::-webkit-scrollbar { width:5px; height:5px; }
@@ -361,6 +417,7 @@ body {
   <div class="hdr-sep"></div>
   <div class="hdr-pill off" id="pill-v1"><div class="dot off" id="hdot-v1"></div><span id="hname-v1">VPS1</span></div>
   <div class="hdr-pill off" id="pill-v2"><div class="dot off" id="hdot-v2"></div><span id="hname-v2">VPS2</span></div>
+  <div class="hdr-pill off" id="pill-vpn"><div class="dot off" id="hdot-vpn"></div><span id="hcount-vpn">Active VPN: 0</span></div>
   <div id="hdr-right">
     <button id="ping-btn" onclick="openPingModal()">◎ Ping</button>
     <span id="hdr-ts">—</span>
@@ -395,7 +452,10 @@ body {
             font-size="7.5" fill="var(--text)" font-family="monospace" font-weight="700"
             id="ring-txt-v1">—</text>
         </svg>
-        <div class="ring-label">CPU<br>load avg</div>
+        <div class="ring-label">CPU load</div>
+        <div class="ring-sub" id="load-sub-v1">—</div>
+        <div class="ring-sub" id="cpu-info-v1" style="color:var(--blue)">—</div>
+        <div class="ring-sub" id="uptime-v1">—</div>
       </div>
 
       <!-- Metrics -->
@@ -406,15 +466,29 @@ body {
           <span class="bar-val" id="ram-txt-v1">—</span>
         </div>
         <div class="bar-row">
+          <span class="bar-lbl">Free</span>
+          <div class="bar-bg"><div class="bar-fill" id="free-bar-v1" style="width:0%;background:var(--cyan)"></div></div>
+          <span class="bar-val" id="free-txt-v1">—</span>
+        </div>
+        <div class="bar-row">
           <span class="bar-lbl">Disk</span>
           <div class="bar-bg"><div class="bar-fill bar-g" id="disk-bar-v1" style="width:0%"></div></div>
           <span class="bar-val" id="disk-txt-v1">—</span>
+        </div>
+        <div class="info-row">
+          <div class="info-item"><span class="info-key">swap</span>&nbsp;<span class="info-val" id="swap-v1">—</span></div>
+          <div class="info-item"><span class="info-key">tcp</span>&nbsp;<span class="info-val" id="tcp-v1">—</span></div>
+          <div class="info-item"><span class="info-key">udp</span>&nbsp;<span class="info-val" id="udp-v1">—</span></div>
         </div>
         <div class="net-row">
           <span class="net-if" id="if-v1">eth0</span>
           <div class="net-speed"><span class="arr arr-d">↓</span><span id="rx-v1">—</span></div>
           <div class="net-speed"><span class="arr arr-u">↑</span><span id="tx-v1">—</span></div>
           <div class="spark-wrap" id="spark-v1"></div>
+        </div>
+        <div class="top-conn-row">
+          <span class="top-conn-lbl">top:</span>
+          <span class="top-conn-val" id="topconn-v1">—</span>
         </div>
       </div>
       </div><!-- srv-main -->
@@ -445,7 +519,10 @@ body {
             font-size="7.5" fill="var(--text)" font-family="monospace" font-weight="700"
             id="ring-txt-v2">—</text>
         </svg>
-        <div class="ring-label">CPU<br>load avg</div>
+        <div class="ring-label">CPU load</div>
+        <div class="ring-sub" id="load-sub-v2">—</div>
+        <div class="ring-sub" id="cpu-info-v2" style="color:var(--blue)">—</div>
+        <div class="ring-sub" id="uptime-v2">—</div>
       </div>
       <div class="metrics-col">
         <div class="bar-row">
@@ -454,15 +531,29 @@ body {
           <span class="bar-val" id="ram-txt-v2">—</span>
         </div>
         <div class="bar-row">
+          <span class="bar-lbl">Free</span>
+          <div class="bar-bg"><div class="bar-fill" id="free-bar-v2" style="width:0%;background:var(--cyan)"></div></div>
+          <span class="bar-val" id="free-txt-v2">—</span>
+        </div>
+        <div class="bar-row">
           <span class="bar-lbl">Disk</span>
           <div class="bar-bg"><div class="bar-fill bar-g" id="disk-bar-v2" style="width:0%"></div></div>
           <span class="bar-val" id="disk-txt-v2">—</span>
+        </div>
+        <div class="info-row">
+          <div class="info-item"><span class="info-key">swap</span>&nbsp;<span class="info-val" id="swap-v2">—</span></div>
+          <div class="info-item"><span class="info-key">tcp</span>&nbsp;<span class="info-val" id="tcp-v2">—</span></div>
+          <div class="info-item"><span class="info-key">udp</span>&nbsp;<span class="info-val" id="udp-v2">—</span></div>
         </div>
         <div class="net-row">
           <span class="net-if" id="if-v2">eth0</span>
           <div class="net-speed"><span class="arr arr-d">↓</span><span id="rx-v2">—</span></div>
           <div class="net-speed"><span class="arr arr-u">↑</span><span id="tx-v2">—</span></div>
           <div class="spark-wrap" id="spark-v2"></div>
+        </div>
+        <div class="top-conn-row">
+          <span class="top-conn-lbl">top:</span>
+          <span class="top-conn-val" id="topconn-v2">—</span>
         </div>
       </div>
       </div><!-- srv-main -->
@@ -497,6 +588,18 @@ body {
     </div>
   </div>
 
+  <!-- Activity / Filter Log panel -->
+  <div class="panel" id="pactivity">
+    <div class="panel-hdr">
+      <span class="panel-title">Activity</span>
+      <span style="color:var(--dim);font-size:10px;margin-left:4px" id="act-subtitle">фильтры · соединения</span>
+      <button id="act-clear" title="Очистить">✕ clear</button>
+    </div>
+    <div class="panel-body">
+      <div id="activity-body"></div>
+    </div>
+  </div>
+
 </div><!-- #layout -->
 
 <!-- ===== PING MODAL ===== -->
@@ -517,7 +620,7 @@ body {
 <script>
 'use strict';
 
-const DATA_URL   = '/vpn-output/data.json';
+const DATA_URL   = 'vpn-output/data.json';
 const POLL_MS    = 5000;
 const HIST_MAX   = 60;
 const LS_KEY     = 'vpn_dash3';
@@ -551,6 +654,21 @@ function fmtAge(s){
   if(s<120)  return {t:`${s}s`,   c:'g'};
   if(s<600)  return {t:`${Math.round(s/60)}m`,c:'y'};
   return              {t:`${Math.round(s/60)}m`,c:'r'};
+}
+function fmtUptime(s){
+  if(!s||s<=0) return '—';
+  const d=Math.floor(s/86400), h=Math.floor((s%86400)/3600), m=Math.floor((s%3600)/60);
+  if(d>0) return `${d}d ${h}h`;
+  if(h>0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+function fmtSwap(raw){
+  if(!raw||raw==='0/0MB') return '—';
+  const m=raw.match(/^(\d+)\/(\d+)MB/);
+  if(!m) return raw;
+  const used=+m[1], total=+m[2];
+  if(total===0) return '—';
+  return `${used}/${total}MB`;
 }
 function stCls(v){
   const s=String(v||'').toLowerCase();
@@ -597,6 +715,24 @@ function el(id){ return document.getElementById(id); }
 function setT(id,t){ const e=el(id); if(e) e.textContent=t; }
 function setH(id,h){ const e=el(id); if(e) e.innerHTML=h; }
 
+function countActiveVpnPeers(d){
+  if(!d?.online) return 0;
+  const active = Number(d.active_peers_awg1);
+  if(Number.isFinite(active) && active >= 0) return active;
+  const hs = Number(d.hs1_age);
+  const hsFresh = Number.isFinite(hs) && hs >= 0 && hs <= 180;
+  return hsFresh ? (Number(d.peers_awg1) || 0) : 0;
+}
+
+function renderHdrVpnCount(data){
+  const total = countActiveVpnPeers(data?.vps1);
+  setT('hcount-vpn', `Active VPN: ${total}`);
+  const dotEl = el('hdot-vpn');
+  const pillEl = el('pill-vpn');
+  if(dotEl) dotEl.className = 'dot ' + (total > 0 ? 'on' : 'off');
+  if(pillEl) pillEl.className = 'hdr-pill ' + (total > 0 ? 'on' : 'off');
+}
+
 // ---- Render server ----
 function renderSrv(d, pfx){
   const online = d?.online;
@@ -615,8 +751,13 @@ function renderSrv(d, pfx){
 
   if(!online) return;
 
-  // Ring
+  // Ring + load avg sub-labels
   setRing(pfx, d.load1);
+  setT(`load-sub-${pfx}`, `5m:${d.load5??'—'} 15m:${d.load15??'—'}`);
+  const cpuMhz = d.cpu_mhz>0 ? `${(d.cpu_mhz/1000).toFixed(1)}GHz` : '';
+  const cpuStr = d.cpus ? `${d.cpus}×${cpuMhz||'CPU'}` : '—';
+  setT(`cpu-info-${pfx}`, cpuStr);
+  setT(`uptime-${pfx}`, fmtUptime(d.uptime_s));
 
   // RAM bar
   const ramPct = d.mem_total_mb>0 ? Math.round(d.mem_used_mb/d.mem_total_mb*100) : 0;
@@ -624,11 +765,22 @@ function renderSrv(d, pfx){
   if(ramBar){ ramBar.style.width=ramPct+'%'; ramBar.className='bar-fill '+barCls(ramPct); }
   setT(`ram-txt-${pfx}`, `${d.mem_used_mb}/${d.mem_total_mb}MB (${ramPct}%)`);
 
+  // Free RAM bar
+  const freePct = d.mem_total_mb>0 ? Math.round((d.mem_free_mb||0)/d.mem_total_mb*100) : 0;
+  const freeBar = el(`free-bar-${pfx}`);
+  if(freeBar){ freeBar.style.width=freePct+'%'; }
+  setT(`free-txt-${pfx}`, d.mem_free_mb!=null ? `${d.mem_free_mb}MB free (${freePct}%)` : '—');
+
   // Disk bar
   const dPct = d.disk_pct||0;
   const dBar = el(`disk-bar-${pfx}`);
   if(dBar){ dBar.style.width=dPct+'%'; dBar.className='bar-fill '+barCls(dPct); }
   setT(`disk-txt-${pfx}`, d.disk_used&&d.disk_total ? `${d.disk_used}/${d.disk_total} (${dPct}%)` : '—');
+
+  // Info row: swap, tcp, udp
+  setT(`swap-${pfx}`, fmtSwap(d.swap));
+  setT(`tcp-${pfx}`, d.tcp_est??'—');
+  setT(`udp-${pfx}`, d.udp_conn??'—');
 
   // Network
   setT(`if-${pfx}`, d.net_if||'');
@@ -637,6 +789,10 @@ function renderSrv(d, pfx){
   const rxH = hist[`${pfx}_rx`], txH = hist[`${pfx}_tx`];
   const combined = rxH.map((v,i)=>v+(txH[i]||0));
   setH(`spark-${pfx}`, spark(combined, 'var(--green)'));
+
+  // Top connections
+  const tc = d.top_conn && d.top_conn !== 'none' ? d.top_conn : '—';
+  setT(`topconn-${pfx}`, tc);
 
   // Status chips
   renderChips(d, pfx);
@@ -752,8 +908,9 @@ function renderConns(v1, v2){
       html += `<div class="conn-none">no connections</div>`;
     } else {
       for(const c of conns){
+        const proto = (c.proto || 'tcp').toUpperCase();
         html += `<div class="conn-row">
-          <span class="conn-local">${escH(c.local||'')}</span>
+          <span class="conn-local">[${escH(proto)}] ${escH(c.local||'')}</span>
           <span class="conn-arrow">→</span>
           <span class="conn-remote">${escH(c.remote||'')}</span>
         </div>`;
@@ -777,6 +934,7 @@ async function poll(){
 
   if(data){
     lastData = data;
+    renderHdrVpnCount(data);
     pushHist('v1_rx', data.vps1?.rx_speed||0);
     pushHist('v1_tx', data.vps1?.tx_speed||0);
     pushHist('v2_rx', data.vps2?.rx_speed||0);
@@ -794,6 +952,10 @@ async function poll(){
 
     const ts = new Date(data.ts*1000);
     setT('hdr-ts', ts.toLocaleTimeString());
+
+    if(typeof _postPollHooks !== 'undefined'){
+      for(const h of _postPollHooks) h(data);
+    }
   }
 
   setTimeout(poll, POLL_MS);
@@ -811,6 +973,143 @@ function tickCd(){
 
 poll();
 tickCd();
+
+// ---- Activity Log ----
+const ACT_MAX = 200;
+let actEvents = [];
+let prevConns = { v1: [], v2: [] };
+let prevActiveSig = { v1: '', v2: '' };
+
+const actBody = el('activity-body');
+
+el('act-clear').addEventListener('click', () => {
+  actEvents = [];
+  renderActivity();
+});
+
+function actNow() {
+  return new Date().toLocaleTimeString();
+}
+
+function pushAct(type, tag, msg) {
+  actEvents.push({ ts: actNow(), type, tag, msg });
+  if (actEvents.length > ACT_MAX) actEvents.shift();
+}
+
+// Extract filter-relevant log lines: WARN/ERROR + lines matching filter keywords
+const FILTER_RE = /filter|block|allow|deny|adguard|agh|dns|query|domain|rule/i;
+const CONN_RE   = /connect|tunnel|peer|handshake|vpn|awg|wg/i;
+
+let seenLogLines = new Set();
+
+function processLogLines(lines) {
+  for (const raw of lines) {
+    if (seenLogLines.has(raw)) continue;
+    seenLogLines.add(raw);
+    if (seenLogLines.size > 2000) {
+      const arr = [...seenLogLines];
+      seenLogLines = new Set(arr.slice(arr.length - 1000));
+    }
+
+    const m = raw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+(.*)$/);
+    if (!m) {
+      // raw line without standard format — show if it looks interesting
+      if (raw.trim() && !raw.startsWith('|awk')) {
+        pushAct('warn', 'RAW', raw.trim());
+      }
+      continue;
+    }
+    const [, , lvl, msg] = m;
+    if (lvl === 'ERROR') {
+      pushAct('error', 'ERR', msg);
+    } else if (lvl === 'WARN') {
+      // skip routine SSH known-hosts warnings
+      if (/Permanently added/.test(msg)) continue;
+      pushAct('warn', 'WRN', msg);
+    } else if (lvl === 'INFO' || lvl === 'DEBUG') {
+      if (FILTER_RE.test(msg)) {
+        pushAct('filter', 'FILTER', msg);
+      } else if (CONN_RE.test(msg)) {
+        pushAct('conn', 'CONN', msg);
+      }
+    }
+  }
+}
+
+function connKey(c) { return `${c.proto||'tcp'}|${c.local}→${c.remote}`; }
+
+function processConnChanges(v1, v2) {
+  for (const [label, d, key] of [['VPS1', v1, 'v1'], ['VPS2', v2, 'v2']]) {
+    const cur  = (d?.conns || []).map(connKey);
+    const prev = prevConns[key];
+
+    const added   = cur.filter(k => !prev.includes(k));
+    const removed = prev.filter(k => !cur.includes(k));
+
+    for (const k of added) {
+      const [protoAndLocal, remote=''] = k.split('→');
+      const [proto='tcp', local=''] = protoAndLocal.split('|');
+      const site   = remote ? ` → ${remote}` : '';
+      pushAct('conn', 'NEW', `${label} [${proto.toUpperCase()}] ${local}${site}`);
+    }
+    for (const k of removed) {
+      const [protoAndLocal, remote=''] = k.split('→');
+      const [proto='tcp', local=''] = protoAndLocal.split('|');
+      const site   = remote ? ` → ${remote}` : '';
+      pushAct('conn', 'CLOSE', `${label} [${proto.toUpperCase()}] ${local}${site}`);
+    }
+
+    prevConns[key] = cur;
+  }
+}
+
+function processActiveConnections(v1, v2) {
+  for (const [label, d, key] of [['VPS1', v1, 'v1'], ['VPS2', v2, 'v2']]) {
+    const conns = d?.conns || [];
+    if (!conns.length) continue;
+    const sig = conns.map(connKey).join(',');
+    if (sig === prevActiveSig[key]) continue;
+    prevActiveSig[key] = sig;
+
+    const preview = conns
+      .slice(0, 6)
+      .map(c => `[${(c.proto || 'tcp').toUpperCase()}] ${c.local || ''} -> ${c.remote || ''}`.trim())
+      .join(' ; ');
+    const tail = conns.length > 6 ? ` ... +${conns.length - 6}` : '';
+    pushAct('conn', 'ACTIVE', `${label} ${preview}${tail}`);
+  }
+}
+
+function renderActivity() {
+  if (actEvents.length === 0) {
+    actBody.innerHTML = '<div class="act-none">нет событий</div>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const ev of actEvents) {
+    const div = document.createElement('div');
+    div.className = `act-line ${ev.type}`;
+    div.innerHTML =
+      `<span class="act-ts">${ev.ts}</span>` +
+      `<span class="act-tag ${ev.type}">${escH(ev.tag)}</span>` +
+      `<span class="act-msg">${escH(ev.msg)}</span>`;
+    frag.appendChild(div);
+  }
+  actBody.innerHTML = '';
+  actBody.appendChild(frag);
+  actBody.scrollTop = actBody.scrollHeight;
+}
+
+// Activity processing is triggered via activityTick() called from the poll loop.
+// We register a post-poll hook using a simple callback array.
+const _postPollHooks = [];
+_postPollHooks.push((data) => {
+  if (!data) return;
+  if (Array.isArray(data.log)) processLogLines(data.log);
+  processConnChanges(data.vps1, data.vps2);
+  processActiveConnections(data.vps1, data.vps2);
+  renderActivity();
+});
 
 // ---- Ping modal ----
 function getPingTargets() {
@@ -882,19 +1181,28 @@ async function runPing() {
   setT('ping-status-msg', 'Опрашиваем…');
   renderPingWaiting();
 
-  const hosts = getPingTargets().map(t => t.host).join(',');
+  const targets = getPingTargets();
+  if (!targets.length) {
+    renderPingResults(null);
+    setT('ping-status-msg', 'Нет данных о серверах');
+    btn.classList.remove('running');
+    if (rerun) rerun.disabled = false;
+    return;
+  }
+  const hosts = targets.map(t => t.host).join(',');
   try {
-    const r = await fetch('/api/ping?hosts=' + encodeURIComponent(hosts));
+    const r = await fetch(`/api/ping?hosts=${encodeURIComponent(hosts)}`);
     if (r.ok) {
-      renderPingResults(await r.json());
-      setT('ping-status-msg', new Date().toLocaleTimeString());
+      const results = await r.json();
+      renderPingResults(results);
+      setT('ping-status-msg', 'Готово');
     } else {
       renderPingResults(null);
-      setT('ping-status-msg', 'Ошибка сервера: ' + r.status);
+      setT('ping-status-msg', `Ошибка: HTTP ${r.status}`);
     }
-  } catch (_) {
+  } catch (e) {
     renderPingResults(null);
-    setT('ping-status-msg', 'API /api/ping недоступен');
+    setT('ping-status-msg', `Ошибка: ${e.message}`);
   }
   btn.classList.remove('running');
   if (rerun) rerun.disabled = false;

@@ -7,6 +7,24 @@
 vpn-output/*
 !vpn-output/.gitkeep
 
+# WireGuard/AmneziaWG client configs (contain private keys)
+*.conf
+
+# Compiled binaries
+youtube-proxy/youtube-proxy
+
 # Temporary files
 *.tmp
 *.log
+
+# youtube-proxy binary
+youtube-proxy/youtube-proxy
+
+# nginx config with local paths
+vpn-dashboard-nginx.conf
+
+# one-time cleanup script
+phase4-cleanup.sh
+
+# Auto-generated Russian IP list (re-download with generate-split-config.py)
+ru-ips.txt

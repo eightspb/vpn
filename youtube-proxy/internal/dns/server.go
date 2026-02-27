@@ -14,15 +14,27 @@ import (
 	"github.com/miekg/dns"
 )
 
+// Cache entry for DNS responses with TTL-based expiry.
+type cacheEntry struct {
+	msg   *dns.Msg
+	until time.Time
+}
+
 // Server is a DNS server that blocks ad/tracking domains and
 // intercepts configured hostnames (redirecting them to 127.0.0.1).
 type Server struct {
 	upstream       string
 	interceptHosts map[string]struct{}
+	interceptIP    string
 	blockedDomains map[string]struct{}
 	mu             sync.RWMutex
 	blocklistPaths []string
 	blocklistURLs  []string
+	// TTL-based cache for upstream responses
+	cache      map[string]*cacheEntry
+	cacheMu    sync.RWMutex
+	maxCacheTTL time.Duration
+	minCacheTTL time.Duration
 }
 
 // Config holds DNS server configuration.
@@ -30,18 +42,40 @@ type Config struct {
 	Listen         string
 	Upstream       string
 	InterceptHosts []string
+	InterceptIP    string
 	BlocklistPaths []string
 	BlocklistURLs  []string
+	// MaxCacheTTL is the maximum time to cache upstream responses (default 15m).
+	MaxCacheTTL time.Duration
+	// MinCacheTTL is the minimum TTL used when upstream doesn't provide one (default 120s).
+	MinCacheTTL time.Duration
 }
 
 // New creates and starts a DNS server.
 func New(cfg Config) (*Server, error) {
+	ip := cfg.InterceptIP
+	if ip == "" {
+		ip = "127.0.0.1"
+	}
+
+	maxTTL := cfg.MaxCacheTTL
+	if maxTTL <= 0 {
+		maxTTL = 15 * time.Minute
+	}
+	minTTL := cfg.MinCacheTTL
+	if minTTL <= 0 {
+		minTTL = 120 * time.Second
+	}
 	s := &Server{
 		upstream:       cfg.Upstream,
 		interceptHosts: make(map[string]struct{}),
+		interceptIP:    ip,
 		blockedDomains: make(map[string]struct{}),
 		blocklistPaths: cfg.BlocklistPaths,
 		blocklistURLs:  cfg.BlocklistURLs,
+		cache:          make(map[string]*cacheEntry),
+		maxCacheTTL:    maxTTL,
+		minCacheTTL:    minTTL,
 	}
 
 	for _, h := range cfg.InterceptHosts {
@@ -90,7 +124,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 
 		name := strings.ToLower(q.Name)
 
-		// Intercept: redirect to 127.0.0.1 so our HTTPS proxy handles it
+		// Intercept: redirect to our proxy IP so our HTTPS proxy handles it
 		if _, ok := s.interceptHosts[name]; ok {
 			if q.Qtype == dns.TypeA {
 				m.Answer = append(m.Answer, &dns.A{
@@ -100,7 +134,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 						Class:  dns.ClassINET,
 						Ttl:    60,
 					},
-					A: net.ParseIP("127.0.0.1"),
+					A: net.ParseIP(s.interceptIP),
 				})
 			}
 			w.WriteMsg(m)
@@ -115,6 +149,23 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
+	// Cache key: question name + type
+	cacheKey := ""
+	for _, q := range r.Question {
+		cacheKey += q.Name + " " + dns.TypeToString[q.Qtype] + " "
+	}
+	if cacheKey != "" {
+		s.cacheMu.RLock()
+		ent := s.cache[cacheKey]
+		s.cacheMu.RUnlock()
+		if ent != nil && time.Now().Before(ent.until) {
+			out := ent.msg.Copy()
+			out.Id = r.Id
+			w.WriteMsg(out)
+			return
+		}
+	}
+
 	// Forward to upstream
 	c := new(dns.Client)
 	c.Timeout = 3 * time.Second
@@ -124,6 +175,40 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		w.WriteMsg(m)
 		return
 	}
+
+	// Store in cache with TTL from response (min of RR TTLs), clamped to [minCacheTTL, maxCacheTTL]
+	if cacheKey != "" && len(resp.Answer) > 0 {
+		ttl := s.maxCacheTTL
+		for _, rr := range resp.Answer {
+			if h := rr.Header(); h.Ttl > 0 {
+				rttl := time.Duration(h.Ttl) * time.Second
+				if rttl < ttl {
+					ttl = rttl
+				}
+			}
+		}
+		if ttl < s.minCacheTTL {
+			ttl = s.minCacheTTL
+		}
+		if ttl > s.maxCacheTTL {
+			ttl = s.maxCacheTTL
+		}
+		s.cacheMu.Lock()
+		if len(s.cache) >= 50000 {
+			now := time.Now()
+			for k, v := range s.cache {
+				if now.After(v.until) {
+					delete(s.cache, k)
+				}
+			}
+			if len(s.cache) >= 50000 {
+				s.cache = make(map[string]*cacheEntry)
+			}
+		}
+		s.cache[cacheKey] = &cacheEntry{msg: resp.Copy(), until: time.Now().Add(ttl)}
+		s.cacheMu.Unlock()
+	}
+
 	w.WriteMsg(resp)
 }
 

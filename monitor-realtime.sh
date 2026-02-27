@@ -20,14 +20,14 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-VPS1_IP="89.169.179.233"
-VPS1_USER="slava"
-VPS1_KEY="C:\Users\slava\.ssh\ssh-key-1772056840349"
+VPS1_IP=""
+VPS1_USER="root"
+VPS1_KEY=""
 VPS1_PASS=""
 
-VPS2_IP="38.135.122.81"
+VPS2_IP=""
 VPS2_USER="root"
-VPS2_KEY="~/.ssh/id_rsa"
+VPS2_KEY=""
 VPS2_PASS=""
 
 VPS2_TUN_IP="10.8.0.2"
@@ -85,6 +85,12 @@ read_kv() {
     clean_value "$raw"
 }
 
+parse_kv() {
+    local data="$1" key="$2"
+    printf "%s\n" "$data" | awk -v k="$key" \
+        'BEGIN{n=length(k)} substr($0,1,n+1)==k"=" {print substr($0,n+2); exit}'
+}
+
 load_defaults_from_files() {
     # keys.env содержит IP и внутренние сети после deploy-vps1.sh
     if [[ -f "./vpn-output/keys.env" ]]; then
@@ -131,7 +137,7 @@ expand_tilde() {
         p="/mnt/${drive}/${rest}"
     fi
     if [[ "$p" == "~/"* ]]; then
-        printf "%s" "${HOME}/${p#~/}"
+        printf "%s" "${HOME}/${p#'~/'}"
     elif [[ "$p" == "${HOME}/~/"* ]]; then
         printf "%s" "${HOME}/${p#${HOME}/~/}"
     else
@@ -258,8 +264,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && { echo "Укажите --vps1-key или --vps1-pass" >&2; exit 1; }
-[[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && { echo "Укажите --vps2-key или --vps2-pass" >&2; exit 1; }
+[[ -z "$VPS1_IP" ]] && { echo "Укажите VPS1_IP в .env или --vps1-ip" >&2; exit 1; }
+[[ -z "$VPS2_IP" ]] && { echo "Укажите VPS2_IP в .env или --vps2-ip" >&2; exit 1; }
+[[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && { echo "Укажите VPS1_KEY в .env или --vps1-key / --vps1-pass" >&2; exit 1; }
+[[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && { echo "Укажите VPS2_KEY в .env или --vps2-key / --vps2-pass" >&2; exit 1; }
 
 VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
 VPS2_KEY="$(expand_tilde "$VPS2_KEY")"
@@ -570,14 +578,31 @@ EOF
 print_block_vps1() {
     local data="$1"
     local speed down up
+    local HOST LOAD MEM DISK MAIN_IF RX TX TCP_EST UDP_CONN TOP_CONN
+    local AWG0 AWG1 HS0 P0 P1 TUN_PING
     if [[ -z "$data" ]]; then
         echo -e "${RED}VPS1 недоступен по SSH${NC}"
         [[ -n "$LAST_ERR_VPS1" ]] && echo -e "  reason: ${YELLOW}${LAST_ERR_VPS1}${NC}"
         return
     fi
-    eval "$data"
-    log_line "DEBUG" "VPS1 rx=${RX:-0} tx=${TX:-0} if=${MAIN_IF:-?}"
-    speed="$(update_speed "VPS1" "${RX:-0}" "${TX:-0}")"
+    HOST="$(parse_kv "$data" HOST)"
+    LOAD="$(parse_kv "$data" LOAD)"
+    MEM="$(parse_kv "$data" MEM)"
+    DISK="$(parse_kv "$data" DISK)"
+    MAIN_IF="$(parse_kv "$data" MAIN_IF)"
+    RX="$(parse_kv "$data" RX)"; RX="${RX:-0}"
+    TX="$(parse_kv "$data" TX)"; TX="${TX:-0}"
+    TCP_EST="$(parse_kv "$data" TCP_EST)"
+    UDP_CONN="$(parse_kv "$data" UDP_CONN)"
+    TOP_CONN="$(parse_kv "$data" TOP_CONN)"
+    AWG0="$(parse_kv "$data" AWG0)"
+    AWG1="$(parse_kv "$data" AWG1)"
+    HS0="$(parse_kv "$data" HS0)"; HS0="${HS0:--1}"
+    P0="$(parse_kv "$data" P0)"
+    P1="$(parse_kv "$data" P1)"
+    TUN_PING="$(parse_kv "$data" TUN_PING)"
+    log_line "DEBUG" "VPS1 rx=${RX} tx=${TX} if=${MAIN_IF:-?}"
+    speed="$(update_speed "VPS1" "${RX}" "${TX}")"
     down="${speed%%|*}"
     up="${speed##*|}"
     echo -e "${BOLD}${CYAN}VPS1 (${VPS1_IP})${NC}"
@@ -586,21 +611,39 @@ print_block_vps1() {
     echo -e "  net ${MAIN_IF:-n/a}: ↓ ${down} | ↑ ${up}"
     echo -e "  conn: TCP est ${TCP_EST:-0} | UDP ${UDP_CONN:-0} | top: ${TOP_CONN:-none}"
     echo -e "  awg0: $(fmt_status "${AWG0:-unknown}") | awg1: $(fmt_status "${AWG1:-unknown}")"
-    echo -e "  awg0 handshake age: $(fmt_handshake "${HS0:--1}") | peers awg0/awg1: ${P0:-0}/${P1:-0}"
+    echo -e "  awg0 handshake age: $(fmt_handshake "${HS0}") | peers awg0/awg1: ${P0:-0}/${P1:-0}"
     echo -e "  ping awg0 -> ${VPS2_TUN_IP}: $(fmt_status "${TUN_PING:-fail}")"
 }
 
 print_block_vps2() {
     local data="$1"
     local speed down up
+    local HOST LOAD MEM DISK MAIN_IF RX TX TCP_EST UDP_CONN TOP_CONN
+    local AWG0 HS0 P0 AGH DNS53 WEB3000 WAN_PING
     if [[ -z "$data" ]]; then
         echo -e "${RED}VPS2 недоступен по SSH${NC}"
         [[ -n "$LAST_ERR_VPS2" ]] && echo -e "  reason: ${YELLOW}${LAST_ERR_VPS2}${NC}"
         return
     fi
-    eval "$data"
-    log_line "DEBUG" "VPS2 rx=${RX:-0} tx=${TX:-0} if=${MAIN_IF:-?}"
-    speed="$(update_speed "VPS2" "${RX:-0}" "${TX:-0}")"
+    HOST="$(parse_kv "$data" HOST)"
+    LOAD="$(parse_kv "$data" LOAD)"
+    MEM="$(parse_kv "$data" MEM)"
+    DISK="$(parse_kv "$data" DISK)"
+    MAIN_IF="$(parse_kv "$data" MAIN_IF)"
+    RX="$(parse_kv "$data" RX)"; RX="${RX:-0}"
+    TX="$(parse_kv "$data" TX)"; TX="${TX:-0}"
+    TCP_EST="$(parse_kv "$data" TCP_EST)"
+    UDP_CONN="$(parse_kv "$data" UDP_CONN)"
+    TOP_CONN="$(parse_kv "$data" TOP_CONN)"
+    AWG0="$(parse_kv "$data" AWG0)"
+    HS0="$(parse_kv "$data" HS0)"; HS0="${HS0:--1}"
+    P0="$(parse_kv "$data" P0)"
+    AGH="$(parse_kv "$data" AGH)"
+    DNS53="$(parse_kv "$data" DNS53)"
+    WEB3000="$(parse_kv "$data" WEB3000)"
+    WAN_PING="$(parse_kv "$data" WAN_PING)"
+    log_line "DEBUG" "VPS2 rx=${RX} tx=${TX} if=${MAIN_IF:-?}"
+    speed="$(update_speed "VPS2" "${RX}" "${TX}")"
     down="${speed%%|*}"
     up="${speed##*|}"
     echo -e "${BOLD}${CYAN}VPS2 (${VPS2_IP})${NC}"
@@ -608,7 +651,7 @@ print_block_vps2() {
     echo -e "  load: ${LOAD:-n/a} | mem: ${MEM:-n/a} | disk: ${DISK:-n/a}"
     echo -e "  net ${MAIN_IF:-n/a}: ↓ ${down} | ↑ ${up}"
     echo -e "  conn: TCP est ${TCP_EST:-0} | UDP ${UDP_CONN:-0} | top: ${TOP_CONN:-none}"
-    echo -e "  awg0: $(fmt_status "${AWG0:-unknown}") | handshake age: $(fmt_handshake "${HS0:--1}") | peers: ${P0:-0}"
+    echo -e "  awg0: $(fmt_status "${AWG0:-unknown}") | handshake age: $(fmt_handshake "${HS0}") | peers: ${P0:-0}"
     echo -e "  AdGuard: $(fmt_status "${AGH:-inactive}") | DNS:53 $(fmt_status "${DNS53:-down}") | Web:3000 $(fmt_status "${WEB3000:-down}")"
     echo -e "  ping 8.8.8.8: $(fmt_status "${WAN_PING:-fail}")"
 }

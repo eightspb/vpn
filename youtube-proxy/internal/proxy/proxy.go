@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/local/youtube-proxy/internal/filter"
+	"golang.org/x/net/http2"
 )
 
 // Server is a TLS-terminating reverse proxy for youtubei.googleapis.com.
@@ -33,24 +35,38 @@ type Config struct {
 
 // New creates and starts the HTTPS proxy server.
 func New(cfg Config) (*Server, error) {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 5 * time.Second}
+			return d.DialContext(ctx, "udp", "8.8.8.8:53")
+		},
+	}
+	dialer.Resolver = resolver
+
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		IdleConnTimeout:       120 * time.Second,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   50,
+		DisableCompression:    false,
+	}
+	if err := http2.ConfigureTransport(transport); err != nil {
+		fmt.Printf("[proxy] Warning: failed to enable HTTP/2 for upstream: %v\n", err)
+	}
 	s := &Server{
 		listenAddr:   cfg.Listen,
 		upstreamHost: cfg.UpstreamHost,
 		tlsConfig:    cfg.TLSConfig,
 		filter:       cfg.Filter,
 		upstream: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					ServerName: strings.Split(cfg.UpstreamHost, ":")[0],
-				},
-				DialContext: (&net.Dialer{
-					Timeout:   10 * time.Second,
-					KeepAlive: 30 * time.Second,
-				}).DialContext,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ResponseHeaderTimeout: 30 * time.Second,
-				IdleConnTimeout:       90 * time.Second,
-			},
+			Transport: transport,
 			// Don't follow redirects automatically
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -67,10 +83,21 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/", s.handle)
 
 	srv := &http.Server{
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Handler:           mux,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+		ReadHeaderTimeout: 5 * time.Second,
+		// TLSNextProto empty — disable HTTP/2, not needed for proxy
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		ConnState: func(conn net.Conn, state http.ConnState) {
+			if state == http.StateNew {
+				conn.SetDeadline(time.Now().Add(15 * time.Second))
+			} else if state == http.StateActive {
+				conn.SetDeadline(time.Time{})
+			}
+		},
 	}
 
 	go func() {
@@ -84,7 +111,12 @@ func New(cfg Config) (*Server, error) {
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := fmt.Sprintf("https://%s%s", s.upstreamHost, r.RequestURI)
+	host := r.Host
+	if host == "" {
+		host = strings.Split(s.upstreamHost, ":")[0]
+	}
+
+	upstreamURL := fmt.Sprintf("https://%s%s", host, r.RequestURI)
 
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, r.Body)
 	if err != nil {
@@ -94,7 +126,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	// Copy headers, fix Host
 	copyHeaders(upReq.Header, r.Header)
-	upReq.Header.Set("Host", strings.Split(s.upstreamHost, ":")[0])
+	upReq.Header.Set("Host", host)
 
 	// Don't ask for compressed response if we need to filter — simplifies decompression
 	if s.filter.ShouldFilter(r.URL.Path) {
@@ -103,12 +135,28 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.upstream.Do(upReq)
 	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "tls") || strings.Contains(errStr, "certificate") || strings.Contains(errStr, "x509") {
+			fmt.Printf("[proxy] TLS/cert error for %s %s: %v\n", r.Method, r.URL.Path, err)
+		} else {
+			fmt.Printf("[proxy] Upstream error for %s %s: %v\n", r.Method, r.URL.Path, err)
+		}
 		http.Error(w, "upstream error", http.StatusBadGateway)
-		fmt.Printf("[proxy] Upstream error for %s: %v\n", r.URL.Path, err)
 		return
 	}
 	defer resp.Body.Close()
 
+	// Non-filtered path: stream response without reading into memory
+	if !s.filter.ShouldFilter(r.URL.Path) {
+		copyHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			fmt.Printf("[proxy] Stream write error for %s: %v\n", r.URL.Path, err)
+		}
+		return
+	}
+
+	// Filtered path: read full body for filtering
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		http.Error(w, "read error", http.StatusBadGateway)
@@ -117,7 +165,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	// Decompress gzip if needed before filtering
 	contentEncoding := resp.Header.Get("Content-Encoding")
-	if contentEncoding == "gzip" && s.filter.ShouldFilter(r.URL.Path) {
+	if contentEncoding == "gzip" {
 		gr, err := gzip.NewReader(bytes.NewReader(body))
 		if err == nil {
 			decompressed, err := io.ReadAll(gr)
@@ -130,12 +178,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply ad filter
-	if s.filter.ShouldFilter(r.URL.Path) {
-		originalLen := len(body)
-		body = s.filter.Apply(r.URL.Path, body)
-		if len(body) != originalLen {
-			fmt.Printf("[proxy] Filtered %s: %d → %d bytes\n", r.URL.Path, originalLen, len(body))
-		}
+	originalLen := len(body)
+	body = s.filter.Apply(r.URL.Path, body)
+	if len(body) != originalLen {
+		fmt.Printf("[proxy] Filtered %s: %d → %d bytes\n", r.URL.Path, originalLen, len(body))
 	}
 
 	// Write response

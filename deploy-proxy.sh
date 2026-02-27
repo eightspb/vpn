@@ -8,7 +8,13 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# On Windows/Git Bash, convert drive-letter paths to /mnt/... style if needed
+if [[ "$SCRIPT_DIR" =~ ^/[A-Za-z]/ ]]; then
+    DRIVE=$(echo "$SCRIPT_DIR" | cut -c2 | tr '[:upper:]' '[:lower:]')
+    REST=$(echo "$SCRIPT_DIR" | cut -c3-)
+    SCRIPT_DIR="/mnt/${DRIVE}${REST}"
+fi
 PROXY_DIR="$SCRIPT_DIR/youtube-proxy"
 BINARY_NAME="youtube-proxy"
 REMOTE_DIR="/opt/youtube-proxy"
@@ -44,23 +50,46 @@ echo ""
 echo "[1/5] Building youtube-proxy for linux/amd64..."
 cd "$PROXY_DIR"
 
-if ! command -v go &>/dev/null; then
-    echo "ERROR: Go is not installed. Download from https://go.dev/dl/"
-    exit 1
+# Find go binary: check PATH first, then common install locations
+GO_BIN=""
+if command -v go &>/dev/null; then
+    GO_BIN=$(command -v go)
+else
+    for candidate in ~/go-dist/go/bin/go ~/go/bin/go /usr/local/go/bin/go; do
+        if [[ -x "$candidate" ]]; then
+            GO_BIN="$candidate"
+            break
+        fi
+    done
 fi
 
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$BINARY_NAME" ./cmd/proxy
+if [[ -z "$GO_BIN" ]]; then
+    echo "ERROR: Go is not installed. Run: bash install-go.sh"
+    exit 1
+fi
+echo "      Using Go: $GO_BIN ($($GO_BIN version))"
+
+GOOS=linux GOARCH=amd64 "$GO_BIN" build -ldflags="-s -w" -o "$BINARY_NAME" ./cmd/proxy
 echo "      Binary size: $(du -sh $BINARY_NAME | cut -f1)"
 
 # ── Step 2: Upload files ──────────────────────────────────────────────────────
 echo "[2/5] Uploading files to VPS2..."
 $SSH "mkdir -p $REMOTE_DIR/certs $REMOTE_DIR/blocklists"
 
+# Останавливаем сервис перед заменой бинарника (иначе "Text file busy")
+$SSH "systemctl stop youtube-proxy 2>/dev/null || true"
+sleep 1
+
 $SCP "$PROXY_DIR/$BINARY_NAME"       "root@$VPS2_IP:$REMOTE_DIR/"
 $SCP "$PROXY_DIR/config.yaml"        "root@$VPS2_IP:$REMOTE_DIR/"
 $SCP "$PROXY_DIR/blocklists/"*.txt   "root@$VPS2_IP:$REMOTE_DIR/blocklists/"
 
 $SSH "chmod +x $REMOTE_DIR/$BINARY_NAME"
+
+# Remove old server cert so it is regenerated with updated SANs from config.yaml.
+# CA cert is intentionally preserved — it is already installed on client devices.
+echo "      Removing old server cert (will be regenerated with new SANs)..."
+$SSH "rm -f $REMOTE_DIR/certs/server.crt $REMOTE_DIR/certs/server.key"
 
 # ── Step 3: Create systemd service ───────────────────────────────────────────
 echo "[3/5] Installing systemd service..."
@@ -73,7 +102,10 @@ Wants=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/youtube-proxy
+ExecStartPre=+/bin/sh -c '/sbin/iptables -D INPUT -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || true'
+ExecStartPre=+/bin/sh -c '/sbin/iptables -I INPUT 1 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable'
 ExecStart=/opt/youtube-proxy/youtube-proxy --config /opt/youtube-proxy/config.yaml
+ExecStopPost=+/bin/sh -c '/sbin/iptables -D INPUT -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || true'
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -88,15 +120,22 @@ EOF
 
 $SSH "systemctl daemon-reload && systemctl enable youtube-proxy"
 
-# ── Step 4: Configure DNS on VPS2 ────────────────────────────────────────────
-echo "[4/5] Configuring DNS on VPS2..."
+# ── Step 4: Configure DNS & Firewall on VPS2 ─────────────────────────────────
+echo "[4/5] Configuring DNS & Firewall on VPS2..."
 
 # Stop systemd-resolved if it holds port 53
 $SSH "systemctl stop systemd-resolved 2>/dev/null || true"
 $SSH "systemctl disable systemd-resolved 2>/dev/null || true"
 
+# AdGuard Home and youtube-proxy both need port 53 — they cannot coexist.
+# Always stop AdGuard Home; use --remove-adguard to fully uninstall it.
+echo "      Stopping AdGuard Home (conflicts with youtube-proxy on port 53)..."
+$SSH "systemctl stop AdGuardHome 2>/dev/null || systemctl stop adguardhome 2>/dev/null || true"
+$SSH "systemctl disable AdGuardHome 2>/dev/null || systemctl disable adguardhome 2>/dev/null || true"
+
 # Point VPS2 itself to our DNS
-$SSH "echo 'nameserver 127.0.0.1' > /etc/resolv.conf"
+# /etc/resolv.conf может быть симлинком от systemd-resolved — заменяем на реальный файл
+$SSH "rm -f /etc/resolv.conf && printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf"
 
 # Update AmneziaWG client config to use our DNS
 # The DNS= line in the WireGuard config tells clients which DNS to use
@@ -104,18 +143,37 @@ $SSH "grep -q '^DNS=' /etc/amnezia/amneziawg/awg0.conf && \
       sed -i 's/^DNS=.*/DNS=10.8.0.2/' /etc/amnezia/amneziawg/awg0.conf || \
       sed -i '/^\[Interface\]/a DNS=10.8.0.2' /etc/amnezia/amneziawg/awg0.conf"
 
+# Allow TCP 443 (HTTPS proxy) from VPN tunnel — clients connect to 10.8.0.2:443
+$SSH "iptables -C INPUT -p tcp --dport 443 -i awg0 -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport 443 -i awg0 -j ACCEPT"
+echo "      TCP 443 from VPN tunnel (awg0) allowed for HTTPS proxy"
+
+# Block CA server port 8080 from public internet (only accessible via VPN tunnel)
+# The CA server listens on 10.8.0.2:8080 (VPN interface only), but add explicit
+# firewall rules to prevent any accidental exposure on the public interface
+$SSH "iptables -C INPUT -p tcp --dport 8080 -i awg0 -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport 8080 -i awg0 -j ACCEPT"
+$SSH "iptables -C INPUT -p tcp --dport 8080 -j DROP 2>/dev/null || \
+      iptables -A INPUT -p tcp --dport 8080 -j DROP"
+echo "      CA server port 8080 restricted to VPN interface (awg0) only"
+
+# Allow SSH from VPN client network (needed for dashboard monitor)
+$SSH "iptables -C INPUT -p tcp --dport 22 -s 10.9.0.0/24 -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport 22 -s 10.9.0.0/24 -j ACCEPT"
+echo "      SSH from VPN client network (10.9.0.0/24) allowed"
+
 # ── Step 5: Remove AdGuard Home (optional) ────────────────────────────────────
 if [[ "$ADGUARD_REMOVE" == "true" ]]; then
     echo "[5/5] Removing AdGuard Home..."
     $SSH "systemctl stop AdGuardHome 2>/dev/null || true"
     $SSH "systemctl disable AdGuardHome 2>/dev/null || true"
-    $SSH "rm -f /etc/systemd/system/AdGuardHome.service"
+    $SSH "rm -f /etc/systemd/system/AdGuardHome.service /etc/systemd/system/adguardhome.service"
+    $SSH "rm -rf /opt/AdGuardHome"
     $SSH "systemctl daemon-reload"
     echo "      AdGuard Home removed."
 else
-    echo "[5/5] Skipping AdGuard Home removal (use --remove-adguard to remove)."
-    echo "      Note: AdGuard Home and youtube-proxy both use port 53."
-    echo "      You should either remove AdGuard Home or change its port."
+    echo "[5/5] AdGuard Home stopped/disabled (conflicts with youtube-proxy on port 53)."
+    echo "      Run with --remove-adguard to fully uninstall it."
 fi
 
 # ── Start service ─────────────────────────────────────────────────────────────
@@ -129,16 +187,39 @@ $SSH "systemctl status youtube-proxy --no-pager -l"
 echo ""
 echo "=== DONE ==="
 echo ""
-echo "Root CA certificate is available at:"
-echo "  http://$VPS2_IP:8080/ca.crt"
+echo "Root CA certificate is available ONLY via VPN tunnel at:"
+echo "  http://10.8.0.2:8080/ca.crt"
 echo ""
-echo "Install it on your devices:"
-echo "  iOS:     Open http://$VPS2_IP:8080 in Safari → Download ca.crt"
-echo "           Settings → Profile Downloaded → Install → Trust"
-echo "  Android: Download ca.crt → Settings → Security → Install certificate → CA"
-echo "  Windows: Download ca.crt → double-click → Install → Trusted Root CAs"
+echo "IMPORTANT: Port 8080 is blocked from the public internet."
+echo "Connect to VPN first, then install the certificate."
+echo ""
+echo "━━━ Install CA certificate on your devices (VPN must be ON) ━━━"
+echo ""
+echo "  Windows (automated):"
+echo "    powershell -ExecutionPolicy Bypass -File install-ca.ps1"
+echo ""
+echo "  Windows (manual):"
+echo "    1. Connect to VPN"
+echo "    2. Open http://10.8.0.2:8080 in browser → Download ca.crt"
+echo "    3. Double-click ca.crt → Install Certificate → Local Machine"
+echo "       → Place in Trusted Root Certification Authorities → Finish"
+echo "    4. Restart browser"
+echo ""
+echo "  iOS:"
+echo "    1. Connect to VPN"
+echo "    2. Open http://10.8.0.2:8080 in Safari → Download ca.crt"
+echo "    3. Settings → Profile Downloaded → Install → Trust"
+echo "    4. Settings → General → About → Certificate Trust Settings → Enable"
+echo ""
+echo "  Android:"
+echo "    1. Connect to VPN"
+echo "    2. Download ca.crt from http://10.8.0.2:8080"
+echo "    3. Settings → Security → Install certificate → CA certificate"
 echo ""
 echo "After installing the certificate, your devices will have:"
 echo "  ✓ YouTube pre-roll ads removed"
 echo "  ✓ Ad/tracking/malware domains blocked (DNS)"
 echo "  ✓ No additional apps needed on devices"
+echo ""
+echo "NOTE: Without the CA certificate, YouTube will show SSL errors."
+echo "      This is expected — the proxy intercepts HTTPS traffic."

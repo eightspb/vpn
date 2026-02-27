@@ -1,11 +1,17 @@
 # youtube-proxy configuration
 
 dns:
-  listen: "0.0.0.0:53"
-  upstream: "8.8.8.8:53"
-  # Домены, которые перехватываются прокси (резолвятся в 127.0.0.1)
-  intercept_hosts:
-    - "youtubei.googleapis.com"
+  listen: "10.8.0.2:53"
+  upstream: "1.1.1.1:53"
+  # IP-адрес прокси, который будет отдаваться клиентам (IP VPS2 внутри туннеля)
+  # intercept_ip: "10.8.0.2"
+  # Домены, которые перехватываются прокси.
+  # ОТКЛЮЧЕНО: перехват YouTube-доменов ломает YouTube-приложение на iOS из-за certificate pinning.
+  # Чтобы включить MITM-перехват обратно — раскомментируйте intercept_ip и intercept_hosts.
+  # intercept_hosts:
+  #   - "youtubei.googleapis.com"
+  #   - "m.youtube.com"
+  #   - "www.youtube.com"
   # Встроенные блок-листы (загружаются при старте)
   blocklists:
     - path: "blocklists/ads.txt"
@@ -18,9 +24,12 @@ dns:
   blocklist_urls:
     - "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
     - "https://raw.githubusercontent.com/nicehash/NiceHashQuickMiner/master/filters/blocklist.txt"
+    - "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/pro.txt"
+    - "https://raw.githubusercontent.com/blocklistproject/Lists/master/ads.txt"
+    - "https://raw.githubusercontent.com/blocklistproject/Lists/master/tracking.txt"
 
 proxy:
-  listen: "0.0.0.0:443"
+  listen: "10.8.0.2:443"
   # Путь к сертификатам (генерируются автоматически при первом запуске)
   ca_cert: "certs/ca.crt"
   ca_key:  "certs/ca.key"
@@ -28,6 +37,14 @@ proxy:
   server_key:  "certs/server.key"
   # Реальный upstream для перехватываемых доменов
   upstream_host: "youtubei.googleapis.com:443"
+  # IP-адреса сервера для IP SAN в серверном сертификате.
+  # Добавьте WAN IP и VPN IP VPS2, чтобы прямые запросы по IP не давали ошибку TLS.
+  server_ips:
+    - "10.8.0.2"
+    - "38.135.122.81"
+  # MITM-перехват YouTube-трафика отключён (intercept_hosts убран из dns секции).
+  # Прокси слушает только на VPN-интерфейсе и фильтрует JSON-ответы по ключам из filter.endpoints.
+  # Чтобы включить MITM обратно — добавьте intercept_ip и intercept_hosts в секцию dns.
 
 filter:
   # Эндпоинты, из которых вырезается реклама
@@ -40,6 +57,13 @@ filter:
         - "adBreakHeartbeatParams"
         - "adBreakParams"
         - "playerLegacyDesktopWatchAdsRenderer"
+        - "adBreakServiceRenderer"
+        - "instreamVideoAdRenderer"
+        - "linearAdSequenceRenderer"
+        - "adLayoutMetadata"
+        - "playerAdParams"
+        - "actionCompanionAdRenderer"
+        - "reelPlayerAdRenderer"
     - path: "/youtubei/v1/next"
       remove_keys:
         - "adSlots"
@@ -47,6 +71,9 @@ filter:
         - "searchPyvRenderer"
         - "promotedVideoRenderer"
         - "adComponentRenderer"
+        - "bannerPromoRenderer"
+        - "mastHeadAdRenderer"
+        - "reelPlayerAdRenderer"
     - path: "/youtubei/v1/browse"
       remove_keys:
         - "adSlots"
@@ -54,8 +81,23 @@ filter:
         - "searchPyvRenderer"
         - "adComponentRenderer"
         - "promotedSparklesTextSearchRenderer"
+        - "mastHeadAdRenderer"
+        - "bannerPromoRenderer"
+    - path: "/youtubei/v1/search"
+      remove_keys:
+        - "adSlots"
+        - "promotedVideoRenderer"
+        - "searchPyvRenderer"
+        - "adComponentRenderer"
+        - "promotedSparklesTextSearchRenderer"
+    - path: "/youtubei/v1/reel/reel_watch_sequence"
+      remove_keys:
+        - "adSlots"
+        - "reelPlayerAdRenderer"
+        - "adComponentRenderer"
 
 ca_server:
   # HTTP-сервер для скачивания Root CA сертификата
-  listen: "0.0.0.0:8080"
+  # Слушает только на VPN-интерфейсе — доступен лишь клиентам внутри туннеля
+  listen: "10.8.0.2:8080"
   cert_path: "certs/ca.crt"

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +22,7 @@ type Config struct {
 		Listen         string   `yaml:"listen"`
 		Upstream       string   `yaml:"upstream"`
 		InterceptHosts []string `yaml:"intercept_hosts"`
+		InterceptIP    string   `yaml:"intercept_ip"`
 		Blocklists     []struct {
 			Path    string `yaml:"path"`
 			Comment string `yaml:"comment"`
@@ -29,12 +31,13 @@ type Config struct {
 	} `yaml:"dns"`
 
 	Proxy struct {
-		Listen       string `yaml:"listen"`
-		CACert       string `yaml:"ca_cert"`
-		CAKey        string `yaml:"ca_key"`
-		ServerCert   string `yaml:"server_cert"`
-		ServerKey    string `yaml:"server_key"`
-		UpstreamHost string `yaml:"upstream_host"`
+		Listen       string   `yaml:"listen"`
+		CACert       string   `yaml:"ca_cert"`
+		CAKey        string   `yaml:"ca_key"`
+		ServerCert   string   `yaml:"server_cert"`
+		ServerKey    string   `yaml:"server_key"`
+		UpstreamHost string   `yaml:"upstream_host"`
+		ServerIPs    []string `yaml:"server_ips"`
 	} `yaml:"proxy"`
 
 	Filter struct {
@@ -61,7 +64,13 @@ func main() {
 	}
 
 	// 1. Load / generate certificates
-	certMgr, err := certs.Load(cfg.Proxy.CACert, cfg.Proxy.CAKey, cfg.Proxy.ServerCert, cfg.Proxy.ServerKey)
+	var serverIPs []net.IP
+	for _, s := range cfg.Proxy.ServerIPs {
+		if ip := net.ParseIP(s); ip != nil {
+			serverIPs = append(serverIPs, ip)
+		}
+	}
+	certMgr, err := certs.Load(cfg.Proxy.CACert, cfg.Proxy.CAKey, cfg.Proxy.ServerCert, cfg.Proxy.ServerKey, serverIPs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Certificate error: %v\n", err)
 		os.Exit(1)
@@ -91,6 +100,7 @@ func main() {
 		Listen:         cfg.DNS.Listen,
 		Upstream:       cfg.DNS.Upstream,
 		InterceptHosts: cfg.DNS.InterceptHosts,
+		InterceptIP:    cfg.DNS.InterceptIP,
 		BlocklistPaths: blocklistPaths,
 		BlocklistURLs:  cfg.DNS.BlocklistURLs,
 	})

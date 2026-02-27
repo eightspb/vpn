@@ -30,7 +30,7 @@
 #
 # Примеры:
 #   # С SSH ключом:
-#   bash deploy.sh --vps1-ip 89.169.179.233 --vps1-key ~/.ssh/id_rsa \
+#   bash deploy.sh --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
 #                  --vps2-ip 38.135.122.81  --vps2-key ~/.ssh/id_rsa
 #
 #   # С паролем (нужен sshpass):
@@ -303,7 +303,7 @@ PostDown = iptables -D FORWARD -i \${MAIN_IF} -o awg0 -m state --state RELATED,E
 [Peer]
 PublicKey  = ${VPS1_TUNNEL_PUB}
 AllowedIPs = ${TUN_NET}.1/32, ${CLIENT_NET}.0/24
-PersistentKeepalive = 25
+PersistentKeepalive = 60
 WGEOF
 
 chmod 600 /etc/amnezia/amneziawg/awg0.conf
@@ -324,11 +324,56 @@ Environment=WG_ENDPOINT_RESOLUTION_RETRIES=infinity
 WantedBy=multi-user.target
 SVCEOF
 
-# Включаем IP forwarding, отключаем IPv6
 sysctl -w net.ipv4.ip_forward=1
 sysctl -w net.ipv6.conf.all.disable_ipv6=1
 sysctl -w net.ipv6.conf.default.disable_ipv6=1
-printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\n' > /etc/sysctl.d/99-vpn.conf
+sysctl -w net.core.rmem_max=67108864
+sysctl -w net.core.wmem_max=67108864
+sysctl -w net.core.netdev_max_backlog=16384
+sysctl -w net.netfilter.nf_conntrack_max=524288 2>/dev/null || true
+sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
+sysctl -w net.core.default_qdisc=fq 2>/dev/null || true
+sysctl -w net.ipv4.tcp_rmem='4096 131072 16777216' 2>/dev/null || true
+sysctl -w net.ipv4.tcp_wmem='4096 65536 16777216' 2>/dev/null || true
+sysctl -w net.core.rmem_default=1048576 2>/dev/null || true
+sysctl -w net.core.wmem_default=1048576 2>/dev/null || true
+sysctl -w net.core.somaxconn=4096 2>/dev/null || true
+sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
+sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
+sysctl -w net.ipv4.tcp_mtu_probing=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_timestamps=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_sack=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_window_scaling=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null || true
+sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=7200 2>/dev/null || true
+sysctl -w net.ipv4.conf.all.rp_filter=0 2>/dev/null || true
+sysctl -w net.ipv4.conf.default.rp_filter=0 2>/dev/null || true
+cat > /etc/sysctl.d/99-vpn.conf << 'SYSCTLEOF'
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.core.rmem_max=67108864
+net.core.wmem_max=67108864
+net.core.netdev_max_backlog=16384
+net.netfilter.nf_conntrack_max=524288
+net.ipv4.tcp_congestion_control=bbr
+net.core.default_qdisc=fq
+net.ipv4.tcp_rmem=4096 131072 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+net.core.rmem_default=1048576
+net.core.wmem_default=1048576
+net.core.somaxconn=4096
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_slow_start_after_idle=0
+net.ipv4.tcp_mtu_probing=1
+net.ipv4.tcp_timestamps=1
+net.ipv4.tcp_sack=1
+net.ipv4.tcp_window_scaling=1
+net.ipv4.tcp_no_metrics_save=1
+net.netfilter.nf_conntrack_tcp_timeout_established=7200
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+SYSCTLEOF
 
 systemctl daemon-reload
 systemctl enable awg-quick@awg0
@@ -349,11 +394,12 @@ echo \"Основной интерфейс: \$MAIN_IF\"
 mkdir -p /etc/amnezia/amneziawg
 
 # awg0: туннель к VPS2
-cat > /etc/amnezia/amneziawg/awg0.conf << 'WGEOF'
+cat > /etc/amnezia/amneziawg/awg0.conf << WGEOF
 [Interface]
 Address = ${TUN_NET}.1/24
 PrivateKey = ${VPS1_TUNNEL_PRIV}
 ListenPort = ${VPS1_PORT_TUNNEL}
+MTU = 1420
 Table = off
 
 PostUp   = iptables -t nat -A POSTROUTING -o awg0 -j MASQUERADE
@@ -363,22 +409,23 @@ PostDown = iptables -t nat -D POSTROUTING -o awg0 -j MASQUERADE
 PublicKey           = ${VPS2_TUNNEL_PUB}
 Endpoint            = ${VPS2_IP}:${VPS2_PORT}
 AllowedIPs          = 0.0.0.0/0
-PersistentKeepalive = 25
+PersistentKeepalive = 60
 WGEOF
 
 # awg1: клиентский интерфейс с Junk обфускацией
-cat > /etc/amnezia/amneziawg/awg1.conf << 'WGEOF'
+cat > /etc/amnezia/amneziawg/awg1.conf << WGEOF
 [Interface]
 Address = ${CLIENT_NET}.1/24
 PrivateKey = ${VPS1_CLIENT_PRIV}
 ListenPort = ${VPS1_PORT_CLIENTS}
 DNS = ${TUN_NET}.2
+MTU = 1360
 
-Jc   = 5
-Jmin = 50
-Jmax = 1000
-S1   = 30
-S2   = 40
+Jc   = 2
+Jmin = 20
+Jmax = 200
+S1   = 15
+S2   = 20
 H1   = ${H1}
 H2   = ${H2}
 H3   = ${H3}
@@ -387,13 +434,21 @@ H4   = ${H4}
 PostUp   = iptables -t nat -A POSTROUTING -s ${CLIENT_NET}.0/24 -o awg0 -j MASQUERADE
 PostUp   = iptables -A FORWARD -i awg1 -o awg0 -j ACCEPT
 PostUp   = iptables -A FORWARD -i awg0 -o awg1 -m state --state RELATED,ESTABLISHED -j ACCEPT
-PostUp = ip rule add from ${CLIENT_NET}.0/24 table 200
-PostUp = ip route add default via ${TUN_NET}.2 dev awg0 table 200
+PostUp   = iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1320
+PostUp   = ip rule add from ${CLIENT_NET}.0/24 table 200
+PostUp   = ip route add default via ${TUN_NET}.2 dev awg0 table 200
+PostUp   = iptables -t nat -A PREROUTING -i awg1 -p udp --dport 53 -j DNAT --to-destination ${TUN_NET}.2:53
+PostUp   = iptables -t nat -A PREROUTING -i awg1 -p tcp --dport 53 -j DNAT --to-destination ${TUN_NET}.2:53
+PostUp   = iptables -A FORWARD -i awg1 -d 8.8.8.8,8.8.4.4,1.1.1.1,1.0.0.1 -p tcp -m multiport --dports 443,853 -j REJECT
 PostDown = iptables -t nat -D POSTROUTING -s ${CLIENT_NET}.0/24 -o awg0 -j MASQUERADE
 PostDown = iptables -D FORWARD -i awg1 -o awg0 -j ACCEPT
 PostDown = iptables -D FORWARD -i awg0 -o awg1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+PostDown = iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1320
 PostDown = ip rule del from ${CLIENT_NET}.0/24 table 200 || true
 PostDown = ip route del default via ${TUN_NET}.2 dev awg0 table 200 || true
+PostDown = iptables -t nat -D PREROUTING -i awg1 -p udp --dport 53 -j DNAT --to-destination ${TUN_NET}.2:53
+PostDown = iptables -t nat -D PREROUTING -i awg1 -p tcp --dport 53 -j DNAT --to-destination ${TUN_NET}.2:53
+PostDown = iptables -D FORWARD -i awg1 -d 8.8.8.8,8.8.4.4,1.1.1.1,1.0.0.1 -p tcp -m multiport --dports 443,853 -j REJECT
 
 [Peer]
 PublicKey  = ${CLIENT_PUB}
@@ -421,7 +476,53 @@ SVCEOF
 sysctl -w net.ipv4.ip_forward=1
 sysctl -w net.ipv6.conf.all.disable_ipv6=1
 sysctl -w net.ipv6.conf.default.disable_ipv6=1
-printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\n' > /etc/sysctl.d/99-vpn.conf
+sysctl -w net.core.rmem_max=67108864
+sysctl -w net.core.wmem_max=67108864
+sysctl -w net.core.netdev_max_backlog=16384
+sysctl -w net.netfilter.nf_conntrack_max=524288 2>/dev/null || true
+sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
+sysctl -w net.core.default_qdisc=fq 2>/dev/null || true
+sysctl -w net.ipv4.tcp_rmem='4096 131072 16777216' 2>/dev/null || true
+sysctl -w net.ipv4.tcp_wmem='4096 65536 16777216' 2>/dev/null || true
+sysctl -w net.core.rmem_default=1048576 2>/dev/null || true
+sysctl -w net.core.wmem_default=1048576 2>/dev/null || true
+sysctl -w net.core.somaxconn=4096 2>/dev/null || true
+sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
+sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true
+sysctl -w net.ipv4.tcp_mtu_probing=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_timestamps=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_sack=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_window_scaling=1 2>/dev/null || true
+sysctl -w net.ipv4.tcp_no_metrics_save=1 2>/dev/null || true
+sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=7200 2>/dev/null || true
+sysctl -w net.ipv4.conf.all.rp_filter=0 2>/dev/null || true
+sysctl -w net.ipv4.conf.default.rp_filter=0 2>/dev/null || true
+cat > /etc/sysctl.d/99-vpn.conf << 'SYSCTLEOF'
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.core.rmem_max=67108864
+net.core.wmem_max=67108864
+net.core.netdev_max_backlog=16384
+net.netfilter.nf_conntrack_max=524288
+net.ipv4.tcp_congestion_control=bbr
+net.core.default_qdisc=fq
+net.ipv4.tcp_rmem=4096 131072 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+net.core.rmem_default=1048576
+net.core.wmem_default=1048576
+net.core.somaxconn=4096
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_slow_start_after_idle=0
+net.ipv4.tcp_mtu_probing=1
+net.ipv4.tcp_timestamps=1
+net.ipv4.tcp_sack=1
+net.ipv4.tcp_window_scaling=1
+net.ipv4.tcp_no_metrics_save=1
+net.netfilter.nf_conntrack_tcp_timeout_established=7200
+net.ipv4.conf.all.rp_filter=0
+net.ipv4.conf.default.rp_filter=0
+SYSCTLEOF
 
 systemctl daemon-reload
 systemctl enable awg-quick@awg0 awg-quick@awg1
@@ -435,6 +536,10 @@ echo VPS1_AWG_OK
 ok "VPS1 настроен"
 
 # ── Шаг 7: Установка AdGuard Home на VPS2 ─────────────────────────────────
+if [[ "$WITH_PROXY" == "true" ]]; then
+    step "Шаг 7/8: Пропуск AdGuard Home (используется youtube-proxy)"
+    warn "AdGuard Home не устанавливается — его функции выполняет youtube-proxy"
+else
 step "Шаг 7/8: Установка AdGuard Home на VPS2"
 
 # Хэш пароля bcrypt для AdGuard Home
@@ -530,6 +635,7 @@ sleep 3
 echo AGH_OK
 "
 ok "AdGuard Home установлен на VPS2"
+fi  # end if WITH_PROXY != true
 
 # ── Шаг 8: Генерация клиентского конфига ──────────────────────────────────
 step "Шаг 8/8: Генерация клиентского конфига"
@@ -540,13 +646,14 @@ cat > "$CLIENT_CONF" << EOF
 Address    = ${CLIENT_VPN_IP}/24
 PrivateKey = ${CLIENT_PRIV}
 DNS        = ${TUN_NET}.2
+MTU        = 1360
 
 # AmneziaWG Junk обфускация (защита от DPI)
-Jc   = 5
-Jmin = 50
-Jmax = 1000
-S1   = 30
-S2   = 40
+Jc   = 2
+Jmin = 20
+Jmax = 200
+S1   = 15
+S2   = 20
 H1   = ${H1}
 H2   = ${H2}
 H3   = ${H3}
@@ -575,7 +682,7 @@ VPS1 client public:   ${VPS1_CLIENT_PUB}
 Client private:       ${CLIENT_PRIV}
 Client public:        ${CLIENT_PUB}
 
-Junk параметры: Jc=5 Jmin=50 Jmax=1000 S1=30 S2=40
+Junk параметры: Jc=2 Jmin=20 Jmax=200 S1=15 S2=20
 H1=${H1} H2=${H2} H3=${H3} H4=${H4}
 EOF
 chmod 600 "${OUTPUT_DIR}/keys.txt"
@@ -584,10 +691,12 @@ chmod 600 "${OUTPUT_DIR}/keys.txt"
 if [[ "$WITH_PROXY" == "true" ]]; then
     step "Деплой YouTube Ad Proxy на VPS2"
     PROXY_ARGS="--vps2-ip $VPS2_IP"
-    [[ -n "$VPS2_KEY" ]]       && PROXY_ARGS="$PROXY_ARGS --vps2-key $VPS2_KEY"
+    [[ -n "$VPS2_KEY" ]]              && PROXY_ARGS="$PROXY_ARGS --vps2-key $VPS2_KEY"
     [[ "$REMOVE_ADGUARD" == "true" ]] && PROXY_ARGS="$PROXY_ARGS --remove-adguard"
 
-    bash "${SCRIPT_DIR}/deploy-proxy.sh" $PROXY_ARGS
+    # Convert Windows path to Linux path for bash
+    LINUX_SCRIPT_DIR=$(cd "$SCRIPT_DIR" && pwd)
+    bash "${LINUX_SCRIPT_DIR}/deploy-proxy.sh" $PROXY_ARGS
 fi
 
 # ── Итог ──────────────────────────────────────────────────────────────────
