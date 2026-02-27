@@ -1,0 +1,16 @@
+# Advertising domains (hosts format)
+# This file is bundled as a minimal seed list.
+# Full lists are downloaded automatically from blocklist_urls in config.yaml.
+
+0.0.0.0 doubleclick.net
+0.0.0.0 googleadservices.com
+0.0.0.0 googlesyndication.com
+0.0.0.0 adservice.google.com
+0.0.0.0 adservice.google.ru
+0.0.0.0 pagead2.googlesyndication.com
+0.0.0.0 ads.youtube.com
+0.0.0.0 static.doubleclick.net
+0.0.0.0 ad.doubleclick.net
+0.0.0.0 stats.g.doubleclick.net
+0.0.0.0 cm.g.doubleclick.net
+0.0.0.0 pubads.g.doubleclick.net

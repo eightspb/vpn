@@ -1,0 +1,12 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Generated VPN outputs with private keys
+vpn-output/*
+!vpn-output/.gitkeep
+
+# Temporary files
+*.tmp
+*.log

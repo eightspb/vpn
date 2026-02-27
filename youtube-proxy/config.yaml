@@ -1,0 +1,61 @@
+# youtube-proxy configuration
+
+dns:
+  listen: "0.0.0.0:53"
+  upstream: "8.8.8.8:53"
+  # Домены, которые перехватываются прокси (резолвятся в 127.0.0.1)
+  intercept_hosts:
+    - "youtubei.googleapis.com"
+  # Встроенные блок-листы (загружаются при старте)
+  blocklists:
+    - path: "blocklists/ads.txt"
+      comment: "Рекламные домены"
+    - path: "blocklists/tracking.txt"
+      comment: "Трекинг"
+    - path: "blocklists/malware.txt"
+      comment: "Malware"
+  # Дополнительные URL для загрузки блок-листов (обновляются раз в сутки)
+  blocklist_urls:
+    - "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
+    - "https://raw.githubusercontent.com/nicehash/NiceHashQuickMiner/master/filters/blocklist.txt"
+
+proxy:
+  listen: "0.0.0.0:443"
+  # Путь к сертификатам (генерируются автоматически при первом запуске)
+  ca_cert: "certs/ca.crt"
+  ca_key:  "certs/ca.key"
+  server_cert: "certs/server.crt"
+  server_key:  "certs/server.key"
+  # Реальный upstream для перехватываемых доменов
+  upstream_host: "youtubei.googleapis.com:443"
+
+filter:
+  # Эндпоинты, из которых вырезается реклама
+  endpoints:
+    - path: "/youtubei/v1/player"
+      remove_keys:
+        - "playerAds"
+        - "adPlacements"
+        - "adSlots"
+        - "adBreakHeartbeatParams"
+        - "adBreakParams"
+        - "playerLegacyDesktopWatchAdsRenderer"
+    - path: "/youtubei/v1/next"
+      remove_keys:
+        - "adSlots"
+        - "promotedSparklesTextSearchRenderer"
+        - "searchPyvRenderer"
+        - "promotedVideoRenderer"
+        - "adComponentRenderer"
+    - path: "/youtubei/v1/browse"
+      remove_keys:
+        - "adSlots"
+        - "promotedVideoRenderer"
+        - "searchPyvRenderer"
+        - "adComponentRenderer"
+        - "promotedSparklesTextSearchRenderer"
+
+ca_server:
+  # HTTP-сервер для скачивания Root CA сертификата
+  listen: "0.0.0.0:8080"
+  cert_path: "certs/ca.crt"

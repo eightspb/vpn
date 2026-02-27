@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN Dashboard</title>
+<style>
+:root {
+  --bg:      #0d1117;
+  --s1:      #161b22;
+  --s2:      #1c2128;
+  --s3:      #21262d;
+  --border:  #30363d;
+  --text:    #e6edf3;
+  --dim:     #8b949e;
+  --green:   #3fb950;
+  --yellow:  #d29922;
+  --red:     #f85149;
+  --blue:    #58a6ff;
+  --cyan:    #39d0d8;
+  --purple:  #bc8cff;
+  --glow-g:  rgba(63,185,80,0.15);
+  --glow-r:  rgba(248,81,73,0.15);
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ======= HEADER ======= */
+#hdr {
+  flex-shrink: 0;
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+#hdr-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--blue);
+  white-space: nowrap;
+}
+#hdr-ts  { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.hdr-sep { width: 1px; height: 14px; background: var(--border); flex-shrink: 0; }
+.hdr-pill {
+  display: flex; align-items: center; gap: 5px;
+  padding: 2px 9px; border-radius: 20px; border: 1px solid var(--border);
+  font-size: 11px; font-weight: 600;
+}
+.hdr-pill.on  { border-color: rgba(63,185,80,.35);  background: var(--glow-g); color: var(--green); }
+.hdr-pill.off { border-color: rgba(248,81,73,.35); background: var(--glow-r); color: var(--red); }
+.dot { width:7px; height:7px; border-radius:50%; }
+.dot.on  { background: var(--green); animation: pulse 2s infinite; }
+.dot.off { background: var(--red); }
+@keyframes pulse {
+  0%,100%{ box-shadow: 0 0 0 0 rgba(63,185,80,.5); }
+  60%    { box-shadow: 0 0 0 5px rgba(63,185,80,0); }
+}
+#hdr-right { margin-left: auto; display:flex; align-items:center; gap:10px; }
+.cd-wrap { display:flex; align-items:center; gap:5px; color:var(--dim); font-size:11px; }
+.cd-bar  { width:50px; height:2px; background:var(--border); border-radius:1px; overflow:hidden; }
+.cd-fill { height:100%; background:var(--blue); border-radius:1px; transition:width .15s linear; }
+#cd-num  { min-width:16px; text-align:right; color:var(--text); }
+
+/* ======= LAYOUT ======= */
+#layout {
+  flex: 1;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "v1   v2"
+    "log  conn";
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+
+/* ======= SERVER CARDS ======= */
+.srv {
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.srv:last-of-type { border-right: none; }
+#pv1 { grid-area: v1; }
+#pv2 { grid-area: v2; border-right: 1px solid var(--border); }
+
+.srv-hdr {
+  background: var(--s2);
+  border-bottom: 1px solid var(--border);
+  padding: 5px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.srv-name { font-weight:700; font-size:13px; }
+.srv-ip   { font-family:monospace; font-size:11px; color:var(--blue); }
+.srv-host { color:var(--dim); font-size:10px; margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+.srv-err  { color:var(--red); font-size:11px; font-family:monospace; padding:8px 12px; }
+
+/* ---- metric grid inside server card ---- */
+.srv-body {
+  flex:1; overflow:hidden;
+  display: flex;
+  flex-direction: column;
+}
+.srv-main {
+  flex:1; overflow:hidden;
+  display: flex;
+}
+
+/* Left column: ring gauge */
+.ring-col {
+  width: 72px; flex-shrink:0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--border);
+  padding: 6px 4px;
+  gap: 4px;
+}
+.ring-svg { width: 52px; height: 52px; }
+.ring-svg circle { transition: stroke-dasharray .4s ease; }
+.ring-label { font-size:9px; color:var(--dim); text-align:center; line-height:1.3; }
+
+/* Right column: metrics */
+.metrics-col {
+  flex:1;
+  padding: 4px 10px 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+  justify-content: center;
+}
+
+/* Thin progress bar */
+.bar-row { display:flex; align-items:center; gap:6px; }
+.bar-lbl { color:var(--dim); width:28px; flex-shrink:0; font-size:10px; }
+.bar-bg  { flex:1; height:4px; background:var(--s3); border-radius:2px; overflow:hidden; }
+.bar-fill { height:100%; border-radius:2px; transition:width .4s ease; }
+.bar-val { color:var(--dim); font-size:10px; font-family:monospace; white-space:nowrap; min-width:90px; text-align:right; }
+.bar-g  { background: var(--green); }
+.bar-y  { background: var(--yellow); }
+.bar-r  { background: var(--red); }
+
+/* Net row */
+.net-row {
+  display:flex; align-items:center; gap:6px;
+  padding-top: 2px; border-top: 1px solid rgba(48,54,61,.6);
+  margin-top: 1px;
+}
+.net-if   { color:var(--dim); font-size:10px; width:28px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; }
+.net-speed { display:flex; align-items:center; gap:3px; font-family:monospace; font-size:11px; font-weight:600; }
+.net-speed .arr { font-size:13px; }
+.arr-d { color:var(--green); }
+.arr-u { color:var(--blue); }
+.spark-wrap { flex:1; height:20px; overflow:hidden; }
+.spark-wrap svg { width:100%; height:100%; display:block; }
+
+/* Status row (WG / services) */
+.status-row {
+  background: var(--s2);
+  border-top: 1px solid var(--border);
+  padding: 4px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.chip {
+  display:inline-flex; align-items:center; gap:3px;
+  padding: 1px 7px; border-radius:10px;
+  font-size:10px; font-weight:600; border:1px solid transparent;
+  white-space:nowrap;
+}
+.chip.g { background:rgba(63,185,80,.12);  border-color:rgba(63,185,80,.3);  color:var(--green); }
+.chip.y { background:rgba(210,153,34,.12); border-color:rgba(210,153,34,.3); color:var(--yellow); }
+.chip.r { background:rgba(248,81,73,.12);  border-color:rgba(248,81,73,.3);  color:var(--red); }
+.chip.d { background:var(--s3); border-color:var(--border); color:var(--dim); }
+.chip-dot { width:5px; height:5px; border-radius:50%; background:currentColor; }
+.chip-sep { width:1px; height:12px; background:var(--border); margin:0 2px; }
+
+/* ======= BOTTOM PANELS ======= */
+#plog  { grid-area: log;  border-right: 1px solid var(--border); }
+#pconn { grid-area: conn; }
+
+.panel {
+  display:flex; flex-direction:column;
+  height:100%; overflow:hidden;
+}
+.panel-hdr {
+  flex-shrink:0;
+  background: var(--s2);
+  border-bottom: 1px solid var(--border);
+  padding: 5px 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-title { font-weight:600; font-size:12px; }
+.panel-body  { flex:1; overflow:hidden; }
+
+/* ---- Log ---- */
+#log-body {
+  height:100%; overflow-y:auto; overflow-x:hidden;
+  padding: 4px 0;
+  scroll-behavior: smooth;
+}
+.log-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 12px;
+  line-height: 1.6;
+  font-family: 'Consolas','Cascadia Code',monospace;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-left: 2px solid transparent;
+}
+.log-line:hover { background: var(--s2); }
+.log-line.INFO  { border-color: var(--blue); }
+.log-line.WARN  { border-color: var(--yellow); background: rgba(210,153,34,.04); }
+.log-line.ERROR { border-color: var(--red);    background: rgba(248,81,73,.06); }
+.log-line.DEBUG { border-color: transparent; }
+.log-ts   { color:var(--dim); flex-shrink:0; font-size:10px; }
+.log-lvl  { flex-shrink:0; width:30px; font-size:9px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+.log-lvl.INFO  { color:var(--blue); }
+.log-lvl.WARN  { color:var(--yellow); }
+.log-lvl.ERROR { color:var(--red); }
+.log-lvl.DEBUG { color:var(--dim); }
+.log-msg  { color:var(--text); overflow:hidden; text-overflow:ellipsis; }
+.log-filter-btn {
+  padding:1px 7px; border-radius:10px; font-size:10px; font-weight:600; cursor:pointer;
+  border:1px solid var(--border); background:transparent; color:var(--dim); transition:.15s;
+}
+.log-filter-btn.active { color:var(--text); border-color:var(--blue); background:rgba(88,166,255,.1); }
+#log-autoscroll {
+  padding:1px 7px; border-radius:10px; font-size:10px; cursor:pointer;
+  border:1px solid var(--border); background:transparent; color:var(--dim); transition:.15s;
+  margin-left:auto;
+}
+#log-autoscroll.on { color:var(--green); border-color:rgba(63,185,80,.4); background:rgba(63,185,80,.08); }
+
+/* ---- Connections ---- */
+#conn-body { height:100%; overflow-y:auto; padding:6px 0; }
+.conn-section { margin-bottom:4px; }
+.conn-section-hdr {
+  padding: 2px 12px 2px;
+  font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+  color:var(--dim); display:flex; gap:8px; align-items:center;
+}
+.conn-count { padding:0 5px; border-radius:8px; background:var(--s3); border:1px solid var(--border); color:var(--text); }
+.conn-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 12px;
+  font-family: monospace; font-size: 10.5px;
+  border-left: 2px solid transparent;
+}
+.conn-row:hover { background:var(--s2); border-left-color:var(--border); }
+.conn-local  { color:var(--dim); min-width:120px; overflow:hidden; text-overflow:ellipsis; }
+.conn-arrow  { color:var(--border); flex-shrink:0; }
+.conn-remote { color:var(--text); overflow:hidden; text-overflow:ellipsis; }
+.conn-none   { padding:4px 12px; color:var(--dim); font-size:11px; font-style:italic; }
+
+/* scrollbar */
+::-webkit-scrollbar { width:5px; height:5px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:var(--dim); }
+
+/* offline overlay */
+.offline-overlay {
+  position:absolute; inset:0; background:rgba(13,17,23,.7);
+  display:flex; align-items:center; justify-content:center;
+  font-size:13px; color:var(--red); font-weight:600; letter-spacing:.04em;
+  pointer-events:none;
+}
+.srv { position:relative; }
+
+/* ======= PING MODAL ======= */
+#ping-btn {
+  padding: 2px 10px; border-radius: 20px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--dim); font-size: 11px; font-weight: 600;
+  cursor: pointer; transition: .15s; white-space: nowrap;
+  font-family: inherit;
+}
+#ping-btn:hover { border-color: var(--blue); color: var(--blue); background: rgba(88,166,255,.06); }
+#ping-btn.running { border-color: rgba(63,185,80,.4); color: var(--green); background: rgba(63,185,80,.06); animation: pulse 1s infinite; }
+.ping-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(13,17,23,.65); z-index: 200;
+  align-items: flex-start; justify-content: center;
+  padding-top: 46px;
+}
+.ping-overlay.open { display: flex; }
+.ping-box {
+  background: var(--s1); border: 1px solid var(--border);
+  border-radius: 10px; width: 420px; max-width: 95vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5); overflow: hidden;
+}
+.ping-hdr {
+  background: var(--s2); border-bottom: 1px solid var(--border);
+  padding: 7px 14px; display: flex; align-items: center; gap: 8px;
+}
+.ping-title { font-weight: 700; font-size: 13px; flex: 1; }
+.ping-close {
+  background: none; border: none; color: var(--dim); cursor: pointer;
+  font-size: 15px; padding: 0 2px; transition: .15s; line-height: 1; font-family: inherit;
+}
+.ping-close:hover { color: var(--text); }
+.ping-rows { padding: 6px 0; }
+.ping-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px; font-size: 11px;
+}
+.ping-row:hover { background: var(--s2); }
+.ping-label { font-weight: 700; min-width: 54px; color: var(--text); font-family: monospace; }
+.ping-host  { flex: 1; color: var(--dim); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ping-badge {
+  padding: 1px 8px; border-radius: 8px; font-size: 10px; font-weight: 700;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.ping-badge.ok   { background: rgba(63,185,80,.12);  border-color: rgba(63,185,80,.3);  color: var(--green); }
+.ping-badge.fail { background: rgba(248,81,73,.12);  border-color: rgba(248,81,73,.3);  color: var(--red); }
+.ping-badge.wait { background: var(--s3); border-color: var(--border); color: var(--dim); }
+.ping-footer {
+  border-top: 1px solid var(--border); padding: 6px 14px;
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 10px; color: var(--dim);
+}
+#ping-rerun {
+  padding: 2px 9px; border-radius: 10px; border: 1px solid var(--border);
+  background: transparent; color: var(--dim); font-size: 10px; cursor: pointer;
+  font-family: inherit; transition: .15s;
+}
+#ping-rerun:hover:not(:disabled) { border-color: var(--blue); color: var(--blue); }
+#ping-rerun:disabled { opacity: .5; cursor: default; }
+</style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<div id="hdr">
+  <span id="hdr-title">⬡ VPN</span>
+  <div class="hdr-sep"></div>
+  <div class="hdr-pill off" id="pill-v1"><div class="dot off" id="hdot-v1"></div><span id="hname-v1">VPS1</span></div>
+  <div class="hdr-pill off" id="pill-v2"><div class="dot off" id="hdot-v2"></div><span id="hname-v2">VPS2</span></div>
+  <div id="hdr-right">
+    <button id="ping-btn" onclick="openPingModal()">◎ Ping</button>
+    <span id="hdr-ts">—</span>
+    <div class="cd-wrap">
+      <span id="cd-num">5s</span>
+      <div class="cd-bar"><div class="cd-fill" id="cd-fill" style="width:100%"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MAIN LAYOUT ===== -->
+<div id="layout">
+
+  <!-- VPS1 -->
+  <div class="srv" id="pv1">
+    <div class="srv-hdr">
+      <div class="dot off" id="dot-v1"></div>
+      <span class="srv-name">VPS1</span>
+      <span class="srv-ip"  id="ip-v1"></span>
+      <span class="srv-host" id="host-v1"></span>
+    </div>
+    <div class="srv-body" id="body-v1">
+      <div class="srv-main">
+      <!-- Ring gauge -->
+      <div class="ring-col">
+        <svg class="ring-svg" viewBox="0 0 36 36" id="ring-v1">
+          <circle cx="18" cy="18" r="14" fill="none" stroke="var(--s3)" stroke-width="3"/>
+          <circle cx="18" cy="18" r="14" fill="none" stroke="var(--blue)" stroke-width="3"
+            stroke-dasharray="0 88" stroke-linecap="round"
+            transform="rotate(-90 18 18)" id="ring-arc-v1"/>
+          <text x="18" y="19.5" text-anchor="middle" dominant-baseline="middle"
+            font-size="7.5" fill="var(--text)" font-family="monospace" font-weight="700"
+            id="ring-txt-v1">—</text>
+        </svg>
+        <div class="ring-label">CPU<br>load avg</div>
+      </div>
+
+      <!-- Metrics -->
+      <div class="metrics-col">
+        <div class="bar-row">
+          <span class="bar-lbl">RAM</span>
+          <div class="bar-bg"><div class="bar-fill bar-g" id="ram-bar-v1" style="width:0%"></div></div>
+          <span class="bar-val" id="ram-txt-v1">—</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-lbl">Disk</span>
+          <div class="bar-bg"><div class="bar-fill bar-g" id="disk-bar-v1" style="width:0%"></div></div>
+          <span class="bar-val" id="disk-txt-v1">—</span>
+        </div>
+        <div class="net-row">
+          <span class="net-if" id="if-v1">eth0</span>
+          <div class="net-speed"><span class="arr arr-d">↓</span><span id="rx-v1">—</span></div>
+          <div class="net-speed"><span class="arr arr-u">↑</span><span id="tx-v1">—</span></div>
+          <div class="spark-wrap" id="spark-v1"></div>
+        </div>
+      </div>
+      </div><!-- srv-main -->
+
+      <!-- Status row -->
+      <div class="status-row" id="chips-v1"></div>
+    </div>
+    <div class="srv-err" id="err-v1" style="display:none"></div>
+  </div>
+
+  <!-- VPS2 -->
+  <div class="srv" id="pv2">
+    <div class="srv-hdr">
+      <div class="dot off" id="dot-v2"></div>
+      <span class="srv-name">VPS2</span>
+      <span class="srv-ip"  id="ip-v2"></span>
+      <span class="srv-host" id="host-v2"></span>
+    </div>
+    <div class="srv-body" id="body-v2">
+      <div class="srv-main">
+      <div class="ring-col">
+        <svg class="ring-svg" viewBox="0 0 36 36" id="ring-v2">
+          <circle cx="18" cy="18" r="14" fill="none" stroke="var(--s3)" stroke-width="3"/>
+          <circle cx="18" cy="18" r="14" fill="none" stroke="var(--blue)" stroke-width="3"
+            stroke-dasharray="0 88" stroke-linecap="round"
+            transform="rotate(-90 18 18)" id="ring-arc-v2"/>
+          <text x="18" y="19.5" text-anchor="middle" dominant-baseline="middle"
+            font-size="7.5" fill="var(--text)" font-family="monospace" font-weight="700"
+            id="ring-txt-v2">—</text>
+        </svg>
+        <div class="ring-label">CPU<br>load avg</div>
+      </div>
+      <div class="metrics-col">
+        <div class="bar-row">
+          <span class="bar-lbl">RAM</span>
+          <div class="bar-bg"><div class="bar-fill bar-g" id="ram-bar-v2" style="width:0%"></div></div>
+          <span class="bar-val" id="ram-txt-v2">—</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-lbl">Disk</span>
+          <div class="bar-bg"><div class="bar-fill bar-g" id="disk-bar-v2" style="width:0%"></div></div>
+          <span class="bar-val" id="disk-txt-v2">—</span>
+        </div>
+        <div class="net-row">
+          <span class="net-if" id="if-v2">eth0</span>
+          <div class="net-speed"><span class="arr arr-d">↓</span><span id="rx-v2">—</span></div>
+          <div class="net-speed"><span class="arr arr-u">↑</span><span id="tx-v2">—</span></div>
+          <div class="spark-wrap" id="spark-v2"></div>
+        </div>
+      </div>
+      </div><!-- srv-main -->
+      <div class="status-row" id="chips-v2"></div>
+    </div>
+    <div class="srv-err" id="err-v2" style="display:none"></div>
+  </div>
+
+  <!-- Log panel -->
+  <div class="panel" id="plog">
+    <div class="panel-hdr">
+      <span class="panel-title">Monitor Log</span>
+      <button class="log-filter-btn active" data-lvl="DEBUG">DBG</button>
+      <button class="log-filter-btn active" data-lvl="INFO">INF</button>
+      <button class="log-filter-btn active" data-lvl="WARN">WRN</button>
+      <button class="log-filter-btn active" data-lvl="ERROR">ERR</button>
+      <button id="log-autoscroll" class="on" title="Toggle auto-scroll">↓ auto</button>
+    </div>
+    <div class="panel-body">
+      <div id="log-body"></div>
+    </div>
+  </div>
+
+  <!-- Connections panel -->
+  <div class="panel" id="pconn">
+    <div class="panel-hdr">
+      <span class="panel-title">Connections</span>
+      <span id="conn-total" style="color:var(--dim);font-size:10px;margin-left:4px"></span>
+    </div>
+    <div class="panel-body">
+      <div id="conn-body"></div>
+    </div>
+  </div>
+
+</div><!-- #layout -->
+
+<!-- ===== PING MODAL ===== -->
+<div class="ping-overlay" id="ping-overlay">
+  <div class="ping-box" id="ping-box">
+    <div class="ping-hdr">
+      <span class="ping-title">◎ Ping Check</span>
+      <button class="ping-close" onclick="closePingModal()" title="Закрыть">✕</button>
+    </div>
+    <div class="ping-rows" id="ping-rows"></div>
+    <div class="ping-footer">
+      <span id="ping-status-msg"></span>
+      <button id="ping-rerun" onclick="runPing()">↺ Повторить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const DATA_URL   = '/vpn-output/data.json';
+const POLL_MS    = 5000;
+const HIST_MAX   = 60;
+const LS_KEY     = 'vpn_dash3';
+
+// ---- Shared state ----
+let lastData = null;
+
+// ---- History ----
+const HKEYS = ['v1_rx','v1_tx','v2_rx','v2_tx'];
+let hist = (() => {
+  const d = Object.fromEntries(HKEYS.map(k=>[k,[]]));
+  try {
+    const r = JSON.parse(localStorage.getItem(LS_KEY)||'{}');
+    HKEYS.forEach(k=>{ if(Array.isArray(r[k])) d[k]=r[k]; });
+  } catch(_){}
+  return d;
+})();
+function pushHist(k,v){ hist[k].push(+v||0); if(hist[k].length>HIST_MAX) hist[k].shift(); }
+function saveHist(){ try{localStorage.setItem(LS_KEY,JSON.stringify(hist));}catch(_){} }
+
+// ---- Format ----
+function fmtBytes(bps) {
+  if (!bps || bps<=0) return '0 B/s';
+  const u=['B/s','KB/s','MB/s','GB/s'];
+  let i=0, v=bps;
+  while(v>=1024&&i<3){v/=1024;i++;}
+  return i===0?`${Math.round(v)} ${u[i]}`:`${v.toFixed(1)} ${u[i]}`;
+}
+function fmtAge(s){
+  if(s==null||s<0) return {t:'never',c:'r'};
+  if(s<120)  return {t:`${s}s`,   c:'g'};
+  if(s<600)  return {t:`${Math.round(s/60)}m`,c:'y'};
+  return              {t:`${Math.round(s/60)}m`,c:'r'};
+}
+function stCls(v){
+  const s=String(v||'').toLowerCase();
+  return ['active','up','ok','yes'].includes(s)?'g':['unknown','degraded'].includes(s)?'y':'r';
+}
+function barCls(p){ return p>=85?'bar-r':p>=60?'bar-y':'bar-g'; }
+function ringColor(load1){
+  if(load1>=2)   return 'var(--red)';
+  if(load1>=0.8) return 'var(--yellow)';
+  return 'var(--blue)';
+}
+
+// ---- Sparkline ----
+function spark(vals, color){
+  if(!vals||vals.length<2) return '';
+  const W=200,H=18;
+  const mx=Math.max(...vals)||1, mn=Math.min(...vals);
+  const rng=mx-mn||1;
+  const pts=vals.map((v,i)=>{
+    const x=(i/(vals.length-1))*W;
+    const y=H-1-((v-mn)/rng)*(H-3);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
+// ---- Ring gauge ----
+function setRing(pfx, load1){
+  const circ=2*Math.PI*14; // ≈87.96
+  const pct=Math.min(100, (load1||0)*100);
+  const dash=(pct/100)*circ;
+  const arc=document.getElementById(`ring-arc-${pfx}`);
+  const txt=document.getElementById(`ring-txt-${pfx}`);
+  if(!arc||!txt) return;
+  arc.setAttribute('stroke-dasharray',`${dash.toFixed(1)} ${(circ-dash).toFixed(1)}`);
+  arc.setAttribute('stroke', ringColor(load1||0));
+  txt.textContent = pct<10 ? (load1||0).toFixed(2) : (load1||0).toFixed(1);
+}
+
+// ---- DOM ----
+function el(id){ return document.getElementById(id); }
+function setT(id,t){ const e=el(id); if(e) e.textContent=t; }
+function setH(id,h){ const e=el(id); if(e) e.innerHTML=h; }
+
+// ---- Render server ----
+function renderSrv(d, pfx){
+  const online = d?.online;
+  const dotEl  = el(`dot-${pfx}`);
+  const hdotEl = el(`hdot-${pfx}`);
+  const pillEl = el(`pill-${pfx}`);
+  const errEl  = el(`err-${pfx}`);
+
+  [dotEl,hdotEl].forEach(e=>{ if(e){ e.className='dot '+(online?'on':'off'); }});
+  if(pillEl){ pillEl.className='hdr-pill '+(online?'on':'off'); }
+  if(errEl){ if(!online&&d?.error){ errEl.style.display='block'; errEl.textContent=d.error; } else errEl.style.display='none'; }
+
+  setT(`ip-${pfx}`, d?.ip||'');
+  setT(`host-${pfx}`, d?.host||'');
+  setT(`hname-${pfx}`, `${pfx.toUpperCase()} ${d?.ip||''}`);
+
+  if(!online) return;
+
+  // Ring
+  setRing(pfx, d.load1);
+
+  // RAM bar
+  const ramPct = d.mem_total_mb>0 ? Math.round(d.mem_used_mb/d.mem_total_mb*100) : 0;
+  const ramBar = el(`ram-bar-${pfx}`);
+  if(ramBar){ ramBar.style.width=ramPct+'%'; ramBar.className='bar-fill '+barCls(ramPct); }
+  setT(`ram-txt-${pfx}`, `${d.mem_used_mb}/${d.mem_total_mb}MB (${ramPct}%)`);
+
+  // Disk bar
+  const dPct = d.disk_pct||0;
+  const dBar = el(`disk-bar-${pfx}`);
+  if(dBar){ dBar.style.width=dPct+'%'; dBar.className='bar-fill '+barCls(dPct); }
+  setT(`disk-txt-${pfx}`, d.disk_used&&d.disk_total ? `${d.disk_used}/${d.disk_total} (${dPct}%)` : '—');
+
+  // Network
+  setT(`if-${pfx}`, d.net_if||'');
+  setT(`rx-${pfx}`, fmtBytes(d.rx_speed));
+  setT(`tx-${pfx}`, fmtBytes(d.tx_speed));
+  const rxH = hist[`${pfx}_rx`], txH = hist[`${pfx}_tx`];
+  const combined = rxH.map((v,i)=>v+(txH[i]||0));
+  setH(`spark-${pfx}`, spark(combined, 'var(--green)'));
+
+  // Status chips
+  renderChips(d, pfx);
+}
+
+function chip(cls, label, dot=true){
+  const d = dot ? `<span class="chip-dot"></span>` : '';
+  return `<span class="chip ${cls}">${d}${escH(label)}</span>`;
+}
+const SEP = '<span class="chip-sep"></span>';
+
+function renderChips(d, pfx){
+  const hs = fmtAge(d.hs0_age);
+  let html = '';
+  if(pfx==='v1'){
+    html =
+      chip(stCls(d.awg0), `awg0 ${d.awg0||'—'}`) +
+      chip(stCls(d.awg1), `awg1 ${d.awg1||'—'}`) +
+      SEP +
+      chip(hs.c, `HS ${hs.t}`, false) +
+      chip('d', `P ${d.peers_awg0??0}/${d.peers_awg1??0}`, false) +
+      chip('d', `TCP ${d.tcp_est??0}`, false) +
+      SEP +
+      chip(stCls(d.tun_ping), `tunnel ${d.tun_ping||'—'}`);
+  } else {
+    html =
+      chip(stCls(d.awg0), `awg0 ${d.awg0||'—'}`) +
+      SEP +
+      chip(hs.c, `HS ${hs.t}`, false) +
+      chip('d', `P ${d.peers_awg0??0}`, false) +
+      chip('d', `TCP ${d.tcp_est??0}`, false) +
+      SEP +
+      chip(stCls(d.agh),     'AdGuard') +
+      chip(stCls(d.dns53),   'DNS:53') +
+      chip(stCls(d.web3000), 'Web:3000') +
+      chip(stCls(d.wan_ping), `WAN ${d.wan_ping||'—'}`);
+  }
+  setH(`chips-${pfx}`, html);
+}
+
+// ---- Log ----
+const LOG_FILTER = {DEBUG:true, INFO:true, WARN:true, ERROR:true};
+let logAutoScroll = true;
+let logLines = [];
+
+document.querySelectorAll('.log-filter-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const lvl = btn.dataset.lvl;
+    LOG_FILTER[lvl] = !LOG_FILTER[lvl];
+    btn.classList.toggle('active', LOG_FILTER[lvl]);
+    renderLog();
+  });
+});
+el('log-autoscroll').addEventListener('click', ()=>{
+  logAutoScroll = !logAutoScroll;
+  el('log-autoscroll').classList.toggle('on', logAutoScroll);
+});
+
+const logBody = el('log-body');
+logBody.addEventListener('scroll', ()=>{
+  const atBottom = logBody.scrollHeight - logBody.scrollTop - logBody.clientHeight < 30;
+  if(!atBottom && logAutoScroll){
+    // user scrolled up — disable auto-scroll
+    logAutoScroll = false;
+    el('log-autoscroll').classList.remove('on');
+  }
+});
+
+function parseLine(raw){
+  // format: [2026-02-26 22:09:35] [LEVEL] message
+  const m = raw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+(.*)$/);
+  if(m) return {ts:m[1].slice(11), lvl:m[2], msg:m[3]};
+  return {ts:'', lvl:'DEBUG', msg:raw};
+}
+
+function renderLog(){
+  const frag = document.createDocumentFragment();
+  for(const raw of logLines){
+    const p = parseLine(raw);
+    if(!LOG_FILTER[p.lvl]) continue;
+    const div = document.createElement('div');
+    div.className = `log-line ${p.lvl}`;
+    div.innerHTML =
+      `<span class="log-ts">${p.ts}</span>`+
+      `<span class="log-lvl ${p.lvl}">${p.lvl.slice(0,3)}</span>`+
+      `<span class="log-msg">${escH(p.msg)}</span>`;
+    frag.appendChild(div);
+  }
+  logBody.innerHTML='';
+  logBody.appendChild(frag);
+  if(logAutoScroll) logBody.scrollTop = logBody.scrollHeight;
+}
+
+function escH(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ---- Connections ----
+function renderConns(v1, v2){
+  const total = (v1?.tcp_est||0) + (v2?.tcp_est||0);
+  setT('conn-total', `TCP: ${total}`);
+
+  let html = '';
+  for(const [label, d] of [['VPS1',v1],['VPS2',v2]]){
+    const conns = d?.conns || [];
+    const tcp   = d?.tcp_est ?? 0;
+    const udp   = d?.udp_conn ?? 0;
+    html += `<div class="conn-section">`;
+    html += `<div class="conn-section-hdr">
+      <span>${label}</span>
+      <span class="conn-count">TCP ${tcp}</span>
+      <span class="conn-count">UDP ${udp}</span>
+    </div>`;
+    if(conns.length===0){
+      html += `<div class="conn-none">no connections</div>`;
+    } else {
+      for(const c of conns){
+        html += `<div class="conn-row">
+          <span class="conn-local">${escH(c.local||'')}</span>
+          <span class="conn-arrow">→</span>
+          <span class="conn-remote">${escH(c.remote||'')}</span>
+        </div>`;
+      }
+    }
+    html += `</div>`;
+  }
+  setH('conn-body', html);
+}
+
+// ---- Main poll ----
+let nextAt = 0;
+
+async function poll(){
+  nextAt = Date.now() + POLL_MS;
+  let data = null;
+  try {
+    const r = await fetch(DATA_URL+'?_='+Date.now());
+    if(r.ok) data = await r.json();
+  } catch(_){}
+
+  if(data){
+    lastData = data;
+    pushHist('v1_rx', data.vps1?.rx_speed||0);
+    pushHist('v1_tx', data.vps1?.tx_speed||0);
+    pushHist('v2_rx', data.vps2?.rx_speed||0);
+    pushHist('v2_tx', data.vps2?.tx_speed||0);
+    saveHist();
+
+    renderSrv(data.vps1, 'v1');
+    renderSrv(data.vps2, 'v2');
+    renderConns(data.vps1, data.vps2);
+
+    if(Array.isArray(data.log) && data.log.length){
+      logLines = data.log;
+      renderLog();
+    }
+
+    const ts = new Date(data.ts*1000);
+    setT('hdr-ts', ts.toLocaleTimeString());
+  }
+
+  setTimeout(poll, POLL_MS);
+}
+
+// ---- Countdown RAF ----
+function tickCd(){
+  const rem = Math.max(0, nextAt - Date.now());
+  const pct = rem / POLL_MS * 100;
+  const fill = el('cd-fill');
+  if(fill) fill.style.width = pct.toFixed(1)+'%';
+  setT('cd-num', Math.ceil(rem/1000)+'s');
+  requestAnimationFrame(tickCd);
+}
+
+poll();
+tickCd();
+
+// ---- Ping modal ----
+function getPingTargets() {
+  return [
+    { label: 'VPS1',    host: lastData?.vps1?.ip || '' },
+    { label: 'VPS2',    host: lastData?.vps2?.ip || '' },
+    { label: 'Tunnel',  host: '10.8.0.2' },
+    { label: '8.8.8.8', host: '8.8.8.8' },
+  ].filter(t => t.host);
+}
+
+function openPingModal() {
+  el('ping-overlay').classList.add('open');
+  runPing();
+}
+
+function closePingModal() {
+  el('ping-overlay').classList.remove('open');
+}
+
+el('ping-overlay').addEventListener('click', e => {
+  if (e.target === el('ping-overlay')) closePingModal();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePingModal();
+});
+
+function renderPingWaiting() {
+  let html = '';
+  for (const t of getPingTargets()) {
+    html += `<div class="ping-row">
+      <span class="ping-label">${escH(t.label)}</span>
+      <span class="ping-host">${escH(t.host)}</span>
+      <span class="ping-badge wait">…</span>
+    </div>`;
+  }
+  setH('ping-rows', html);
+}
+
+function renderPingResults(results) {
+  let html = '';
+  for (const t of getPingTargets()) {
+    const r = results?.[t.host];
+    let badge;
+    if (!r) {
+      badge = `<span class="ping-badge fail">—</span>`;
+    } else if (r.status === 'ok') {
+      const loss = r.loss > 0
+        ? ` <span style="color:var(--yellow);font-size:9px">${r.loss}% loss</span>` : '';
+      badge = `<span class="ping-badge ok">${r.avg_ms} ms</span>${loss}`;
+    } else {
+      const lbl = r.status === 'timeout' ? 'timeout' : 'fail';
+      badge = `<span class="ping-badge fail">${lbl}</span>`;
+    }
+    html += `<div class="ping-row">
+      <span class="ping-label">${escH(t.label)}</span>
+      <span class="ping-host">${escH(t.host)}</span>
+      ${badge}
+    </div>`;
+  }
+  setH('ping-rows', html);
+}
+
+async function runPing() {
+  const btn   = el('ping-btn');
+  const rerun = el('ping-rerun');
+  btn.classList.add('running');
+  if (rerun) rerun.disabled = true;
+  setT('ping-status-msg', 'Опрашиваем…');
+  renderPingWaiting();
+
+  const hosts = getPingTargets().map(t => t.host).join(',');
+  try {
+    const r = await fetch('/api/ping?hosts=' + encodeURIComponent(hosts));
+    if (r.ok) {
+      renderPingResults(await r.json());
+      setT('ping-status-msg', new Date().toLocaleTimeString());
+    } else {
+      renderPingResults(null);
+      setT('ping-status-msg', 'Ошибка сервера: ' + r.status);
+    }
+  } catch (_) {
+    renderPingResults(null);
+    setT('ping-status-msg', 'API /api/ping недоступен');
+  }
+  btn.classList.remove('running');
+  if (rerun) rerun.disabled = false;
+}
+</script>
+</body>
+</html>

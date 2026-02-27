@@ -1,0 +1,9 @@
+# Tracking domains
+0.0.0.0 google-analytics.com
+0.0.0.0 ssl.google-analytics.com
+0.0.0.0 analytics.google.com
+0.0.0.0 googletagmanager.com
+0.0.0.0 googletagservices.com
+0.0.0.0 metrics.apple.com
+0.0.0.0 app-measurement.com
+0.0.0.0 firebase-settings.crashlytics.com

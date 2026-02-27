@@ -1,0 +1,720 @@
+#!/bin/bash
+# =============================================================================
+# VPN Web Dashboard monitor
+# Пишет vpn-output/data.json, запускает HTTP-сервер на порту 8080
+#
+# Использование:
+#   bash monitor-web.sh
+#   Открыть: http://localhost:8080/dashboard.html
+# =============================================================================
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+VPS1_IP="89.169.179.233"
+VPS1_USER="slava"
+VPS1_KEY="C:\\Users\\slava\\.ssh\\ssh-key-1772056840349"
+VPS1_PASS=""
+
+VPS2_IP="38.135.122.81"
+VPS2_USER="root"
+VPS2_KEY="~/.ssh/id_rsa"
+VPS2_PASS=""
+
+VPS2_TUN_IP="10.8.0.2"
+INTERVAL=5
+HTTP_PORT=8080
+SSH_TIMEOUT=8
+JSON_FILE="./vpn-output/data.json"
+LOG_FILE="./vpn-output/monitor.log"
+LOG_LEVEL="INFO"
+
+TEMP_KEY_FILES=()
+LAST_ERR_VPS1=""
+LAST_ERR_VPS2=""
+HTTP_PID=""
+
+VPS1_PREV_RX=0
+VPS1_PREV_TX=0
+VPS2_PREV_RX=0
+VPS2_PREV_TX=0
+PREV_TS=0
+
+# ---------------------------------------------------------------------------
+# Helper utilities
+# ---------------------------------------------------------------------------
+
+clean_value() {
+    local v="$1"
+    v="${v//$'\r'/}"
+    v="${v#\"}"; v="${v%\"}"
+    v="${v#\'}"; v="${v%\'}"
+    v="${v#"${v%%[![:space:]]*}"}"
+    v="${v%"${v##*[![:space:]]}"}"
+    printf "%s" "$v"
+}
+
+read_kv() {
+    local file="$1" key="$2" raw
+    raw="$(awk -F= -v k="$key" '$1==k{sub(/^[^=]*=/,"",$0); print $0}' "$file" | tail -n 1)"
+    clean_value "$raw"
+}
+
+load_defaults_from_files() {
+    if [[ -f "./vpn-output/keys.env" ]]; then
+        local k_vps1 k_tun
+        k_vps1="$(read_kv ./vpn-output/keys.env VPS1_IP)"
+        k_tun="$(read_kv ./vpn-output/keys.env TUN_NET)"
+        [[ -n "${k_vps1}" ]] && VPS1_IP="$k_vps1"
+        [[ -n "${k_tun}" ]] && VPS2_TUN_IP="${k_tun}.2"
+    fi
+    if [[ -f "./.env" ]]; then
+        local e_vps1_ip e_vps1_user e_vps1_key e_vps1_pass
+        local e_vps2_ip e_vps2_user e_vps2_key e_vps2_pass
+        e_vps1_ip="$(read_kv ./.env VPS1_IP)"
+        e_vps1_user="$(read_kv ./.env VPS1_USER)"
+        e_vps1_key="$(read_kv ./.env VPS1_KEY)"
+        e_vps1_pass="$(read_kv ./.env VPS1_PASS)"
+        e_vps2_ip="$(read_kv ./.env VPS2_IP)"
+        e_vps2_user="$(read_kv ./.env VPS2_USER)"
+        e_vps2_key="$(read_kv ./.env VPS2_KEY)"
+        e_vps2_pass="$(read_kv ./.env VPS2_PASS)"
+        [[ -n "${e_vps1_ip}" ]]   && VPS1_IP="$e_vps1_ip"
+        [[ -n "${e_vps1_user}" ]] && VPS1_USER="$e_vps1_user"
+        [[ -n "${e_vps1_key}" ]]  && VPS1_KEY="$e_vps1_key"
+        [[ -n "${e_vps1_pass}" ]] && VPS1_PASS="$e_vps1_pass"
+        [[ -n "${e_vps2_ip}" ]]   && VPS2_IP="$e_vps2_ip"
+        [[ -n "${e_vps2_user}" ]] && VPS2_USER="$e_vps2_user"
+        [[ -n "${e_vps2_key}" ]]  && VPS2_KEY="$e_vps2_key"
+        [[ -n "${e_vps2_pass}" ]] && VPS2_PASS="$e_vps2_pass"
+    fi
+}
+
+expand_tilde() {
+    local p drive rest
+    p="$(clean_value "$1")"
+    p="${p//\\//}"
+    if [[ "$p" =~ ^([A-Za-z]):/(.*)$ ]]; then
+        drive="${BASH_REMATCH[1],,}"
+        rest="${BASH_REMATCH[2]}"
+        p="/mnt/${drive}/${rest}"
+    fi
+    if [[ "$p" == "~/"* ]]; then
+        printf "%s" "${HOME}/${p#~/}"
+    elif [[ "$p" == "${HOME}/~/"* ]]; then
+        printf "%s" "${HOME}/${p#${HOME}/~/}"
+    else
+        printf "%s" "$p"
+    fi
+}
+
+log_line() {
+    local level="$1" msg="$2" ts
+    ts="$(date '+%Y-%m-%d %H:%M:%S')"
+    printf "[%s] [%s] %s\n" "$ts" "$level" "$msg" >> "$LOG_FILE"
+}
+
+set_last_error() {
+    if [[ "$1" == "VPS1" ]]; then LAST_ERR_VPS1="$2"; else LAST_ERR_VPS2="$2"; fi
+}
+
+auto_pick_key_if_missing() {
+    local current_key="$1" win_home candidate
+    win_home="${USERPROFILE:-}"; win_home="${win_home//\\//}"
+    if [[ -n "$current_key" && -f "$current_key" ]]; then printf "%s" "$current_key"; return; fi
+    for candidate in "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/id_rsa" \
+                     "${win_home}/.ssh/id_ed25519" "${win_home}/.ssh/id_rsa" \
+                     /c/Users/*/.ssh/id_ed25519 /c/Users/*/.ssh/id_rsa \
+                     /mnt/c/Users/*/.ssh/id_ed25519 /mnt/c/Users/*/.ssh/id_rsa; do
+        [[ -f "$candidate" ]] && { printf "%s" "$candidate"; return; }
+    done
+    printf "%s" "$current_key"
+}
+
+prepare_key_for_ssh() {
+    local key="$1" tmp_key
+    if [[ -z "$key" || ! -f "$key" ]]; then printf "%s" "$key"; return; fi
+    if [[ "$key" == /mnt/* ]]; then
+        tmp_key="$(mktemp /tmp/monweb_key_XXXXXX)" || { printf "%s" "$key"; return; }
+        cp "$key" "$tmp_key" 2>/dev/null || { rm -f "$tmp_key"; printf "%s" "$key"; return; }
+        chmod 600 "$tmp_key" 2>/dev/null || true
+        TEMP_KEY_FILES+=("$tmp_key")
+        printf "%s" "$tmp_key"
+        return
+    fi
+    printf "%s" "$key"
+}
+
+cleanup_temp_keys() {
+    local f
+    for f in "${TEMP_KEY_FILES[@]}"; do
+        [[ -n "$f" && -f "$f" ]] && rm -f "$f"
+    done
+}
+
+cleanup_all() {
+    [[ -n "$HTTP_PID" ]] && kill "$HTTP_PID" 2>/dev/null || true
+    cleanup_temp_keys
+}
+
+trap cleanup_all EXIT
+
+ssh_exec() {
+    local server="$1" ip="$2" user="$3" key="$4" pass="$5" cmd="$6"
+    local ssh_opts=(-F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                    -o BatchMode=no -o ConnectTimeout="$SSH_TIMEOUT")
+    local stderr_file rc out err
+    stderr_file="$(mktemp)"
+    ip="$(clean_value "$ip")"; user="$(clean_value "$user")"
+    key="$(expand_tilde "$key")"; pass="$(clean_value "$pass")"
+    if [[ -n "$key" ]]; then
+        out="$(timeout "$SSH_TIMEOUT" ssh "${ssh_opts[@]}" -i "$key" "${user}@${ip}" "$cmd" 2>"$stderr_file")"
+        rc=$?
+    elif [[ -n "$pass" ]]; then
+        out="$(timeout "$SSH_TIMEOUT" sshpass -p "$pass" ssh "${ssh_opts[@]}" "${user}@${ip}" "$cmd" 2>"$stderr_file")"
+        rc=$?
+    else
+        out="$(timeout "$SSH_TIMEOUT" ssh "${ssh_opts[@]}" "${user}@${ip}" "$cmd" 2>"$stderr_file")"
+        rc=$?
+    fi
+    err="$(tr '\n' '|' < "$stderr_file")"; rm -f "$stderr_file"
+    if [[ $rc -ne 0 ]]; then
+        [[ -z "$err" ]] && err="no stderr"
+        set_last_error "$server" "rc=$rc ${err}"
+        log_line "ERROR" "$server ssh failed rc=$rc target=${user}@${ip} err=${err}"
+        return "$rc"
+    fi
+    set_last_error "$server" ""
+    [[ -n "$err" ]] && log_line "WARN" "$server ssh stderr: $err"
+    log_line "DEBUG" "$server ssh ok bytes=$(printf "%s" "$out" | wc -c | tr -d ' ')"
+    printf "%s" "$out"
+}
+
+# ---------------------------------------------------------------------------
+# Remote data collection  (TOP_CONN uses %s — no eval needed)
+# ---------------------------------------------------------------------------
+
+collect_vps1() {
+    local remote_cmd
+    remote_cmd=$(cat <<EOF
+HOST=\$(hostname 2>/dev/null || echo n/a)
+LOAD=\$(awk '{print \$1","\$2","\$3}' /proc/loadavg 2>/dev/null || echo 0,0,0)
+MEM=\$(free -m 2>/dev/null | awk '/Mem:/ {print \$3"/"\$2"MB"}')
+DISK=\$(df -h / 2>/dev/null | awk 'NR==2 {print \$3"/"\$2",used="\$5}')
+MAIN_IF=\$(ip route 2>/dev/null | awk '/default/ {print \$5; exit}')
+RX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]}}' /proc/net/dev 2>/dev/null | head -1)
+TX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
+TCP_EST=\$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
+UDP_CONN=\$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
+TOP_CONN=\$(ss -Htn state established 2>/dev/null | awk '{print \$5}' | sed 's/\[//g; s/\]//g' | awk -F: '{NF--; print}' OFS=: | sort | uniq -c | sort -nr | head -3 | awk '{printf "%s(%s) ", \$2, \$1}')
+[[ -z "\$TOP_CONN" ]] && TOP_CONN="none"
+AWG0=\$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
+AWG1=\$(sudo systemctl is-active awg-quick@awg1 2>/dev/null || echo unknown)
+HS0=\$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0) print systime()-\$2; else print -1}')
+[[ -z "\$HS0" ]] && HS0=-1
+P0=\$(sudo awg show awg0 peers 2>/dev/null | wc -w | tr -d ' ')
+P1=\$(sudo awg show awg1 peers 2>/dev/null | wc -w | tr -d ' ')
+if ping -c 1 -W 1 -I awg0 "${VPS2_TUN_IP}" >/dev/null 2>&1; then TUN_PING=ok; else TUN_PING=fail; fi
+CONNS=\$(ss -Htn state established 2>/dev/null | awk '{print \$4"|"\$5}' | head -12 | tr '\n' ',')
+echo "HOST=\$HOST"
+echo "LOAD=\$LOAD"
+echo "MEM=\$MEM"
+echo "DISK=\$DISK"
+echo "MAIN_IF=\${MAIN_IF:-n/a}"
+echo "RX=\${RX:-0}"
+echo "TX=\${TX:-0}"
+echo "TCP_EST=\${TCP_EST:-0}"
+echo "UDP_CONN=\${UDP_CONN:-0}"
+printf "TOP_CONN=%s\n" "\${TOP_CONN:-none}"
+echo "AWG0=\$AWG0"
+echo "AWG1=\$AWG1"
+echo "HS0=\$HS0"
+echo "P0=\$P0"
+echo "P1=\$P1"
+echo "TUN_PING=\$TUN_PING"
+echo "CONNS=\${CONNS}"
+EOF
+)
+    ssh_exec "VPS1" "$VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS" "$remote_cmd"
+}
+
+collect_vps2() {
+    local remote_cmd
+    remote_cmd=$(cat <<'EOF'
+HOST=$(hostname 2>/dev/null || echo n/a)
+LOAD=$(awk '{print $1","$2","$3}' /proc/loadavg 2>/dev/null || echo 0,0,0)
+MEM=$(free -m 2>/dev/null | awk '/Mem:/ {print $3"/"$2"MB"}')
+DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2",used="$5}')
+MAIN_IF=$(ip route 2>/dev/null | awk '/default/ {print $5; exit}')
+RX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]}}' /proc/net/dev 2>/dev/null | head -1)
+TX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
+TCP_EST=$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
+UDP_CONN=$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
+TOP_CONN=$(ss -Htn state established 2>/dev/null | awk '{print $5}' | sed 's/\[//g; s/\]//g' | awk -F: '{NF--; print}' OFS=: | sort | uniq -c | sort -nr | head -3 | awk '{printf "%s(%s) ", $2, $1}')
+[[ -z "$TOP_CONN" ]] && TOP_CONN="none"
+AWG0=$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
+HS0=$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if ($2>0) print systime()-$2; else print -1}')
+[[ -z "$HS0" ]] && HS0=-1
+P0=$(sudo awg show awg0 peers 2>/dev/null | wc -w | tr -d ' ')
+if systemctl is-active AdGuardHome >/dev/null 2>&1; then
+  AGH=active
+elif systemctl is-active adguardhome >/dev/null 2>&1; then
+  AGH=active
+else
+  AGH=inactive
+fi
+if ss -lunt 2>/dev/null | grep -qE ':53[[:space:]]'; then DNS53=up; else DNS53=down; fi
+if ss -lnt 2>/dev/null | grep -qE ':3000[[:space:]]'; then WEB3000=up; else WEB3000=down; fi
+if ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; then WAN_PING=ok; else WAN_PING=fail; fi
+CONNS=$(ss -Htn state established 2>/dev/null | awk '{print $4"|"$5}' | head -12 | tr '\n' ',')
+echo "HOST=$HOST"
+echo "LOAD=$LOAD"
+echo "MEM=$MEM"
+echo "DISK=$DISK"
+echo "MAIN_IF=${MAIN_IF:-n/a}"
+echo "RX=${RX:-0}"
+echo "TX=${TX:-0}"
+echo "TCP_EST=${TCP_EST:-0}"
+echo "UDP_CONN=${UDP_CONN:-0}"
+printf "TOP_CONN=%s\n" "${TOP_CONN:-none}"
+echo "AWG0=$AWG0"
+echo "HS0=$HS0"
+echo "P0=$P0"
+echo "AGH=$AGH"
+echo "DNS53=$DNS53"
+echo "WEB3000=$WEB3000"
+echo "WAN_PING=$WAN_PING"
+echo "CONNS=${CONNS}"
+EOF
+)
+    ssh_exec "VPS2" "$VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS" "$remote_cmd"
+}
+
+# ---------------------------------------------------------------------------
+# Parse KEY=VALUE output from remote (splits on first = only)
+# ---------------------------------------------------------------------------
+
+parse_kv() {
+    local data="$1" key="$2"
+    printf "%s\n" "$data" | awk -v k="$key" \
+        'BEGIN{n=length(k)} substr($0,1,n+1)==k"=" {print substr($0,n+2); exit}'
+}
+
+# ---------------------------------------------------------------------------
+# Write data.json atomically via python3
+# ---------------------------------------------------------------------------
+
+write_json() {
+    local vps1_data="$1" vps2_data="$2" now
+    now="$(date +%s)"
+    local elapsed=$((now - PREV_TS))
+    [[ $elapsed -le 0 ]] && elapsed=1
+
+    # --- VPS1 ---
+    local V1_ONLINE="false" V1_HOST="" V1_LOAD1="0" V1_LOAD5="0" V1_LOAD15="0"
+    local V1_MEM_USED="0" V1_MEM_TOTAL="0"
+    local V1_DISK_USED="" V1_DISK_TOTAL="" V1_DISK_PCT="0"
+    local V1_NET_IF="" V1_RX="0" V1_TX="0"
+    local V1_TCP_EST="0" V1_UDP_CONN="0" V1_TOP_CONN="none"
+    local V1_AWG0="" V1_AWG1="" V1_HS0="-1" V1_P0="0" V1_P1="0" V1_TUN_PING=""
+    local V1_RX_SPEED="0" V1_TX_SPEED="0" V1_ERROR="" V1_CONNS=""
+
+    if [[ -n "$vps1_data" ]]; then
+        V1_ONLINE="true"
+        V1_HOST="$(parse_kv "$vps1_data" HOST)"
+        local load_raw; load_raw="$(parse_kv "$vps1_data" LOAD)"
+        V1_LOAD1="${load_raw%%,*}"
+        V1_LOAD5="${load_raw#*,}"; V1_LOAD5="${V1_LOAD5%,*}"
+        V1_LOAD15="${load_raw##*,}"
+        local mem_raw; mem_raw="$(parse_kv "$vps1_data" MEM)"
+        V1_MEM_USED="${mem_raw%%/*}"
+        V1_MEM_TOTAL="${mem_raw#*/}"; V1_MEM_TOTAL="${V1_MEM_TOTAL%%[^0-9]*}"
+        local disk_raw; disk_raw="$(parse_kv "$vps1_data" DISK)"
+        V1_DISK_USED="${disk_raw%%/*}"
+        V1_DISK_TOTAL="${disk_raw#*/}"; V1_DISK_TOTAL="${V1_DISK_TOTAL%%,*}"
+        V1_DISK_PCT="$(printf '%s' "$disk_raw" | awk -F'used=' '{gsub(/%/,"",$2); print int($2+0)}')"
+        V1_NET_IF="$(parse_kv "$vps1_data" MAIN_IF)"
+        V1_RX="$(parse_kv "$vps1_data" RX)"
+        V1_TX="$(parse_kv "$vps1_data" TX)"
+        V1_TCP_EST="$(parse_kv "$vps1_data" TCP_EST)"
+        V1_UDP_CONN="$(parse_kv "$vps1_data" UDP_CONN)"
+        V1_TOP_CONN="$(parse_kv "$vps1_data" TOP_CONN)"
+        V1_AWG0="$(parse_kv "$vps1_data" AWG0)"
+        V1_AWG1="$(parse_kv "$vps1_data" AWG1)"
+        V1_HS0="$(parse_kv "$vps1_data" HS0)"; V1_HS0="${V1_HS0:--1}"
+        V1_P0="$(parse_kv "$vps1_data" P0)"
+        V1_P1="$(parse_kv "$vps1_data" P1)"
+        V1_TUN_PING="$(parse_kv "$vps1_data" TUN_PING)"
+        if [[ "$VPS1_PREV_RX" -gt 0 && "${V1_RX:-0}" =~ ^[0-9]+$ ]]; then
+            local d_rx1 d_tx1
+            d_rx1=$(( ${V1_RX:-0} - VPS1_PREV_RX )); [[ $d_rx1 -lt 0 ]] && d_rx1=0
+            d_tx1=$(( ${V1_TX:-0} - VPS1_PREV_TX )); [[ $d_tx1 -lt 0 ]] && d_tx1=0
+            V1_RX_SPEED=$(( d_rx1 / elapsed ))
+            V1_TX_SPEED=$(( d_tx1 / elapsed ))
+        fi
+        VPS1_PREV_RX="${V1_RX:-0}"; VPS1_PREV_TX="${V1_TX:-0}"
+        V1_CONNS="$(parse_kv "$vps1_data" CONNS)"
+    else
+        V1_ERROR="${LAST_ERR_VPS1:-SSH connection failed}"
+        VPS1_PREV_RX=0; VPS1_PREV_TX=0
+    fi
+
+    # --- VPS2 ---
+    local V2_ONLINE="false" V2_HOST="" V2_LOAD1="0" V2_LOAD5="0" V2_LOAD15="0"
+    local V2_MEM_USED="0" V2_MEM_TOTAL="0"
+    local V2_DISK_USED="" V2_DISK_TOTAL="" V2_DISK_PCT="0"
+    local V2_NET_IF="" V2_RX="0" V2_TX="0"
+    local V2_TCP_EST="0" V2_UDP_CONN="0" V2_TOP_CONN="none"
+    local V2_AWG0="" V2_HS0="-1" V2_P0="0"
+    local V2_AGH="" V2_DNS53="" V2_WEB3000="" V2_WAN_PING=""
+    local V2_RX_SPEED="0" V2_TX_SPEED="0" V2_ERROR="" V2_CONNS=""
+
+    if [[ -n "$vps2_data" ]]; then
+        V2_ONLINE="true"
+        V2_HOST="$(parse_kv "$vps2_data" HOST)"
+        local load2_raw; load2_raw="$(parse_kv "$vps2_data" LOAD)"
+        V2_LOAD1="${load2_raw%%,*}"
+        V2_LOAD5="${load2_raw#*,}"; V2_LOAD5="${V2_LOAD5%,*}"
+        V2_LOAD15="${load2_raw##*,}"
+        local mem2_raw; mem2_raw="$(parse_kv "$vps2_data" MEM)"
+        V2_MEM_USED="${mem2_raw%%/*}"
+        V2_MEM_TOTAL="${mem2_raw#*/}"; V2_MEM_TOTAL="${V2_MEM_TOTAL%%[^0-9]*}"
+        local disk2_raw; disk2_raw="$(parse_kv "$vps2_data" DISK)"
+        V2_DISK_USED="${disk2_raw%%/*}"
+        V2_DISK_TOTAL="${disk2_raw#*/}"; V2_DISK_TOTAL="${V2_DISK_TOTAL%%,*}"
+        V2_DISK_PCT="$(printf '%s' "$disk2_raw" | awk -F'used=' '{gsub(/%/,"",$2); print int($2+0)}')"
+        V2_NET_IF="$(parse_kv "$vps2_data" MAIN_IF)"
+        V2_RX="$(parse_kv "$vps2_data" RX)"
+        V2_TX="$(parse_kv "$vps2_data" TX)"
+        V2_TCP_EST="$(parse_kv "$vps2_data" TCP_EST)"
+        V2_UDP_CONN="$(parse_kv "$vps2_data" UDP_CONN)"
+        V2_TOP_CONN="$(parse_kv "$vps2_data" TOP_CONN)"
+        V2_AWG0="$(parse_kv "$vps2_data" AWG0)"
+        V2_HS0="$(parse_kv "$vps2_data" HS0)"; V2_HS0="${V2_HS0:--1}"
+        V2_P0="$(parse_kv "$vps2_data" P0)"
+        V2_AGH="$(parse_kv "$vps2_data" AGH)"
+        V2_DNS53="$(parse_kv "$vps2_data" DNS53)"
+        V2_WEB3000="$(parse_kv "$vps2_data" WEB3000)"
+        V2_WAN_PING="$(parse_kv "$vps2_data" WAN_PING)"
+        if [[ "$VPS2_PREV_RX" -gt 0 && "${V2_RX:-0}" =~ ^[0-9]+$ ]]; then
+            local d_rx2 d_tx2
+            d_rx2=$(( ${V2_RX:-0} - VPS2_PREV_RX )); [[ $d_rx2 -lt 0 ]] && d_rx2=0
+            d_tx2=$(( ${V2_TX:-0} - VPS2_PREV_TX )); [[ $d_tx2 -lt 0 ]] && d_tx2=0
+            V2_RX_SPEED=$(( d_rx2 / elapsed ))
+            V2_TX_SPEED=$(( d_tx2 / elapsed ))
+        fi
+        VPS2_PREV_RX="${V2_RX:-0}"; VPS2_PREV_TX="${V2_TX:-0}"
+        V2_CONNS="$(parse_kv "$vps2_data" CONNS)"
+    else
+        V2_ERROR="${LAST_ERR_VPS2:-SSH connection failed}"
+        VPS2_PREV_RX=0; VPS2_PREV_TX=0
+    fi
+
+    PREV_TS="$now"
+
+    local tmp_json
+    tmp_json="$(mktemp "${JSON_FILE}.XXXXXX")" || { log_line "ERROR" "mktemp failed"; return 1; }
+
+    export \
+        J_TS="$now" \
+        J_V1_ONLINE="$V1_ONLINE" J_V1_IP="$VPS1_IP" J_V1_HOST="${V1_HOST:-}" \
+        J_V1_LOAD1="${V1_LOAD1:-0}" J_V1_LOAD5="${V1_LOAD5:-0}" J_V1_LOAD15="${V1_LOAD15:-0}" \
+        J_V1_MEM_USED="${V1_MEM_USED:-0}" J_V1_MEM_TOTAL="${V1_MEM_TOTAL:-0}" \
+        J_V1_DISK_USED="${V1_DISK_USED:-}" J_V1_DISK_TOTAL="${V1_DISK_TOTAL:-}" J_V1_DISK_PCT="${V1_DISK_PCT:-0}" \
+        J_V1_NET_IF="${V1_NET_IF:-}" J_V1_RX_SPEED="$V1_RX_SPEED" J_V1_TX_SPEED="$V1_TX_SPEED" \
+        J_V1_TCP_EST="${V1_TCP_EST:-0}" J_V1_UDP_CONN="${V1_UDP_CONN:-0}" J_V1_TOP_CONN="${V1_TOP_CONN:-none}" \
+        J_V1_AWG0="${V1_AWG0:-}" J_V1_AWG1="${V1_AWG1:-}" J_V1_HS0="${V1_HS0:--1}" \
+        J_V1_P0="${V1_P0:-0}" J_V1_P1="${V1_P1:-0}" J_V1_TUN_PING="${V1_TUN_PING:-}" \
+        J_V1_ERROR="${V1_ERROR:-}" \
+        J_V2_ONLINE="$V2_ONLINE" J_V2_IP="$VPS2_IP" J_V2_HOST="${V2_HOST:-}" \
+        J_V2_LOAD1="${V2_LOAD1:-0}" J_V2_LOAD5="${V2_LOAD5:-0}" J_V2_LOAD15="${V2_LOAD15:-0}" \
+        J_V2_MEM_USED="${V2_MEM_USED:-0}" J_V2_MEM_TOTAL="${V2_MEM_TOTAL:-0}" \
+        J_V2_DISK_USED="${V2_DISK_USED:-}" J_V2_DISK_TOTAL="${V2_DISK_TOTAL:-}" J_V2_DISK_PCT="${V2_DISK_PCT:-0}" \
+        J_V2_NET_IF="${V2_NET_IF:-}" J_V2_RX_SPEED="$V2_RX_SPEED" J_V2_TX_SPEED="$V2_TX_SPEED" \
+        J_V2_TCP_EST="${V2_TCP_EST:-0}" J_V2_UDP_CONN="${V2_UDP_CONN:-0}" J_V2_TOP_CONN="${V2_TOP_CONN:-none}" \
+        J_V2_AWG0="${V2_AWG0:-}" J_V2_HS0="${V2_HS0:--1}" J_V2_P0="${V2_P0:-0}" \
+        J_V2_AGH="${V2_AGH:-}" J_V2_DNS53="${V2_DNS53:-}" J_V2_WEB3000="${V2_WEB3000:-}" \
+        J_V2_WAN_PING="${V2_WAN_PING:-}" J_V2_ERROR="${V2_ERROR:-}" \
+        J_V1_CONNS="${V1_CONNS:-}" J_V2_CONNS="${V2_CONNS:-}" \
+        J_LOG_FILE="$LOG_FILE"
+
+    python3 <<'PYEOF' > "$tmp_json"
+import json, os
+
+def s(k, d=''):  return os.environ.get(k, d)
+def ni(k, d=0):
+    try:    return int(os.environ.get(k, d))
+    except: return d
+def nf(k, d=0.0):
+    try:    return round(float(os.environ.get(k, d)), 2)
+    except: return d
+def b(k): return os.environ.get(k, 'false') == 'true'
+def maybe_null(k):
+    v = os.environ.get(k, '')
+    return v if v else None
+
+def parse_conns(k):
+    raw = os.environ.get(k, '').strip(',')
+    if not raw: return []
+    result = []
+    for item in raw.split(','):
+        item = item.strip()
+        if '|' in item:
+            parts = item.split('|', 1)
+            result.append({'local': parts[0], 'remote': parts[1]})
+    return result
+
+def read_log_tail(n=30):
+    path = os.environ.get('J_LOG_FILE', '')
+    if not path: return []
+    try:
+        with open(path, 'r', errors='replace') as f:
+            lines = [l.rstrip('\r\n') for l in f if l.strip()]
+        return lines[-n:]
+    except Exception:
+        return []
+
+data = {
+    'ts': ni('J_TS'),
+    'log': read_log_tail(30),
+    'vps1': {
+        'online':       b('J_V1_ONLINE'),
+        'ip':           s('J_V1_IP'),
+        'host':         s('J_V1_HOST'),
+        'load1':        nf('J_V1_LOAD1'),
+        'load5':        nf('J_V1_LOAD5'),
+        'load15':       nf('J_V1_LOAD15'),
+        'mem_used_mb':  ni('J_V1_MEM_USED'),
+        'mem_total_mb': ni('J_V1_MEM_TOTAL'),
+        'disk_used':    s('J_V1_DISK_USED'),
+        'disk_total':   s('J_V1_DISK_TOTAL'),
+        'disk_pct':     ni('J_V1_DISK_PCT'),
+        'net_if':       s('J_V1_NET_IF'),
+        'rx_speed':     ni('J_V1_RX_SPEED'),
+        'tx_speed':     ni('J_V1_TX_SPEED'),
+        'tcp_est':      ni('J_V1_TCP_EST'),
+        'udp_conn':     ni('J_V1_UDP_CONN'),
+        'top_conn':     s('J_V1_TOP_CONN'),
+        'awg0':         s('J_V1_AWG0'),
+        'awg1':         s('J_V1_AWG1'),
+        'hs0_age':      ni('J_V1_HS0', -1),
+        'peers_awg0':   ni('J_V1_P0'),
+        'peers_awg1':   ni('J_V1_P1'),
+        'tun_ping':     s('J_V1_TUN_PING'),
+        'conns':        parse_conns('J_V1_CONNS'),
+        'error':        maybe_null('J_V1_ERROR'),
+    },
+    'vps2': {
+        'online':       b('J_V2_ONLINE'),
+        'ip':           s('J_V2_IP'),
+        'host':         s('J_V2_HOST'),
+        'load1':        nf('J_V2_LOAD1'),
+        'load5':        nf('J_V2_LOAD5'),
+        'load15':       nf('J_V2_LOAD15'),
+        'mem_used_mb':  ni('J_V2_MEM_USED'),
+        'mem_total_mb': ni('J_V2_MEM_TOTAL'),
+        'disk_used':    s('J_V2_DISK_USED'),
+        'disk_total':   s('J_V2_DISK_TOTAL'),
+        'disk_pct':     ni('J_V2_DISK_PCT'),
+        'net_if':       s('J_V2_NET_IF'),
+        'rx_speed':     ni('J_V2_RX_SPEED'),
+        'tx_speed':     ni('J_V2_TX_SPEED'),
+        'tcp_est':      ni('J_V2_TCP_EST'),
+        'udp_conn':     ni('J_V2_UDP_CONN'),
+        'top_conn':     s('J_V2_TOP_CONN'),
+        'awg0':         s('J_V2_AWG0'),
+        'hs0_age':      ni('J_V2_HS0', -1),
+        'peers_awg0':   ni('J_V2_P0'),
+        'agh':          s('J_V2_AGH'),
+        'dns53':        s('J_V2_DNS53'),
+        'web3000':      s('J_V2_WEB3000'),
+        'wan_ping':     s('J_V2_WAN_PING'),
+        'conns':        parse_conns('J_V2_CONNS'),
+        'error':        maybe_null('J_V2_ERROR'),
+    },
+}
+print(json.dumps(data, indent=2, ensure_ascii=False))
+PYEOF
+
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        mv "$tmp_json" "$JSON_FILE"
+        log_line "DEBUG" "wrote $JSON_FILE ts=$now"
+    else
+        rm -f "$tmp_json"
+        log_line "ERROR" "python3 failed writing json rc=$rc"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Start HTTP server
+# ---------------------------------------------------------------------------
+
+start_http_server() {
+    local srv_script
+    srv_script="$(mktemp /tmp/monweb_srv_XXXXXX.py)" || {
+        log_line "WARN" "mktemp failed, falling back to plain http.server (no /api/ping)"
+        python3 -m http.server "$HTTP_PORT" --bind 127.0.0.1 2>/dev/null &
+        HTTP_PID="$!"; sleep 0.3; return
+    }
+    cat > "$srv_script" << 'PYSERVER'
+import sys, os, json, subprocess, threading, re
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+
+os.chdir(sys.argv[2] if len(sys.argv) > 2 else os.getcwd())
+
+class VPNHandler(SimpleHTTPRequestHandler):
+    def log_message(self, *a): pass
+
+    def do_GET(self):
+        p = urlparse(self.path)
+        if p.path == '/api/ping':
+            self._handle_ping(parse_qs(p.query))
+        else:
+            super().do_GET()
+
+    def _handle_ping(self, params):
+        hosts = [h.strip() for h in params.get('hosts', [''])[0].split(',') if h.strip()]
+        results = {}
+        lock = threading.Lock()
+
+        def do_ping(host):
+            try:
+                pr = subprocess.run(
+                    ['ping', '-c', '3', '-W', '2', host],
+                    capture_output=True, text=True, timeout=12
+                )
+                ma = re.search(r'rtt[^=]+=\s*[\d.]+/([\d.]+)/', pr.stdout)
+                ml = re.search(r'(\d+)%\s+packet loss', pr.stdout)
+                if ma:
+                    r = {'status': 'ok',
+                         'avg_ms': round(float(ma.group(1)), 1),
+                         'loss': int(ml.group(1)) if ml else 0}
+                else:
+                    r = {'status': 'fail', 'avg_ms': None, 'loss': 100}
+            except subprocess.TimeoutExpired:
+                r = {'status': 'timeout'}
+            except Exception as e:
+                r = {'status': 'error', 'msg': str(e)}
+            with lock:
+                results[host] = r
+
+        threads = [threading.Thread(target=do_ping, args=(h,)) for h in hosts]
+        for t in threads: t.start()
+        for t in threads: t.join(timeout=15)
+
+        body = json.dumps(results).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+ThreadingHTTPServer(('127.0.0.1', port), VPNHandler).serve_forever()
+PYSERVER
+    TEMP_KEY_FILES+=("$srv_script")
+    python3 "$srv_script" "$HTTP_PORT" "$(pwd)" 2>/dev/null &
+    HTTP_PID="$!"
+    sleep 0.3
+    if kill -0 "$HTTP_PID" 2>/dev/null; then
+        log_line "INFO" "HTTP server started on port $HTTP_PORT with /api/ping (pid=$HTTP_PID)"
+    else
+        log_line "WARN" "HTTP server may have failed to start (port $HTTP_PORT busy?)"
+        HTTP_PID=""
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+load_defaults_from_files
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --vps1-ip)      VPS1_IP="$2";      shift 2 ;;
+        --vps1-user)    VPS1_USER="$2";    shift 2 ;;
+        --vps1-key)     VPS1_KEY="$2";     shift 2 ;;
+        --vps1-pass)    VPS1_PASS="$2";    shift 2 ;;
+        --vps2-ip)      VPS2_IP="$2";      shift 2 ;;
+        --vps2-user)    VPS2_USER="$2";    shift 2 ;;
+        --vps2-key)     VPS2_KEY="$2";     shift 2 ;;
+        --vps2-pass)    VPS2_PASS="$2";    shift 2 ;;
+        --vps2-tun-ip)  VPS2_TUN_IP="$2"; shift 2 ;;
+        --interval)     INTERVAL="$2";     shift 2 ;;
+        --port)         HTTP_PORT="$2";    shift 2 ;;
+        --ssh-timeout)  SSH_TIMEOUT="$2";  shift 2 ;;
+        --log-file)     LOG_FILE="$2";     shift 2 ;;
+        --help|-h)
+            echo "Usage: bash monitor-web.sh [OPTIONS]"
+            echo "  --interval SEC    Poll interval (default: 5)"
+            echo "  --port PORT       HTTP server port (default: 8080)"
+            echo "  --ssh-timeout SEC SSH timeout (default: 8)"
+            echo "  --vps1-key PATH   SSH key for VPS1"
+            echo "  --vps2-key PATH   SSH key for VPS2"
+            exit 0 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+[[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && { echo "Specify --vps1-key or --vps1-pass" >&2; exit 1; }
+[[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && { echo "Specify --vps2-key or --vps2-pass" >&2; exit 1; }
+
+VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
+VPS2_KEY="$(expand_tilde "$VPS2_KEY")"
+LOG_FILE="$(expand_tilde "$LOG_FILE")"
+
+VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
+VPS2_KEY="$(auto_pick_key_if_missing "$VPS2_KEY")"
+
+[[ -n "$VPS1_PASS" ]] && VPS1_KEY=""
+[[ -n "$VPS2_PASS" ]] && VPS2_KEY=""
+[[ -n "$VPS1_KEY" && ! -f "$VPS1_KEY" && -z "$VPS1_PASS" ]] && VPS1_KEY=""
+[[ -n "$VPS2_KEY" && ! -f "$VPS2_KEY" && -z "$VPS2_PASS" ]] && VPS2_KEY=""
+
+VPS1_KEY="$(prepare_key_for_ssh "$VPS1_KEY")"
+VPS2_KEY="$(prepare_key_for_ssh "$VPS2_KEY")"
+
+if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]] || [[ "$INTERVAL" -lt 1 ]]; then
+    echo "--interval must be integer >= 1" >&2; exit 1
+fi
+if [[ -n "$VPS1_PASS" || -n "$VPS2_PASS" ]]; then
+    command -v sshpass >/dev/null 2>&1 || { echo "sshpass required for password auth" >&2; exit 1; }
+fi
+command -v ssh     >/dev/null 2>&1 || { echo "ssh not found" >&2; exit 1; }
+command -v timeout >/dev/null 2>&1 || { echo "timeout not found" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 not found" >&2; exit 1; }
+
+mkdir -p "$(dirname "$LOG_FILE")"
+touch "$LOG_FILE" || { echo "Cannot create log file: $LOG_FILE" >&2; exit 1; }
+
+mkdir -p "$(dirname "$JSON_FILE")"
+
+log_line "INFO" "monitor-web started: vps1=${VPS1_USER}@${VPS1_IP} vps2=${VPS2_USER}@${VPS2_IP} interval=${INTERVAL} port=${HTTP_PORT}"
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+start_http_server
+
+echo ""
+echo "  VPN Dashboard running"
+echo "  Dashboard : http://localhost:${HTTP_PORT}/dashboard.html"
+echo "  Data JSON : http://localhost:${HTTP_PORT}/vpn-output/data.json"
+echo "  Interval  : ${INTERVAL}s  |  Ctrl+C to stop"
+echo ""
+
+while true; do
+    PREV_TS="$(date +%s)"
+    VPS1_DATA="$(collect_vps1)"
+    VPS2_DATA="$(collect_vps2)"
+    write_json "$VPS1_DATA" "$VPS2_DATA"
+    printf "\r  [%s] JSON updated  (next in %ss)" "$(date '+%H:%M:%S')" "$INTERVAL"
+    sleep "$INTERVAL"
+done
