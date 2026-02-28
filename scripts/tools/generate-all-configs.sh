@@ -45,7 +45,7 @@ VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
 require_vars "generate-all-configs.sh" VPS1_IP
 [[ -z "$VPS1_KEY" || ! -f "$VPS1_KEY" ]] && { fail "SSH ключ не найден: $VPS1_KEY"; exit 1; }
 
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=15 -o LogLevel=ERROR"
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o LogLevel=ERROR"
 ssh1() { ssh $SSH_OPTS -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1; }
 
 echo ""

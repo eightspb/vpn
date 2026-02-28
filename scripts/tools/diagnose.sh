@@ -45,7 +45,7 @@ VPS2_KEY="$(expand_tilde "$VPS2_KEY")"
 [[ -z "$VPS1_PASS" ]] && VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
 [[ -z "$VPS2_PASS" ]] && VPS2_KEY="$(auto_pick_key_if_missing "$VPS2_KEY")"
 
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=no -o LogLevel=ERROR"
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=no -o LogLevel=ERROR"
 
 ssh1() {
     if [[ -n "$VPS1_KEY" && -f "$VPS1_KEY" ]]; then

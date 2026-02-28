@@ -55,7 +55,7 @@ VPS2_IP=$(read_kv .env VPS2_IP)
 [[ -z "$VPS1_IP" ]] && fail "VPS1_IP не задан в .env"
 [[ -z "$VPS2_IP" ]] && fail "VPS2_IP не задан в .env"
 
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=15 -o LogLevel=ERROR"
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o LogLevel=ERROR"
 ssh1() { ssh $SSH_OPTS -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1; }
 
 echo ""

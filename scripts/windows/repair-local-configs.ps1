@@ -42,7 +42,7 @@ function Invoke-Ssh {
     )
     $sshArgs = @(
         "-i", $KeyPath,
-        "-o", "StrictHostKeyChecking=no",
+        "-o", "StrictHostKeyChecking=accept-new",
         "$User@$ServerIp",
         $Command
     )

@@ -70,7 +70,7 @@ EOF
 
 ssh_exec() {
     local cmd="$1"
-    local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    local ssh_opts=(-o StrictHostKeyChecking=accept-new \
                     -o BatchMode=no -o ConnectTimeout="$SSH_TIMEOUT")
     if [[ -n "$VPS1_KEY" ]]; then
         ssh "${ssh_opts[@]}" -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "$cmd"

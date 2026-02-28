@@ -95,6 +95,25 @@ if [[ -f "$FILE" ]]; then
     check_not "lib/common.sh has no StrictHostKeyChecking=no" grep -q "StrictHostKeyChecking=no" "$FILE"
 fi
 
+# Stage 3: operational scripts should also use accept-new and keep known_hosts.
+for file in \
+    "$PROJECT_DIR/scripts/monitor/monitor-web.sh" \
+    "$PROJECT_DIR/scripts/monitor/monitor-realtime.sh" \
+    "$PROJECT_DIR/scripts/tools/diagnose.sh" \
+    "$PROJECT_DIR/scripts/tools/add_phone_peer.sh" \
+    "$PROJECT_DIR/scripts/tools/repair-vps1.sh" \
+    "$PROJECT_DIR/scripts/tools/generate-all-configs.sh" \
+    "$PROJECT_DIR/scripts/windows/repair-local-configs.ps1"; do
+    if [[ -f "$file" ]]; then
+        fname="$(basename "$file")"
+        check "$fname uses accept-new" grep -q "StrictHostKeyChecking=accept-new" "$file"
+        check_not "$fname has no StrictHostKeyChecking=no" grep -q "StrictHostKeyChecking=no" "$file"
+        check_not "$fname has no UserKnownHostsFile=/dev/null" grep -q "UserKnownHostsFile=/dev/null" "$file"
+    else
+        fail "$(basename "$file") not found"
+    fi
+done
+
 echo ""
 
 # ── 3. No hardcoded admin123 default ─────────────────────────────────────────
