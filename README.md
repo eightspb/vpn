@@ -241,8 +241,9 @@ bash manage.sh <команда> [опции]
 
 | Скрипт | Описание |
 |--------|----------|
-| `bash optimize-vpn.sh` | Применить оптимизации производительности на серверах |
-| `bash benchmark.sh` | Замер ping, скорости, MTU, handshake, задержки туннеля |
+| `bash scripts/tools/optimize-vpn.sh` | Применить оптимизации производительности на серверах |
+| `bash scripts/tools/benchmark.sh` | Замер ping, скорости, MTU, handshake, задержки туннеля |
+| `bash scripts/tools/load-test.sh` | Нагрузочное тестирование: соединения, bandwidth, CPU/RAM |
 
 ```bash
 # Полный деплой
@@ -307,10 +308,10 @@ bash manage.sh add-peer
 bash manage.sh add-peer --peer-name tablet --peer-ip 10.9.0.5
 
 # Напрямую
-bash add_phone_peer.sh
+bash scripts/tools/add_phone_peer.sh
 
 # С явными параметрами
-bash add_phone_peer.sh \
+bash scripts/tools/add_phone_peer.sh \
   --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
   --peer-name tablet --peer-ip 10.9.0.5
 
@@ -334,8 +335,8 @@ bash manage.sh monitor          # реалтайм в терминале
 bash manage.sh monitor --web    # веб-дашборд http://localhost:8080/dashboard.html
 
 # Напрямую
-bash monitor-realtime.sh
-bash monitor-web.sh
+bash scripts/monitor/monitor-realtime.sh
+bash scripts/monitor/monitor-web.sh
 
 # Параметры передаются через .env или CLI:
 #   VPS1_IP, VPS1_USER, VPS1_KEY, VPS2_IP, VPS2_USER, VPS2_KEY
@@ -410,20 +411,27 @@ powershell -File tests/test-repair-local-configs.ps1
 bash tests/test-proxy-fix.sh
 ```
 
+Проверка скрипта нагрузочного тестирования (load-test.sh: синтаксис, функции, метрики, флаги):
+
+```bash
+# Linux / WSL
+bash tests/test-load-test.sh
+```
+
 ## Оптимизация производительности
 
 ### Скрипт оптимизации
 
 ```bash
 # Применить все оптимизации на серверах
-bash optimize-vpn.sh
+bash scripts/tools/optimize-vpn.sh
 
 # Только замер метрик (без изменений)
-bash optimize-vpn.sh --benchmark-only
+bash scripts/tools/optimize-vpn.sh --benchmark-only
 
 # Только VPS1 или VPS2
-bash optimize-vpn.sh --vps1-only
-bash optimize-vpn.sh --vps2-only
+bash scripts/tools/optimize-vpn.sh --vps1-only
+bash scripts/tools/optimize-vpn.sh --vps2-only
 ```
 
 Скрипт применяет на обоих серверах:
@@ -437,10 +445,45 @@ bash optimize-vpn.sh --vps2-only
 ### Замер производительности
 
 ```bash
-bash benchmark.sh
+bash scripts/tools/benchmark.sh
 ```
 
 Показывает: ping к 8.8.8.8 (avg/min/max/jitter), скорость загрузки через Cloudflare, MTU интерфейсов, возраст WireGuard handshake, задержку туннеля VPS1↔VPS2.
+
+### Нагрузочное тестирование
+
+```bash
+# Полный нагрузочный тест (оба сервера)
+bash scripts/tools/load-test.sh
+
+# Быстрый режим (100 соединений, шаг 25, 5 сек на шаг)
+bash scripts/tools/load-test.sh --quick
+
+# Только VPS1 или VPS2
+bash scripts/tools/load-test.sh --vps1-only
+bash scripts/tools/load-test.sh --vps2-only
+
+# Только тест пропускной способности
+bash scripts/tools/load-test.sh --bandwidth-only
+
+# Только тест соединений
+bash scripts/tools/load-test.sh --connections-only
+
+# Настройка параметров
+bash scripts/tools/load-test.sh --max-connections 1000 --step 100 --duration 15
+
+# Сохранить отчёт в файл
+bash scripts/tools/load-test.sh --quick --output report.txt
+```
+
+Скрипт выполняет:
+- **Системные метрики** — CPU (ядра, load average, usage %), RAM (total/used/available), swap, диск, uptime
+- **Пропускная способность** — скорость загрузки/отдачи через Cloudflare (1 и 4 потока)
+- **Масштабирование соединений** — пошаговое наращивание параллельных соединений (через Apache Bench) с замером RPS, latency, CPU, RAM, conntrack на каждом шаге; определяет точку деградации (latency > 2x)
+- **Conntrack** — текущее/максимальное число записей, hashsize, TCP established/time-wait
+- **Задержка туннеля** — ping VPS1→VPS2 без нагрузки и под нагрузкой, разница avg latency
+- **WireGuard throughput** — RX/TX трафик по каждому пиру
+- **Метрики до/после** — сравнение состояния серверов до и после нагрузочного теста
 
 ### Split tunneling (раздельное туннелирование)
 
@@ -457,13 +500,13 @@ vpn-output/phone-split.conf    ← телефон
 
 ```bash
 # Скачать актуальный список и пересоздать split-конфиги
-python3 generate-split-config.py
+python3 scripts/tools/generate-split-config.py
 
 # Или использовать уже скачанный файл ru-ips.txt
-python3 generate-split-config.py --ru-list ru-ips.txt
+python3 scripts/tools/generate-split-config.py --ru-list ru-ips.txt
 
 # Только вывести AllowedIPs без записи файлов
-python3 generate-split-config.py --print-only
+python3 scripts/tools/generate-split-config.py --print-only
 ```
 
 Источник IP-диапазонов: [ipv4.fetus.jp/ru.txt](https://ipv4.fetus.jp/ru.txt) (обновляется ежедневно из RIPE NCC).
@@ -494,10 +537,10 @@ python3 generate-split-config.py --print-only
 
 ```bash
 # Только диагностика — показывает состояние серверов (безопасно, ничего не меняет)
-bash diagnose.sh
+bash scripts/tools/diagnose.sh
 
 # Диагностика + автоматический ремонт
-bash diagnose.sh --fix
+bash scripts/tools/diagnose.sh --fix
 ```
 
 Скрипт проверяет и при `--fix` исправляет:
@@ -524,7 +567,7 @@ powershell -ExecutionPolicy Bypass -File repair-local-configs.ps1
 ## Отдельный запуск security-обновлений
 
 ```bash
-sudo bash security-update.sh
+sudo bash scripts/deploy/security-update.sh
 ```
 
 ## Обновления без интерактива

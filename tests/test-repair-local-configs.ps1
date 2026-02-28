@@ -1,5 +1,5 @@
 param(
-    [string]$ScriptPath = "repair-local-configs.ps1"
+    [string]$ScriptPath = "scripts/windows/repair-local-configs.ps1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,7 +17,7 @@ function Fail([string]$msg) {
 }
 
 Write-Host ""
-Write-Host "=== Test repair-local-configs.ps1 ===" -ForegroundColor Cyan
+Write-Host "=== Test scripts/windows/repair-local-configs.ps1 ===" -ForegroundColor Cyan
 Write-Host ""
 
 if (Test-Path -LiteralPath $ScriptPath) {

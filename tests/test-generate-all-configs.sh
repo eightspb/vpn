@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# test-generate-all-configs.sh — Тесты для generate-all-configs.sh
+# test-scripts/tools/generate-all-configs.sh — Тесты для scripts/tools/generate-all-configs.sh
 #
 # Проверяет что сгенерированные конфиги корректны:
 #   1. Все 4 файла существуют
@@ -12,7 +12,7 @@
 #   7. keys.env и keys.txt обновлены
 #
 # Использование:
-#   bash tests/test-generate-all-configs.sh
+#   bash tests/test-scripts/tools/generate-all-configs.sh
 # =============================================================================
 
 set -uo pipefail
@@ -44,7 +44,7 @@ assert_not_empty() {
 OUTPUT="vpn-output"
 
 echo ""
-echo "=== Тесты для generate-all-configs.sh ==="
+echo "=== Тесты для scripts/tools/generate-all-configs.sh ==="
 echo ""
 
 # --- Test 1: Files exist ---

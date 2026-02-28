@@ -134,7 +134,7 @@ done
 echo ""
 echo "--- 7. Deploy-скрипты: базовая валидация структуры ---"
 
-for script in deploy.sh deploy-vps1.sh deploy-vps2.sh deploy-proxy.sh; do
+for script in scripts/deploy/deploy.sh scripts/deploy/deploy-vps1.sh scripts/deploy/deploy-vps2.sh scripts/deploy/deploy-proxy.sh; do
     if [[ ! -f "$script" ]]; then
         fail "$script отсутствует"
         continue

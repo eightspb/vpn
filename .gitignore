@@ -23,8 +23,6 @@ youtube-proxy/youtube-proxy
 # nginx config with local paths
 vpn-dashboard-nginx.conf
 
-# one-time cleanup script
-phase4-cleanup.sh
 
 # Auto-generated Russian IP list (re-download with generate-split-config.py)
 ru-ips.txt

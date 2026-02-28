@@ -19,7 +19,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 Write-Host ""
-Write-Host "=== Тесты оптимизации VPN (optimize-vpn.sh, benchmark.sh, split tunneling) ===" -ForegroundColor Cyan
+Write-Host "=== Тесты оптимизации VPN (scripts/tools/optimize-vpn.sh, scripts/tools/benchmark.sh, split tunneling) ===" -ForegroundColor Cyan
 Write-Host ""
 
 # ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ Write-Host ""
 # ---------------------------------------------------------------------------
 Write-Host "--- 1. Файлы присутствуют ---"
 
-foreach ($f in @("optimize-vpn.sh", "benchmark.sh")) {
+foreach ($f in @("scripts/tools/optimize-vpn.sh", "scripts/tools/benchmark.sh")) {
     if (Test-Path $f) { ok "$f существует" } else { fail "$f отсутствует" }
 }
 
@@ -41,7 +41,7 @@ foreach ($f in @("vpn-output/client-split.conf", "vpn-output/phone-split.conf"))
 Write-Host ""
 Write-Host "--- 2. Скрипты подключают lib/common.sh ---"
 
-foreach ($f in @("optimize-vpn.sh", "benchmark.sh")) {
+foreach ($f in @("scripts/tools/optimize-vpn.sh", "scripts/tools/benchmark.sh")) {
     if (-not (Test-Path $f)) { fail "$f отсутствует"; continue }
     $content = Get-Content $f -Raw
     if ($content -match 'source.*lib/common\.sh') {
@@ -52,35 +52,35 @@ foreach ($f in @("optimize-vpn.sh", "benchmark.sh")) {
 }
 
 # ---------------------------------------------------------------------------
-# 3. optimize-vpn.sh содержит флаг --benchmark-only
+# 3. scripts/tools/optimize-vpn.sh содержит флаг --benchmark-only
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 3. optimize-vpn.sh: флаг --benchmark-only ---"
+Write-Host "--- 3. scripts/tools/optimize-vpn.sh: флаг --benchmark-only ---"
 
-if (Test-Path "optimize-vpn.sh") {
-    $opt = Get-Content "optimize-vpn.sh" -Raw
+if (Test-Path "scripts/tools/optimize-vpn.sh") {
+    $opt = Get-Content "scripts/tools/optimize-vpn.sh" -Raw
     if ($opt -match '--benchmark-only') {
-        ok "optimize-vpn.sh: --benchmark-only найден"
+        ok "scripts/tools/optimize-vpn.sh: --benchmark-only найден"
     } else {
-        fail "optimize-vpn.sh: --benchmark-only не найден"
+        fail "scripts/tools/optimize-vpn.sh: --benchmark-only не найден"
     }
     if ($opt -match 'BENCHMARK_ONLY') {
-        ok "optimize-vpn.sh: переменная BENCHMARK_ONLY найдена"
+        ok "scripts/tools/optimize-vpn.sh: переменная BENCHMARK_ONLY найдена"
     } else {
-        fail "optimize-vpn.sh: переменная BENCHMARK_ONLY не найдена"
+        fail "scripts/tools/optimize-vpn.sh: переменная BENCHMARK_ONLY не найдена"
     }
 } else {
-    fail "optimize-vpn.sh отсутствует"
+    fail "scripts/tools/optimize-vpn.sh отсутствует"
 }
 
 # ---------------------------------------------------------------------------
-# 4. optimize-vpn.sh содержит ключевые sysctl параметры
+# 4. scripts/tools/optimize-vpn.sh содержит ключевые sysctl параметры
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 4. optimize-vpn.sh: sysctl параметры ---"
+Write-Host "--- 4. scripts/tools/optimize-vpn.sh: sysctl параметры ---"
 
-if (Test-Path "optimize-vpn.sh") {
-    $opt = Get-Content "optimize-vpn.sh" -Raw
+if (Test-Path "scripts/tools/optimize-vpn.sh") {
+    $opt = Get-Content "scripts/tools/optimize-vpn.sh" -Raw
     foreach ($param in @(
         "tcp_slow_start_after_idle",
         "nf_conntrack_max=524288",
@@ -93,83 +93,83 @@ if (Test-Path "optimize-vpn.sh") {
         "99-vpn.conf"
     )) {
         if ($opt -match [regex]::Escape($param)) {
-            ok "optimize-vpn.sh: содержит $param"
+            ok "scripts/tools/optimize-vpn.sh: содержит $param"
         } else {
-            fail "optimize-vpn.sh: не содержит $param"
+            fail "scripts/tools/optimize-vpn.sh: не содержит $param"
         }
     }
 } else {
-    fail "optimize-vpn.sh отсутствует"
+    fail "scripts/tools/optimize-vpn.sh отсутствует"
 }
 
 # ---------------------------------------------------------------------------
-# 5. optimize-vpn.sh содержит MTU значения
+# 5. scripts/tools/optimize-vpn.sh содержит MTU значения
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 5. optimize-vpn.sh: MTU значения ---"
+Write-Host "--- 5. scripts/tools/optimize-vpn.sh: MTU значения ---"
 
-if (Test-Path "optimize-vpn.sh") {
-    $opt = Get-Content "optimize-vpn.sh" -Raw
+if (Test-Path "scripts/tools/optimize-vpn.sh") {
+    $opt = Get-Content "scripts/tools/optimize-vpn.sh" -Raw
     if ($opt -match '1420') {
-        ok "optimize-vpn.sh: MTU 1420 найден"
+        ok "scripts/tools/optimize-vpn.sh: MTU 1420 найден"
     } else {
-        fail "optimize-vpn.sh: MTU 1420 не найден"
+        fail "scripts/tools/optimize-vpn.sh: MTU 1420 не найден"
     }
     if ($opt -match '1360') {
-        ok "optimize-vpn.sh: MTU 1360 найден"
+        ok "scripts/tools/optimize-vpn.sh: MTU 1360 найден"
     } else {
-        fail "optimize-vpn.sh: MTU 1360 не найден"
+        fail "scripts/tools/optimize-vpn.sh: MTU 1360 не найден"
     }
 }
 
 # ---------------------------------------------------------------------------
-# 6. optimize-vpn.sh содержит MSS 1320
+# 6. scripts/tools/optimize-vpn.sh содержит MSS 1320
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 6. optimize-vpn.sh: MSS clamp ---"
+Write-Host "--- 6. scripts/tools/optimize-vpn.sh: MSS clamp ---"
 
-if (Test-Path "optimize-vpn.sh") {
-    $opt = Get-Content "optimize-vpn.sh" -Raw
+if (Test-Path "scripts/tools/optimize-vpn.sh") {
+    $opt = Get-Content "scripts/tools/optimize-vpn.sh" -Raw
     if ($opt -match 'set-mss 1320') {
-        ok "optimize-vpn.sh: MSS 1320 найден"
+        ok "scripts/tools/optimize-vpn.sh: MSS 1320 найден"
     } else {
-        fail "optimize-vpn.sh: MSS 1320 не найден"
+        fail "scripts/tools/optimize-vpn.sh: MSS 1320 не найден"
     }
     if ($opt -match 'TCPMSS') {
-        ok "optimize-vpn.sh: TCPMSS найден"
+        ok "scripts/tools/optimize-vpn.sh: TCPMSS найден"
     } else {
-        fail "optimize-vpn.sh: TCPMSS не найден"
+        fail "scripts/tools/optimize-vpn.sh: TCPMSS не найден"
     }
 }
 
 # ---------------------------------------------------------------------------
-# 7. optimize-vpn.sh содержит PersistentKeepalive = 60
+# 7. scripts/tools/optimize-vpn.sh содержит PersistentKeepalive = 60
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 7. optimize-vpn.sh: PersistentKeepalive ---"
+Write-Host "--- 7. scripts/tools/optimize-vpn.sh: PersistentKeepalive ---"
 
-if (Test-Path "optimize-vpn.sh") {
-    $opt = Get-Content "optimize-vpn.sh" -Raw
+if (Test-Path "scripts/tools/optimize-vpn.sh") {
+    $opt = Get-Content "scripts/tools/optimize-vpn.sh" -Raw
     if ($opt -match 'PersistentKeepalive = 60') {
-        ok "optimize-vpn.sh: PersistentKeepalive = 60 найден"
+        ok "scripts/tools/optimize-vpn.sh: PersistentKeepalive = 60 найден"
     } else {
-        fail "optimize-vpn.sh: PersistentKeepalive = 60 не найден"
+        fail "scripts/tools/optimize-vpn.sh: PersistentKeepalive = 60 не найден"
     }
 }
 
 # ---------------------------------------------------------------------------
-# 8. optimize-vpn.sh содержит Junk параметры
+# 8. scripts/tools/optimize-vpn.sh содержит Junk параметры
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 8. optimize-vpn.sh: Junk параметры ---"
+Write-Host "--- 8. scripts/tools/optimize-vpn.sh: Junk параметры ---"
 
-if (Test-Path "optimize-vpn.sh") {
-    $opt = Get-Content "optimize-vpn.sh" -Raw
+if (Test-Path "scripts/tools/optimize-vpn.sh") {
+    $opt = Get-Content "scripts/tools/optimize-vpn.sh" -Raw
     foreach ($param in @("Jc   = 2", "Jmin = 20", "Jmax = 200", "S1   = 15", "S2   = 20")) {
         if ($opt -match [regex]::Escape($param)) {
-            ok "optimize-vpn.sh: '$param' найден"
+            ok "scripts/tools/optimize-vpn.sh: '$param' найден"
         } else {
-            fail "optimize-vpn.sh: '$param' не найден"
+            fail "scripts/tools/optimize-vpn.sh: '$param' не найден"
         }
     }
 }
@@ -220,54 +220,54 @@ foreach ($f in @("vpn-output/client.conf", "vpn-output/phone.conf")) {
 }
 
 # ---------------------------------------------------------------------------
-# 11. benchmark.sh содержит ключевые метрики
+# 11. scripts/tools/benchmark.sh содержит ключевые метрики
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 11. benchmark.sh: ключевые метрики ---"
+Write-Host "--- 11. scripts/tools/benchmark.sh: ключевые метрики ---"
 
-if (Test-Path "benchmark.sh") {
-    $bench = Get-Content "benchmark.sh" -Raw
+if (Test-Path "scripts/tools/benchmark.sh") {
+    $bench = Get-Content "scripts/tools/benchmark.sh" -Raw
     foreach ($metric in @("ping", "speed_download", "mtu", "handshakes", "rmem_max", "tcp_congestion_control", "10.8.0.2")) {
         if ($bench -match [regex]::Escape($metric)) {
-            ok "benchmark.sh: содержит метрику '$metric'"
+            ok "scripts/tools/benchmark.sh: содержит метрику '$metric'"
         } else {
-            fail "benchmark.sh: не содержит метрику '$metric'"
+            fail "scripts/tools/benchmark.sh: не содержит метрику '$metric'"
         }
     }
 } else {
-    fail "benchmark.sh отсутствует"
+    fail "scripts/tools/benchmark.sh отсутствует"
 }
 
 # ---------------------------------------------------------------------------
-# 12. optimize-vpn.sh содержит флаги --vps1-only и --vps2-only
+# 12. scripts/tools/optimize-vpn.sh содержит флаги --vps1-only и --vps2-only
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 12. optimize-vpn.sh: флаги --vps1-only и --vps2-only ---"
+Write-Host "--- 12. scripts/tools/optimize-vpn.sh: флаги --vps1-only и --vps2-only ---"
 
-if (Test-Path "optimize-vpn.sh") {
-    $opt = Get-Content "optimize-vpn.sh" -Raw
+if (Test-Path "scripts/tools/optimize-vpn.sh") {
+    $opt = Get-Content "scripts/tools/optimize-vpn.sh" -Raw
     foreach ($flag in @("--vps1-only", "--vps2-only")) {
         if ($opt -match [regex]::Escape($flag)) {
-            ok "optimize-vpn.sh: $flag найден"
+            ok "scripts/tools/optimize-vpn.sh: $flag найден"
         } else {
-            fail "optimize-vpn.sh: $flag не найден"
+            fail "scripts/tools/optimize-vpn.sh: $flag не найден"
         }
     }
 }
 
 # ---------------------------------------------------------------------------
-# 13. optimize-vpn.sh использует SSH-хелперы из lib/common.sh
+# 13. scripts/tools/optimize-vpn.sh использует SSH-хелперы из lib/common.sh
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 13. optimize-vpn.sh: использует SSH-хелперы ---"
+Write-Host "--- 13. scripts/tools/optimize-vpn.sh: использует SSH-хелперы ---"
 
-if (Test-Path "optimize-vpn.sh") {
-    $opt = Get-Content "optimize-vpn.sh" -Raw
+if (Test-Path "scripts/tools/optimize-vpn.sh") {
+    $opt = Get-Content "scripts/tools/optimize-vpn.sh" -Raw
     foreach ($fn in @("ssh_run_script", "ssh_exec", "load_defaults_from_files", "prepare_key_for_ssh", "cleanup_temp_keys")) {
         if ($opt -match [regex]::Escape($fn)) {
-            ok "optimize-vpn.sh: вызывает $fn"
+            ok "scripts/tools/optimize-vpn.sh: вызывает $fn"
         } else {
-            fail "optimize-vpn.sh: не вызывает $fn"
+            fail "scripts/tools/optimize-vpn.sh: не вызывает $fn"
         }
     }
 }
@@ -278,7 +278,7 @@ if (Test-Path "optimize-vpn.sh") {
 Write-Host ""
 Write-Host "--- 14. Нет хардкода приватных ключей ---"
 
-foreach ($f in @("optimize-vpn.sh", "benchmark.sh")) {
+foreach ($f in @("scripts/tools/optimize-vpn.sh", "scripts/tools/benchmark.sh")) {
     if (-not (Test-Path $f)) { fail "$f отсутствует"; continue }
     $content = Get-Content $f -Raw
     if ($content -match 'PrivateKey\s*=\s*[A-Za-z0-9+/]{40,}') {

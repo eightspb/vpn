@@ -14,20 +14,20 @@ else
 fi
 
 echo ""
-echo "=== Phase 2: MTU in deploy-vps1.sh (awg0, awg1) ==="
-if grep -q "MTU = 1320" deploy-vps1.sh && grep -q "MTU = 1280" deploy-vps1.sh; then
-  echo "OK: deploy-vps1.sh has MTU for awg0 and awg1"
+echo "=== Phase 2: MTU in scripts/deploy/deploy-vps1.sh (awg0, awg1) ==="
+if grep -q "MTU = 1320" scripts/deploy/deploy-vps1.sh && grep -q "MTU = 1280" scripts/deploy/deploy-vps1.sh; then
+  echo "OK: scripts/deploy/deploy-vps1.sh has MTU for awg0 and awg1"
 else
-  echo "FAIL: deploy-vps1.sh expected MTU = 1320 (awg0) and MTU = 1280 (awg1)"
+  echo "FAIL: scripts/deploy/deploy-vps1.sh expected MTU = 1320 (awg0) and MTU = 1280 (awg1)"
   FAIL=1
 fi
 
 echo ""
-echo "=== Phase 2: MTU in deploy-vps2.sh (awg0) ==="
-if grep -q "MTU = 1280" deploy-vps2.sh; then
-  echo "OK: deploy-vps2.sh has MTU for awg0"
+echo "=== Phase 2: MTU in scripts/deploy/deploy-vps2.sh (awg0) ==="
+if grep -q "MTU = 1280" scripts/deploy/deploy-vps2.sh; then
+  echo "OK: scripts/deploy/deploy-vps2.sh has MTU for awg0"
 else
-  echo "FAIL: deploy-vps2.sh expected MTU = 1280 for awg0"
+  echo "FAIL: scripts/deploy/deploy-vps2.sh expected MTU = 1280 for awg0"
   FAIL=1
 fi
 

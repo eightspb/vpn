@@ -15,7 +15,7 @@ if [[ "$SCRIPT_DIR" =~ ^/[A-Za-z]/ ]]; then
     REST=$(echo "$SCRIPT_DIR" | cut -c3-)
     SCRIPT_DIR="/mnt/${DRIVE}${REST}"
 fi
-PROXY_DIR="$SCRIPT_DIR/youtube-proxy"
+PROXY_DIR="$SCRIPT_DIR/../../youtube-proxy"
 BINARY_NAME="youtube-proxy"
 REMOTE_DIR="/opt/youtube-proxy"
 

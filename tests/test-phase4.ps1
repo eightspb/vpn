@@ -123,7 +123,7 @@ foreach ($f in @(
 Write-Host ""
 Write-Host "--- 7. Deploy-скрипты: базовая валидация структуры ---"
 
-foreach ($script in @("deploy.sh", "deploy-vps1.sh", "deploy-vps2.sh", "deploy-proxy.sh")) {
+foreach ($script in @("scripts/deploy/deploy.sh", "scripts/deploy/deploy-vps1.sh", "scripts/deploy/deploy-vps2.sh", "scripts/deploy/deploy-proxy.sh")) {
     if (-not (Test-Path $script)) {
         fail "$script отсутствует"
         continue

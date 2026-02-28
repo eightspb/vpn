@@ -24,7 +24,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 
 # ── Параметры по умолчанию ────────────────────────────────────────────────────
 VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""

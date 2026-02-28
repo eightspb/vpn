@@ -24,69 +24,69 @@ Write-Host "=== Тесты Фазы 3: Безопасность и архите�
 Write-Host ""
 
 # ---------------------------------------------------------------------------
-# 1. monitor-realtime.sh: нет eval
+# 1. scripts/monitor/monitor-realtime.sh: нет eval
 # ---------------------------------------------------------------------------
-Write-Host "--- 1. monitor-realtime.sh: убран eval ---"
-$content = Get-Content "monitor-realtime.sh" -Raw
+Write-Host "--- 1. scripts/monitor/monitor-realtime.sh: убран eval ---"
+$content = Get-Content "scripts/monitor/monitor-realtime.sh" -Raw
 
 check (-not ($content -match '(?m)^\s*eval\s+"\$data"')) `
-    "eval `"`$data`" отсутствует в monitor-realtime.sh" `
-    "eval `"`$data`" всё ещё присутствует в monitor-realtime.sh"
+    "eval `"`$data`" отсутствует в scripts/monitor/monitor-realtime.sh" `
+    "eval `"`$data`" всё ещё присутствует в scripts/monitor/monitor-realtime.sh"
 
 check ($content -match 'parse_kv') `
-    "parse_kv присутствует в monitor-realtime.sh" `
-    "parse_kv не найден в monitor-realtime.sh"
+    "parse_kv присутствует в scripts/monitor/monitor-realtime.sh" `
+    "parse_kv не найден в scripts/monitor/monitor-realtime.sh"
 
 # ---------------------------------------------------------------------------
-# 2. monitor-realtime.sh: нет хардкода IP/ключей
+# 2. scripts/monitor/monitor-realtime.sh: нет хардкода IP/ключей
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 2. monitor-realtime.sh: нет хардкода дефолтов ---"
+Write-Host "--- 2. scripts/monitor/monitor-realtime.sh: нет хардкода дефолтов ---"
 
 check (-not ($content -match '89\.169\.179\.233')) `
-    "Хардкод IP 89.169.179.233 отсутствует в monitor-realtime.sh" `
-    "Хардкод IP 89.169.179.233 всё ещё присутствует в monitor-realtime.sh"
+    "Хардкод IP 89.169.179.233 отсутствует в scripts/monitor/monitor-realtime.sh" `
+    "Хардкод IP 89.169.179.233 всё ещё присутствует в scripts/monitor/monitor-realtime.sh"
 
 check (-not ($content -match '38\.135\.122\.81')) `
-    "Хардкод IP 38.135.122.81 отсутствует в monitor-realtime.sh" `
-    "Хардкод IP 38.135.122.81 всё ещё присутствует в monitor-realtime.sh"
+    "Хардкод IP 38.135.122.81 отсутствует в scripts/monitor/monitor-realtime.sh" `
+    "Хардкод IP 38.135.122.81 всё ещё присутствует в scripts/monitor/monitor-realtime.sh"
 
 check (-not ($content -match 'ssh-key-1772056840349')) `
-    "Хардкод SSH-ключа отсутствует в monitor-realtime.sh" `
-    "Хардкод SSH-ключа всё ещё присутствует в monitor-realtime.sh"
+    "Хардкод SSH-ключа отсутствует в scripts/monitor/monitor-realtime.sh" `
+    "Хардкод SSH-ключа всё ещё присутствует в scripts/monitor/monitor-realtime.sh"
 
 # ---------------------------------------------------------------------------
-# 3. monitor-web.sh: нет хардкода IP/ключей
+# 3. scripts/monitor/monitor-web.sh: нет хардкода IP/ключей
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 3. monitor-web.sh: нет хардкода дефолтов ---"
-$web_content = Get-Content "monitor-web.sh" -Raw
+Write-Host "--- 3. scripts/monitor/monitor-web.sh: нет хардкода дефолтов ---"
+$web_content = Get-Content "scripts/monitor/monitor-web.sh" -Raw
 
 check (-not ($web_content -match '89\.169\.179\.233')) `
-    "Хардкод IP 89.169.179.233 отсутствует в monitor-web.sh" `
-    "Хардкод IP 89.169.179.233 всё ещё присутствует в monitor-web.sh"
+    "Хардкод IP 89.169.179.233 отсутствует в scripts/monitor/monitor-web.sh" `
+    "Хардкод IP 89.169.179.233 всё ещё присутствует в scripts/monitor/monitor-web.sh"
 
 check (-not ($web_content -match '38\.135\.122\.81')) `
-    "Хардкод IP 38.135.122.81 отсутствует в monitor-web.sh" `
-    "Хардкод IP 38.135.122.81 всё ещё присутствует в monitor-web.sh"
+    "Хардкод IP 38.135.122.81 отсутствует в scripts/monitor/monitor-web.sh" `
+    "Хардкод IP 38.135.122.81 всё ещё присутствует в scripts/monitor/monitor-web.sh"
 
 check (-not ($web_content -match 'ssh-key-1772056840349')) `
-    "Хардкод SSH-ключа отсутствует в monitor-web.sh" `
-    "Хардкод SSH-ключа всё ещё присутствует в monitor-web.sh"
+    "Хардкод SSH-ключа отсутствует в scripts/monitor/monitor-web.sh" `
+    "Хардкод SSH-ключа всё ещё присутствует в scripts/monitor/monitor-web.sh"
 
 # ---------------------------------------------------------------------------
-# 4. monitor-web.sh и monitor-realtime.sh: читают .env
+# 4. scripts/monitor/monitor-web.sh и scripts/monitor/monitor-realtime.sh: читают .env
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "--- 4. Скрипты читают .env ---"
 
 check ($web_content -match 'load_defaults_from_files') `
-    "monitor-web.sh вызывает load_defaults_from_files" `
-    "monitor-web.sh не вызывает load_defaults_from_files"
+    "scripts/monitor/monitor-web.sh вызывает load_defaults_from_files" `
+    "scripts/monitor/monitor-web.sh не вызывает load_defaults_from_files"
 
 check ($content -match 'load_defaults_from_files') `
-    "monitor-realtime.sh вызывает load_defaults_from_files" `
-    "monitor-realtime.sh не вызывает load_defaults_from_files"
+    "scripts/monitor/monitor-realtime.sh вызывает load_defaults_from_files" `
+    "scripts/monitor/monitor-realtime.sh не вызывает load_defaults_from_files"
 
 # ---------------------------------------------------------------------------
 # 5. add_phone_peer.sh: параметризирован
@@ -135,27 +135,27 @@ check (-not ($yaml_content -match '0\.0\.0\.0:8080')) `
     "CA-сервер всё ещё слушает на 0.0.0.0:8080"
 
 # ---------------------------------------------------------------------------
-# 7. deploy-proxy.sh: firewall-правило для порта 8080
+# 7. scripts/deploy/deploy-proxy.sh: firewall-правило для порта 8080
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 7. deploy-proxy.sh: firewall для CA-сервера ---"
-$proxy_content = Get-Content "deploy-proxy.sh" -Raw
+Write-Host "--- 7. scripts/deploy/deploy-proxy.sh: firewall для CA-сервера ---"
+$proxy_content = Get-Content "scripts/deploy/deploy-proxy.sh" -Raw
 
 check ($proxy_content -match 'iptables.*8080.*DROP|DROP.*8080') `
-    "deploy-proxy.sh блокирует порт 8080 снаружи" `
-    "deploy-proxy.sh не блокирует порт 8080 снаружи"
+    "scripts/deploy/deploy-proxy.sh блокирует порт 8080 снаружи" `
+    "scripts/deploy/deploy-proxy.sh не блокирует порт 8080 снаружи"
 
 check ($proxy_content -match 'iptables.*8080.*awg0|awg0.*8080') `
-    "deploy-proxy.sh разрешает порт 8080 только через awg0" `
-    "deploy-proxy.sh не ограничивает 8080 интерфейсом awg0"
+    "scripts/deploy/deploy-proxy.sh разрешает порт 8080 только через awg0" `
+    "scripts/deploy/deploy-proxy.sh не ограничивает 8080 интерфейсом awg0"
 
 check (-not ($proxy_content -match "http://\`$VPS2_IP:8080")) `
-    "deploy-proxy.sh не содержит публичный URL CA (http://VPS2_IP:8080)" `
-    "deploy-proxy.sh всё ещё содержит публичный URL CA"
+    "scripts/deploy/deploy-proxy.sh не содержит публичный URL CA (http://VPS2_IP:8080)" `
+    "scripts/deploy/deploy-proxy.sh всё ещё содержит публичный URL CA"
 
 check ($proxy_content -match '10\.8\.0\.2:8080') `
-    "deploy-proxy.sh указывает VPN-URL для CA (10.8.0.2:8080)" `
-    "deploy-proxy.sh не содержит VPN-URL для CA"
+    "scripts/deploy/deploy-proxy.sh указывает VPN-URL для CA (10.8.0.2:8080)" `
+    "scripts/deploy/deploy-proxy.sh не содержит VPN-URL для CA"
 
 # ---------------------------------------------------------------------------
 # 8. Go build проверка (youtube-proxy)

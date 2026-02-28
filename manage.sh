@@ -192,19 +192,19 @@ cmd_deploy() {
     case "$mode" in
         full)
             log "Запуск полного деплоя (deploy.sh)..."
-            bash "${SCRIPT_DIR}/deploy.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            bash "${SCRIPT_DIR}/scripts/deploy/deploy.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         vps1)
             log "Запуск деплоя VPS1 (deploy-vps1.sh)..."
-            bash "${SCRIPT_DIR}/deploy-vps1.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            bash "${SCRIPT_DIR}/scripts/deploy/deploy-vps1.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         vps2)
             log "Запуск деплоя VPS2 (deploy-vps2.sh)..."
-            bash "${SCRIPT_DIR}/deploy-vps2.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            bash "${SCRIPT_DIR}/scripts/deploy/deploy-vps2.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         proxy)
             log "Запуск деплоя YouTube Proxy (deploy-proxy.sh)..."
-            bash "${SCRIPT_DIR}/deploy-proxy.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            bash "${SCRIPT_DIR}/scripts/deploy/deploy-proxy.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
     esac
 }
@@ -228,12 +228,12 @@ cmd_monitor() {
     case "$mode" in
         realtime)
             log "Запуск реалтайм-монитора (monitor-realtime.sh)..."
-            bash "${SCRIPT_DIR}/monitor-realtime.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            bash "${SCRIPT_DIR}/scripts/monitor/monitor-realtime.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         web)
             log "Запуск веб-дашборда (monitor-web.sh)..."
             log "Откройте: http://localhost:8080/dashboard.html"
-            bash "${SCRIPT_DIR}/monitor-web.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            bash "${SCRIPT_DIR}/scripts/monitor/monitor-web.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
     esac
 }
@@ -246,7 +246,7 @@ cmd_add_peer() {
     fi
 
     log "Запуск добавления пира (add_phone_peer.sh)..."
-    bash "${SCRIPT_DIR}/add_phone_peer.sh" "$@"
+    bash "${SCRIPT_DIR}/scripts/tools/add_phone_peer.sh" "$@"
 }
 
 # ── Подкоманда: check ─────────────────────────────────────────────────────────
@@ -280,7 +280,7 @@ cmd_check() {
     VPS1_KEY="$(prepare_key_for_ssh "$VPS1_KEY")"
     trap cleanup_temp_keys EXIT
 
-    local check_script="${SCRIPT_DIR}/check_ping.sh"
+    local check_script="${SCRIPT_DIR}/scripts/tools/check_ping.sh"
     [[ -f "$check_script" ]] || err "Не найден скрипт: $check_script"
 
     log "Загружаю check_ping.sh на VPS1 (${VPS1_IP})..."

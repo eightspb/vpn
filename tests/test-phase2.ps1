@@ -16,21 +16,21 @@ try {
 } finally { Pop-Location }
 
 Write-Host ""
-Write-Host "=== Phase 2: MTU in deploy-vps1.sh ==="
-$vps1 = Get-Content deploy-vps1.sh -Raw
+Write-Host "=== Phase 2: MTU in scripts/deploy/deploy-vps1.sh ==="
+$vps1 = Get-Content scripts/deploy/deploy-vps1.sh -Raw
 if ($vps1 -match "MTU = 1320" -and $vps1 -match "MTU = 1280") {
-    Write-Host "OK: deploy-vps1.sh has MTU for awg0 and awg1"
+    Write-Host "OK: scripts/deploy/deploy-vps1.sh has MTU for awg0 and awg1"
 } else {
-    Write-Host "FAIL: deploy-vps1.sh expected MTU = 1320 and MTU = 1280"
+    Write-Host "FAIL: scripts/deploy/deploy-vps1.sh expected MTU = 1320 and MTU = 1280"
     $fail = 1
 }
 
 Write-Host ""
-Write-Host "=== Phase 2: MTU in deploy-vps2.sh ==="
-if ((Get-Content deploy-vps2.sh -Raw) -match "MTU = 1280") {
-    Write-Host "OK: deploy-vps2.sh has MTU for awg0"
+Write-Host "=== Phase 2: MTU in scripts/deploy/deploy-vps2.sh ==="
+if ((Get-Content scripts/deploy/deploy-vps2.sh -Raw) -match "MTU = 1280") {
+    Write-Host "OK: scripts/deploy/deploy-vps2.sh has MTU for awg0"
 } else {
-    Write-Host "FAIL: deploy-vps2.sh expected MTU = 1280"
+    Write-Host "FAIL: scripts/deploy/deploy-vps2.sh expected MTU = 1280"
     $fail = 1
 }
 
