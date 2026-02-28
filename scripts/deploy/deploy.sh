@@ -22,7 +22,7 @@
 #   --vps2-key      Путь к SSH ключу для VPS2
 #   --vps2-pass     Пароль для VPS2 (если нет ключа)
 #   --client-ip     IP клиента в VPN сети (default: 10.9.0.2)
-#   --adguard-pass  Пароль для AdGuard Home Web UI (default: admin123)
+#   --adguard-pass  Пароль для AdGuard Home Web UI (обязательный, без дефолта)
 #   --output-dir    Куда сохранить клиентский конфиг (default: ./vpn-output)
 #   --with-proxy    Задеплоить YouTube Ad Proxy на VPS2 (DNS + HTTPS фильтр)
 #   --remove-adguard  Удалить AdGuard Home (только с --with-proxy)
@@ -54,12 +54,13 @@ step() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
 VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
 VPS2_IP=""; VPS2_USER="root"; VPS2_KEY=""; VPS2_PASS=""
 CLIENT_VPN_IP="10.9.0.2"
-ADGUARD_PASS="admin123"
+ADGUARD_PASS=""
 OUTPUT_DIR="./vpn-output"
 WITH_PROXY=false
 REMOVE_ADGUARD=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECURITY_UPDATE_SCRIPT="${SCRIPT_DIR}/security-update.sh"
+SECURITY_HARDEN_SCRIPT="${SCRIPT_DIR}/security-harden.sh"
 
 # Внутренняя адресация (менять не нужно)
 TUN_NET="10.8.0"       # VPS1=10.8.0.1, VPS2=10.8.0.2
@@ -100,7 +101,7 @@ done
 # ── SSH хелперы ────────────────────────────────────────────────────────────
 ssh_cmd() {
     local ip=$1; local user=$2; local key=$3; local pass=$4
-    local opts="-o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no"
+    local opts="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no"
     if [[ -n "$key" ]]; then
         echo "ssh -T -i $key $opts ${user}@${ip}"
     else
@@ -113,17 +114,17 @@ run2() { eval "$(ssh_cmd $VPS2_IP $VPS2_USER "$VPS2_KEY" "$VPS2_PASS")" "$@" 2>&
 
 upload1() { local f=$1; local dst=${2:-/tmp/$(basename $f)}
     if [[ -n "$VPS1_KEY" ]]; then
-        scp -i "$VPS1_KEY" -o StrictHostKeyChecking=no "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        scp -i "$VPS1_KEY" -o StrictHostKeyChecking=accept-new "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS1_PASS" scp -o StrictHostKeyChecking=no "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        sshpass -p "$VPS1_PASS" scp -o StrictHostKeyChecking=accept-new "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     fi
 }
 
 upload2() { local f=$1; local dst=${2:-/tmp/$(basename $f)}
     if [[ -n "$VPS2_KEY" ]]; then
-        scp -i "$VPS2_KEY" -o StrictHostKeyChecking=no "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
+        scp -i "$VPS2_KEY" -o StrictHostKeyChecking=accept-new "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS2_PASS" scp -o StrictHostKeyChecking=no "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
+        sshpass -p "$VPS2_PASS" scp -o StrictHostKeyChecking=accept-new "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
     fi
 }
 
@@ -181,6 +182,9 @@ echo ""
 
 mkdir -p "$OUTPUT_DIR"
 [[ -f "$SECURITY_UPDATE_SCRIPT" ]] || err "Не найден скрипт обновлений: $SECURITY_UPDATE_SCRIPT"
+[[ -f "$SECURITY_HARDEN_SCRIPT" ]] || err "Не найден скрипт hardening: $SECURITY_HARDEN_SCRIPT"
+[[ -z "$ADGUARD_PASS" ]] && err "Укажите --adguard-pass (пароль для AdGuard Home). Пароль admin123 запрещён."
+[[ "$ADGUARD_PASS" == "admin123" ]] && err "Пароль admin123 слишком слабый. Укажите надёжный пароль через --adguard-pass"
 
 # ── Шаг 1: Проверка подключения ────────────────────────────────────────────
 step "Шаг 1/8: Проверка SSH подключений"
@@ -207,6 +211,18 @@ log "Обновляю VPS2 (upgrade/dist-upgrade)..."
 upload2 "$SECURITY_UPDATE_SCRIPT" /tmp/security-update.sh >/dev/null
 run2 "sudo bash /tmp/security-update.sh" | tail -6
 ok "Обновления безопасности применены на VPS2"
+
+step "Шаг 2.5/8: Security hardening на VPS1 и VPS2"
+
+log "Hardening VPS1..."
+upload1 "$SECURITY_HARDEN_SCRIPT" /tmp/security-harden.sh >/dev/null
+run1 "sudo bash /tmp/security-harden.sh --role vps1 --vpn-port ${VPS1_PORT_CLIENTS} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24" | tail -12
+ok "VPS1 hardening завершён"
+
+log "Hardening VPS2..."
+upload2 "$SECURITY_HARDEN_SCRIPT" /tmp/security-harden.sh >/dev/null
+run2 "sudo bash /tmp/security-harden.sh --role vps2 --vpn-port ${VPS2_PORT} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24 --adguard-bind ${TUN_NET}.2" | tail -12
+ok "VPS2 hardening завершён"
 
 # ── Шаг 3: Генерация ключей на VPS1 ───────────────────────────────────────
 step "Шаг 3/8: Генерация WireGuard ключей"
@@ -549,7 +565,7 @@ import bcrypt, sys
 pw = sys.argv[1].encode()
 print(bcrypt.hashpw(pw, bcrypt.gensalt(10)).decode())
 " "$ADGUARD_PASS" 2>/dev/null) || \
-AGH_PASS_HASH='$2y$10$cs5qBaGHMHBqXMnMIzNQxuGsGfSr5pFGELMXe2WpJeJGPBmvJIXXi'  # admin123
+err "Не удалось сгенерировать bcrypt-хэш пароля. Установите python3-bcrypt: pip3 install bcrypt"
 
 run_script2 "
 export DEBIAN_FRONTEND=noninteractive
@@ -577,13 +593,14 @@ sleep 1
 # Конфиг
 cat > /opt/AdGuardHome/AdGuardHome.yaml << 'AGHEOF'
 http:
-  address: 0.0.0.0:3000
+  address: ${TUN_NET}.2:3000
 users:
   - name: admin
     password: '${AGH_PASS_HASH}'
 dns:
   bind_hosts:
-    - 0.0.0.0
+    - ${TUN_NET}.2
+    - 127.0.0.1
   port: 53
   upstream_dns:
     - https://dns.cloudflare.com/dns-query

@@ -36,6 +36,7 @@ CLIENT_VPN_IP="10.9.0.2"
 OUTPUT_DIR="./vpn-output"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECURITY_UPDATE_SCRIPT="${SCRIPT_DIR}/security-update.sh"
+SECURITY_HARDEN_SCRIPT="${SCRIPT_DIR}/security-harden.sh"
 
 TUN_NET="10.8.0"
 CLIENT_NET="10.9.0"
@@ -65,7 +66,7 @@ done
 
 ssh_cmd() {
     local ip=$1; local user=$2; local key=$3; local pass=$4
-    local opts="-o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no"
+    local opts="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no"
     if [[ -n "$key" ]]; then
         echo "ssh -T -i $key $opts ${user}@${ip}"
     else
@@ -78,9 +79,9 @@ run1() { eval "$(ssh_cmd $VPS1_IP $VPS1_USER "$VPS1_KEY" "$VPS1_PASS")" "$@" 2>&
 upload1() {
     local f=$1; local dst=${2:-/tmp/$(basename $f)}
     if [[ -n "$VPS1_KEY" ]]; then
-        scp -i "$VPS1_KEY" -o StrictHostKeyChecking=no "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        scp -i "$VPS1_KEY" -o StrictHostKeyChecking=accept-new "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS1_PASS" scp -o StrictHostKeyChecking=no "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        sshpass -p "$VPS1_PASS" scp -o StrictHostKeyChecking=accept-new "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     fi
 }
 
@@ -115,6 +116,7 @@ echo ""
 mkdir -p "$OUTPUT_DIR"
 check_deps
 [[ -f "$SECURITY_UPDATE_SCRIPT" ]] || err "Не найден скрипт обновлений: $SECURITY_UPDATE_SCRIPT"
+[[ -f "$SECURITY_HARDEN_SCRIPT" ]] || err "Не найден скрипт hardening: $SECURITY_HARDEN_SCRIPT"
 
 step "Шаг 1/5: Проверка SSH к VPS1"
 VPS1_OS=$(run1 "cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'") \
@@ -125,6 +127,11 @@ step "Шаг 2/5: Обновления безопасности на VPS1"
 upload1 "$SECURITY_UPDATE_SCRIPT" /tmp/security-update.sh >/dev/null
 run1 "sudo bash /tmp/security-update.sh" | tail -6
 ok "Обновления безопасности применены на VPS1"
+
+step "Шаг 2.5/5: Security hardening на VPS1"
+upload1 "$SECURITY_HARDEN_SCRIPT" /tmp/security-harden.sh >/dev/null
+run1 "sudo bash /tmp/security-harden.sh --role vps1 --vpn-port ${VPS1_PORT_CLIENTS} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24" | tail -12
+ok "VPS1 hardening завершён"
 
 step "Шаг 3/5: Генерация WireGuard ключей на VPS1"
 KEYS=$(run_script1 '

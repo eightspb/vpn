@@ -13,7 +13,7 @@
 #   --vps2-key      Путь к SSH ключу для VPS2
 #   --vps2-pass     Пароль для VPS2 (если нет ключа)
 #   --keys-file     Путь к keys.env (создаётся deploy-vps1.sh)
-#   --adguard-pass  Пароль AdGuard Home Web UI (default: admin123)
+#   --adguard-pass  Пароль AdGuard Home Web UI (обязательный, без дефолта)
 #   --help          Справка
 # =============================================================================
 
@@ -30,9 +30,10 @@ step() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
 
 VPS2_IP=""; VPS2_USER="root"; VPS2_KEY=""; VPS2_PASS=""
 KEYS_FILE=""
-ADGUARD_PASS="admin123"
+ADGUARD_PASS=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECURITY_UPDATE_SCRIPT="${SCRIPT_DIR}/security-update.sh"
+SECURITY_HARDEN_SCRIPT="${SCRIPT_DIR}/security-harden.sh"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -67,7 +68,7 @@ VPS2_PORT="${VPS2_PORT:-51820}"
 
 ssh_cmd() {
     local ip=$1; local user=$2; local key=$3; local pass=$4
-    local opts="-o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no"
+    local opts="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no"
     if [[ -n "$key" ]]; then
         echo "ssh -T -i $key $opts ${user}@${ip}"
     else
@@ -80,9 +81,9 @@ run2() { eval "$(ssh_cmd $VPS2_IP $VPS2_USER "$VPS2_KEY" "$VPS2_PASS")" "$@" 2>&
 upload2() {
     local f=$1; local dst=${2:-/tmp/$(basename $f)}
     if [[ -n "$VPS2_KEY" ]]; then
-        scp -i "$VPS2_KEY" -o StrictHostKeyChecking=no "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
+        scp -i "$VPS2_KEY" -o StrictHostKeyChecking=accept-new "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS2_PASS" scp -o StrictHostKeyChecking=no "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
+        sshpass -p "$VPS2_PASS" scp -o StrictHostKeyChecking=accept-new "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
     fi
 }
 
@@ -115,6 +116,9 @@ echo ""
 
 check_deps
 [[ -f "$SECURITY_UPDATE_SCRIPT" ]] || err "Не найден скрипт обновлений: $SECURITY_UPDATE_SCRIPT"
+[[ -f "$SECURITY_HARDEN_SCRIPT" ]] || err "Не найден скрипт hardening: $SECURITY_HARDEN_SCRIPT"
+[[ -z "$ADGUARD_PASS" ]] && err "Укажите --adguard-pass (пароль для AdGuard Home). Пароль admin123 запрещён."
+[[ "$ADGUARD_PASS" == "admin123" ]] && err "Пароль admin123 слишком слабый. Укажите надёжный пароль через --adguard-pass"
 
 step "Шаг 1/4: Проверка SSH к VPS2"
 VPS2_OS=$(run2 "cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'") \
@@ -125,6 +129,11 @@ step "Шаг 2/4: Обновления безопасности на VPS2"
 upload2 "$SECURITY_UPDATE_SCRIPT" /tmp/security-update.sh >/dev/null
 run2 "sudo bash /tmp/security-update.sh" | tail -6
 ok "Обновления безопасности применены на VPS2"
+
+step "Шаг 2.5/4: Security hardening на VPS2"
+upload2 "$SECURITY_HARDEN_SCRIPT" /tmp/security-harden.sh >/dev/null
+run2 "sudo bash /tmp/security-harden.sh --role vps2 --vpn-port ${VPS2_PORT} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24 --adguard-bind ${TUN_NET}.2" | tail -12
+ok "VPS2 hardening завершён"
 
 step "Шаг 3/4: Установка и настройка AmneziaWG на VPS2"
 INSTALL_AWG='
@@ -253,7 +262,7 @@ import bcrypt, sys
 pw = sys.argv[1].encode()
 print(bcrypt.hashpw(pw, bcrypt.gensalt(10)).decode())
 " "$ADGUARD_PASS" 2>/dev/null) || \
-AGH_PASS_HASH='$2y$10$cs5qBaGHMHBqXMnMIzNQxuGsGfSr5pFGELMXe2WpJeJGPBmvJIXXi'
+err "Не удалось сгенерировать bcrypt-хэш пароля. Установите python3-bcrypt: pip3 install bcrypt"
 
 run_script2 "
 export DEBIAN_FRONTEND=noninteractive
@@ -277,13 +286,14 @@ sleep 1
 
 cat > /opt/AdGuardHome/AdGuardHome.yaml << 'AGHEOF'
 http:
-  address: 0.0.0.0:3000
+  address: ${TUN_NET}.2:3000
 users:
   - name: admin
     password: '${AGH_PASS_HASH}'
 dns:
   bind_hosts:
-    - 0.0.0.0
+    - ${TUN_NET}.2
+    - 127.0.0.1
   port: 53
   upstream_dns:
     - https://dns.cloudflare.com/dns-query

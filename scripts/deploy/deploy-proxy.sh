@@ -38,8 +38,8 @@ if [[ -z "$VPS2_IP" || -z "$VPS2_KEY" ]]; then
     exit 1
 fi
 
-SSH="ssh -i $VPS2_KEY -o StrictHostKeyChecking=no root@$VPS2_IP"
-SCP="scp -i $VPS2_KEY -o StrictHostKeyChecking=no"
+SSH="ssh -i $VPS2_KEY -o StrictHostKeyChecking=accept-new root@$VPS2_IP"
+SCP="scp -i $VPS2_KEY -o StrictHostKeyChecking=accept-new"
 
 echo ""
 echo "=== YouTube Proxy Deploy ==="

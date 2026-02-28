@@ -233,7 +233,13 @@ bash manage.sh <команда> [опции]
 | `deploy --proxy` | Только YouTube Ad Proxy |
 | `monitor` | Реалтайм-монитор в терминале |
 | `monitor --web` | Веб-дашборд на http://localhost:8080 |
-| `add-peer` | Добавить новый WireGuard-пир |
+| `peers add` | Добавить пира (с выбором типа, режима, QR) |
+| `peers batch` | Массовое создание пиров (из CSV или по шаблону) |
+| `peers list` | Показать все пиры с трафиком и handshake |
+| `peers remove` | Удалить пира по имени или IP |
+| `peers export` | Экспортировать конфиг / QR-код |
+| `peers info` | Лимиты и статистика подсети |
+| `add-peer` | Добавить пир (legacy, см. `peers add`) |
 | `check` | Проверить связность VPN-цепочки |
 | `help` | Справка |
 
@@ -256,8 +262,14 @@ bash manage.sh deploy \
 bash manage.sh monitor
 bash manage.sh monitor --web
 
-# Добавить пир
-bash manage.sh add-peer --peer-name tablet
+# Добавить пир (новый способ)
+bash manage.sh peers add --name tablet --type tablet --qr
+
+# Массовое создание 50 пиров
+bash manage.sh peers batch --prefix user --count 50
+
+# Список пиров
+bash manage.sh peers list
 
 # Проверить связность
 bash manage.sh check
@@ -268,7 +280,7 @@ bash manage.sh deploy --help
 
 ## Деплой (полный и по отдельности)
 
-Все деплой-скрипты автоматически запускают security-обновления через `security-update.sh`.
+Все деплой-скрипты автоматически запускают security-обновления (`security-update.sh`) и hardening (`security-harden.sh`).
 
 **Полный деплой (VPN + YouTube Ad Proxy):**
 ```bash
@@ -300,32 +312,90 @@ bash manage.sh deploy --vps1 --vps1-ip ... --vps1-key ... --vps2-ip ...
 bash manage.sh deploy --vps2 --vps2-ip ... --vps2-key ... --keys-file ./vpn-output/keys.env
 ```
 
-## Добавление нового пира (устройства)
+## Управление пирами (устройствами)
+
+### Быстрое добавление одного устройства
 
 ```bash
-# Через manage.sh (рекомендуется)
-bash manage.sh add-peer
-bash manage.sh add-peer --peer-name tablet --peer-ip 10.9.0.5
+# Добавить телефон (автоопределение IP, MTU=1280)
+bash manage.sh peers add --name myphone --type phone
 
-# Напрямую
-bash scripts/tools/add_phone_peer.sh
+# Добавить ноутбук с QR-кодом в терминале (MTU=1360)
+bash manage.sh peers add --name laptop --type pc --qr
 
-# С явными параметрами
-bash scripts/tools/add_phone_peer.sh \
-  --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
-  --peer-name tablet --peer-ip 10.9.0.5
+# Добавить роутер с конкретным IP (MTU=1400)
+bash manage.sh peers add --name router-home --type router --ip 10.9.0.100
 
-# Опции:
-#   --vps1-ip IP          IP-адрес VPS1 (или из .env VPS1_IP)
-#   --vps1-user USER      SSH-пользователь (default: root)
-#   --vps1-key PATH       SSH-ключ
-#   --peer-ip IP          IP нового пира (default: автоопределение)
-#   --peer-name NAME      Имя пира (default: phone)
-#   --tun-net NET         Сеть туннеля без последнего октета (default: 10.9.0)
-#   --output-dir DIR      Директория для конфига (default: ./vpn-output)
+# Добавить с split tunnel (RU напрямую)
+bash manage.sh peers add --name work-pc --type pc --mode split
+
+# Создать оба конфига (full + split)
+bash manage.sh peers add --name ipad --type tablet --mode both --qr-png
 ```
 
-Скрипт генерирует ключи на сервере, добавляет пира в `awg1` без перезапуска и сохраняет клиентский конфиг в `vpn-output/peer_<name>_<ip>.conf`.
+### Массовое создание пиров
+
+```bash
+# 50 устройств с префиксом "user" (user-001, user-002, ...)
+bash manage.sh peers batch --prefix user --count 50 --type phone
+
+# 100 устройств с QR-кодами в PNG
+bash manage.sh peers batch --prefix employee --count 100 --type phone --qr-png
+
+# Из CSV-файла
+bash manage.sh peers batch --file devices.csv
+```
+
+Формат CSV:
+```
+name,type,mode,ip
+laptop-anna,pc,full,
+phone-boris,phone,split,
+router-office,router,full,10.9.0.100
+```
+
+### Просмотр и управление
+
+```bash
+# Список всех пиров с трафиком и handshake
+bash manage.sh peers list
+
+# Подробный список (полные ключи)
+bash manage.sh peers list --verbose
+
+# Информация о подсети и лимитах
+bash manage.sh peers info
+
+# Удалить пира
+bash manage.sh peers remove --name laptop
+bash manage.sh peers remove --ip 10.9.0.5 --force
+
+# Экспортировать конфиг / QR
+bash manage.sh peers export --name myphone --qr
+bash manage.sh peers export --name myphone --mode split --qr-png
+```
+
+### Типы устройств
+
+| Тип | MTU | Примеры |
+|-----|-----|---------|
+| `pc`, `desktop`, `laptop`, `computer` | 1360 | Windows, macOS, Linux |
+| `phone`, `mobile`, `tablet`, `ios`, `android` | 1280 | iPhone, Android, iPad |
+| `router`, `mikrotik`, `openwrt` | 1400 | Домашний роутер |
+
+### Лимиты подключений
+
+- **Текущая подсеть:** `10.9.0.0/24` — до **252 устройств** (IP .3 — .254)
+- **Расширение:** при необходимости подсеть можно расширить до `/16` (65 534 устройства)
+- WireGuard/AmneziaWG не имеет жёсткого лимита на количество пиров
+- Все конфиги и ключи хранятся в `vpn-output/peers.json`
+
+### Legacy: add-peer (старый способ)
+
+```bash
+bash manage.sh add-peer
+bash manage.sh add-peer --peer-name tablet --peer-ip 10.9.0.5
+```
 
 ## Мониторинг
 
@@ -416,6 +486,20 @@ bash tests/test-proxy-fix.sh
 ```bash
 # Linux / WSL
 bash tests/test-load-test.sh
+```
+
+Проверка скрипта управления пирами (manage-peers.sh: команды, парсинг, шаблоны, DB, CSV, типы устройств):
+
+```bash
+# Linux / WSL
+bash tests/test-manage-peers.sh
+```
+
+Проверка security hardening (fail2ban, SSH hardening, iptables DROP, rkhunter, CPU watchdog, пароли):
+
+```bash
+# Linux / WSL
+bash tests/test-security-harden.sh
 ```
 
 ## Оптимизация производительности
@@ -563,6 +647,71 @@ powershell -ExecutionPolicy Bypass -File repair-local-configs.ps1
 - пересобирает локальные `client.conf` и `phone.conf` под текущий сервер;
 - делает финальную валидацию через `awg show awg1 allowed-ips`.
 
+
+## Безопасность
+
+### Автоматический hardening при деплое
+
+Все deploy-скрипты автоматически запускают `security-harden.sh`, который настраивает:
+
+| Компонент | Что делает |
+|-----------|-----------|
+| **fail2ban** | Блокирует IP после 3 неудачных SSH-попыток на 1 час |
+| **unattended-upgrades** | Ежедневные автоматические security-обновления |
+| **SSH hardening** | `PermitRootLogin prohibit-password`, `PasswordAuthentication no`, `MaxAuthTries 3` |
+| **iptables default DROP** | Политика DROP для INPUT/FORWARD, только явно разрешённые порты |
+| **iptables-persistent** | Правила файрвола сохраняются после перезагрузки |
+| **rkhunter** | Ежедневный скан на руткиты и майнеры |
+| **CPU watchdog** | Каждые 5 мин проверяет CPU >80% и логирует подозрительные процессы |
+| **Kernel hardening** | SYN flood protection, ICMP redirect blocking, martian packet logging |
+| **DROP logging** | Отброшенные пакеты логируются с префиксом `IPT_DROP:` |
+| **SSH rate limiting** | iptables блокирует >6 новых SSH-подключений за 60 сек |
+
+### SSH host key verification
+
+Все SSH-подключения используют `StrictHostKeyChecking=accept-new` — ключ сервера принимается при первом подключении и сохраняется. При изменении ключа (MITM-атака) подключение будет отклонено.
+
+### AdGuard Home
+
+AdGuard Home Web UI слушает только на VPN-интерфейсе (`10.8.0.2:3000`), недоступен из публичного интернета. Пароль по умолчанию отсутствует — обязательно указывать `--adguard-pass` при деплое.
+
+### Ручной запуск hardening
+
+```bash
+# На сервере (VPS1)
+sudo bash /tmp/security-harden.sh --role vps1 --vpn-port 51820
+
+# На сервере (VPS2)
+sudo bash /tmp/security-harden.sh --role vps2 --vpn-port 51820 --adguard-bind 10.8.0.2
+```
+
+### Проверка безопасности
+
+```bash
+# Статус fail2ban
+sudo fail2ban-client status sshd
+
+# Заблокированные IP
+sudo fail2ban-client status sshd | grep "Banned IP"
+
+# Логи отброшенных пакетов
+sudo journalctl -k | grep IPT_DROP | tail -20
+
+# Логи CPU watchdog
+cat /var/log/cpu-watchdog.log
+
+# Результаты rkhunter
+cat /var/log/rkhunter-daily.log | grep Warning
+
+# Статус автообновлений
+sudo systemctl status unattended-upgrades
+```
+
+### Тесты безопасности
+
+```bash
+bash tests/test-security-harden.sh
+```
 
 ## Отдельный запуск security-обновлений
 

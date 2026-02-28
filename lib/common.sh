@@ -184,7 +184,7 @@ cleanup_temp_keys() {
 ssh_exec() {
     local ip="$1" user="$2" key="$3" pass="$4" cmd="$5"
     local timeout="${6:-30}"
-    local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+    local ssh_opts=(-o StrictHostKeyChecking=accept-new
                     -o BatchMode=no -o ConnectTimeout="$timeout")
     ip="$(clean_value "$ip")"
     user="$(clean_value "$user")"
@@ -205,7 +205,7 @@ ssh_exec() {
 ssh_upload() {
     local local_file="$1" ip="$2" user="$3" key="$4" pass="$5"
     local dst="${6:-/tmp/$(basename "$local_file")}"
-    local scp_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+    local scp_opts=(-o StrictHostKeyChecking=accept-new)
     key="$(expand_tilde "$key")"
 
     if [[ -n "$key" && -f "$key" ]]; then

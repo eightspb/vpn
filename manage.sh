@@ -9,6 +9,7 @@
 #   deploy      Деплой VPN (полный или по частям)
 #   monitor     Мониторинг серверов (реалтайм или веб-дашборд)
 #   add-peer    Добавить новый WireGuard-пир на VPS1
+#   peers       Управление пирами (add/batch/list/remove/export/info)
 #   check       Проверить связность VPN-цепочки
 #   help        Показать эту справку
 #
@@ -22,6 +23,9 @@
 #   bash manage.sh monitor --web
 #   bash manage.sh add-peer
 #   bash manage.sh add-peer --peer-name tablet --peer-ip 10.9.0.5
+#   bash manage.sh peers add --name laptop --type pc --qr
+#   bash manage.sh peers batch --prefix user --count 50
+#   bash manage.sh peers list
 #   bash manage.sh check
 # =============================================================================
 
@@ -50,7 +54,8 @@ manage.sh — управление VPN-инфраструктурой (AmneziaWG
 Команды:
   deploy      Деплой VPN (полный или по частям)
   monitor     Мониторинг серверов
-  add-peer    Добавить новый WireGuard-пир
+  add-peer    Добавить новый WireGuard-пир (legacy)
+  peers       Управление пирами (add/batch/list/remove/export/info)
   check       Проверить связность VPN-цепочки
   help        Показать эту справку
 
@@ -290,6 +295,18 @@ cmd_check() {
     ssh_exec "$VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS" "sudo bash $SCRIPT_REMOTE_PATH"
 }
 
+# ── Подкоманда: peers ─────────────────────────────────────────────────────────
+
+cmd_peers() {
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        bash "${SCRIPT_DIR}/scripts/tools/manage-peers.sh" help
+        return 0
+    fi
+
+    log "Запуск управления пирами (manage-peers.sh)..."
+    bash "${SCRIPT_DIR}/scripts/tools/manage-peers.sh" "$@"
+}
+
 # ── Диспетчер команд ──────────────────────────────────────────────────────────
 
 COMMAND="${1:-help}"
@@ -299,6 +316,7 @@ case "$COMMAND" in
     deploy)     cmd_deploy   "$@" ;;
     monitor)    cmd_monitor  "$@" ;;
     add-peer)   cmd_add_peer "$@" ;;
+    peers)      cmd_peers    "$@" ;;
     check)      cmd_check    "$@" ;;
     help|--help|-h) usage_main ;;
     *)
