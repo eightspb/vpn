@@ -12,6 +12,7 @@
 #   add-peer    Добавить новый WireGuard-пир на VPS1
 #   peers       Управление пирами (add/batch/list/remove/export/info)
 #   check       Проверить связность VPN-цепочки
+#   audit       Аудит безопасности и эффективности (read-only)
 #   help        Показать эту справку
 #
 # Примеры:
@@ -28,6 +29,7 @@
 #   bash manage.sh peers batch --prefix user --count 50
 #   bash manage.sh peers list
 #   bash manage.sh check
+#   bash manage.sh audit
 # =============================================================================
 
 set -euo pipefail
@@ -59,6 +61,7 @@ manage.sh — управление VPN-инфраструктурой (AmneziaWG
   add-peer    Добавить новый WireGuard-пир (legacy)
   peers       Управление пирами (add/batch/list/remove/export/info)
   check       Проверить связность VPN-цепочки
+  audit       Аудит безопасности и эффективности (read-only)
   help        Показать эту справку
 
 Запустите "bash manage.sh <команда> --help" для подробной справки по команде.
@@ -172,6 +175,22 @@ manage.sh check — проверить связность VPN-цепочки
 Примеры:
   bash manage.sh check
   bash manage.sh check --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349
+EOF
+}
+
+usage_audit() {
+    cat <<'EOF'
+manage.sh audit — аудит безопасности и эффективности (read-only)
+
+Опции:
+  --strict        завершиться с ошибкой при critical/high
+  --with-servers  добавить read-only проверки VPS по SSH
+  --output FILE   сохранить отчёт в файл
+
+Примеры:
+  bash manage.sh audit
+  bash manage.sh audit --strict
+  bash manage.sh audit --with-servers --output ./vpn-output/audit-report.txt
 EOF
 }
 
@@ -346,6 +365,16 @@ cmd_check() {
     ssh_exec "$VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS" "sudo bash $SCRIPT_REMOTE_PATH"
 }
 
+# ── Подкоманда: audit ─────────────────────────────────────────────────────────
+
+cmd_audit() {
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        usage_audit; return 0
+    fi
+    log "Запуск аудита безопасности/эффективности (audit-security-efficiency.sh)..."
+    bash "${SCRIPT_DIR}/scripts/tools/audit-security-efficiency.sh" "$@"
+}
+
 # ── Подкоманда: peers ─────────────────────────────────────────────────────────
 
 cmd_peers() {
@@ -370,6 +399,7 @@ case "$COMMAND" in
     add-peer)   cmd_add_peer "$@" ;;
     peers)      cmd_peers    "$@" ;;
     check)      cmd_check    "$@" ;;
+    audit)      cmd_audit    "$@" ;;
     help|--help|-h) usage_main ;;
     *)
         echo -e "${RED}Неизвестная команда: ${COMMAND}${NC}" >&2

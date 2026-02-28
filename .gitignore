@@ -35,3 +35,8 @@ scripts/admin/admin.db
 scripts/admin/admin.pid
 scripts/admin/admin.log
 scripts/admin/.venv/
+scripts/admin/__pycache__/
+
+# Python cache artifacts
+__pycache__/
+*.pyc
