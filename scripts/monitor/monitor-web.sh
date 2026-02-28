@@ -116,10 +116,24 @@ expand_tilde() {
     fi
 }
 
+LOG_MAX_BYTES=2097152  # 2 MB
+
+rotate_log_if_needed() {
+    [[ ! -f "$LOG_FILE" ]] && return
+    local sz
+    sz="$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)"
+    if [[ "$sz" -ge "$LOG_MAX_BYTES" ]]; then
+        mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null || true
+        : > "$LOG_FILE"
+    fi
+}
+
 log_line() {
     local level="$1" msg="$2" ts
+    [[ "$level" == "DEBUG" && "$LOG_LEVEL" != "DEBUG" ]] && return
     ts="$(date '+%Y-%m-%d %H:%M:%S')"
     printf "[%s] [%s] %s\n" "$ts" "$level" "$msg" >> "$LOG_FILE"
+    rotate_log_if_needed
 }
 
 set_last_error() {
@@ -214,7 +228,7 @@ ssh_exec() {
 }
 
 # ---------------------------------------------------------------------------
-# Remote data collection  (TOP_CONN uses %s — no eval needed)
+# Remote data collection
 # ---------------------------------------------------------------------------
 
 collect_vps1() {
@@ -229,8 +243,6 @@ RX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]
 TX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
 TCP_EST=\$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=\$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
-TOP_CONN=\$(ss -Htn state established 2>/dev/null | awk '{print \$NF}' | sed 's/\[//g; s/\]//g' | awk -F: 'NF>1{NF--; print}' OFS=: | sort | uniq -c | sort -nr | head -3 | awk '{printf "%s(%s) ", \$2, \$1}')
-[[ -z "\$TOP_CONN" ]] && TOP_CONN="none"
 AWG0=\$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
 AWG1=\$(sudo systemctl is-active awg-quick@awg1 2>/dev/null || echo unknown)
 HS0=\$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0) print systime()-\$2; else print -1}')
@@ -242,9 +254,6 @@ A1_ACTIVE=\$(sudo awg show awg1 latest-handshakes 2>/dev/null | awk '\$2>0 && (s
 P0=\$(sudo awg show awg0 peers 2>/dev/null | wc -w | tr -d ' ')
 P1=\$(sudo awg show awg1 peers 2>/dev/null | wc -w | tr -d ' ')
 if ping -c 1 -W 1 -I awg0 "${VPS2_TUN_IP}" >/dev/null 2>&1; then TUN_PING=ok; else TUN_PING=fail; fi
-TCP_CONNS=\$(ss -Htn state established 2>/dev/null | awk 'NF>=2{print "tcp|"\$(NF-1)"|"\$NF}' | head -16)
-UDP_CONNS=\$(ss -Hun 2>/dev/null | awk 'NF>=2 && \$NF !~ /(\*|0\.0\.0\.0|127\.0\.0\.1|\[::\])/ {print "udp|"\$(NF-1)"|"\$NF}' | head -16)
-CONNS=\$(printf "%s\n%s\n" "\$TCP_CONNS" "\$UDP_CONNS" | sed '/^$/d' | tr '\n' ',')
 CPUS=\$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
 UPTIME_S=\$(awk '{print int(\$1)}' /proc/uptime 2>/dev/null || echo 0)
 CPU_MHZ=\$(awk '/cpu MHz/{sum+=\$4; n++} END{if(n>0) printf "%.0f", sum/n; else print 0}' /proc/cpuinfo 2>/dev/null || echo 0)
@@ -259,7 +268,6 @@ echo "RX=\${RX:-0}"
 echo "TX=\${TX:-0}"
 echo "TCP_EST=\${TCP_EST:-0}"
 echo "UDP_CONN=\${UDP_CONN:-0}"
-printf "TOP_CONN=%s\n" "\${TOP_CONN:-none}"
 echo "AWG0=\$AWG0"
 echo "AWG1=\$AWG1"
 echo "HS0=\$HS0"
@@ -268,12 +276,26 @@ echo "A1_ACTIVE=\$A1_ACTIVE"
 echo "P0=\$P0"
 echo "P1=\$P1"
 echo "TUN_PING=\$TUN_PING"
-echo "CONNS=\${CONNS}"
 echo "CPUS=\${CPUS:-1}"
 echo "UPTIME_S=\${UPTIME_S:-0}"
 echo "CPU_MHZ=\${CPU_MHZ:-0}"
 echo "MEM_FREE=\${MEM_FREE:-0}"
 echo "SWAP=\${SWAP_RAW:-0/0MB}"
+echo "RX_TOTAL=\${RX:-0}"
+echo "TX_TOTAL=\${TX:-0}"
+MEM_TOTAL_KB=\$(awk '/MemTotal/ {print \$2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_AVAIL_KB=\$(awk '/MemAvailable/ {print \$2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_BUFFERS_KB=\$(awk '/Buffers/ {print \$2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_CACHED_KB=\$(awk '/^Cached/ {print \$2}' /proc/meminfo 2>/dev/null || echo 0)
+echo "MEM_AVAIL=\$(( MEM_AVAIL_KB / 1024 ))"
+echo "MEM_BUFFERS=\$(( MEM_BUFFERS_KB / 1024 ))"
+echo "MEM_CACHED=\$(( MEM_CACHED_KB / 1024 ))"
+DISK_INODES=\$(df -i / 2>/dev/null | awk 'NR==2 {print \$5}')
+echo "DISK_INODES=\${DISK_INODES:-0%}"
+PROC_COUNT=\$(ps aux 2>/dev/null | wc -l | tr -d ' ')
+echo "PROC_COUNT=\${PROC_COUNT:-0}"
+OPEN_FILES=\$(cat /proc/sys/fs/file-nr 2>/dev/null | awk '{print \$1}')
+echo "OPEN_FILES=\${OPEN_FILES:-0}"
 EOF
 )
     ssh_exec "VPS1" "$CURRENT_VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS" "$remote_cmd"
@@ -291,8 +313,6 @@ RX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i
 TX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
 TCP_EST=$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
-TOP_CONN=$(ss -Htn state established 2>/dev/null | awk '{print $NF}' | sed 's/\[//g; s/\]//g' | awk -F: 'NF>1{NF--; print}' OFS=: | sort | uniq -c | sort -nr | head -3 | awk '{printf "%s(%s) ", $2, $1}')
-[[ -z "$TOP_CONN" ]] && TOP_CONN="none"
 AWG0=$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
 HS0=$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if ($2>0) print systime()-$2; else print -1}')
 [[ -z "$HS0" ]] && HS0=-1
@@ -307,9 +327,6 @@ fi
 if ss -lunt 2>/dev/null | grep -qE ':53[[:space:]]'; then DNS53=up; else DNS53=down; fi
 if ss -lnt 2>/dev/null | grep -qE ':3000[[:space:]]'; then WEB3000=up; else WEB3000=down; fi
 if ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; then WAN_PING=ok; else WAN_PING=fail; fi
-TCP_CONNS=$(ss -Htn state established 2>/dev/null | awk 'NF>=2{print "tcp|"$(NF-1)"|"$NF}' | head -16)
-UDP_CONNS=$(ss -Hun 2>/dev/null | awk 'NF>=2 && $NF !~ /(\*|0\.0\.0\.0|127\.0\.0\.1|\[::\])/ {print "udp|"$(NF-1)"|"$NF}' | head -16)
-CONNS=$(printf "%s\n%s\n" "$TCP_CONNS" "$UDP_CONNS" | sed '/^$/d' | tr '\n' ',')
 CPUS=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)
 UPTIME_S=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)
 CPU_MHZ=$(awk '/cpu MHz/{sum+=$4; n++} END{if(n>0) printf "%.0f", sum/n; else print 0}' /proc/cpuinfo 2>/dev/null || echo 0)
@@ -324,7 +341,6 @@ echo "RX=${RX:-0}"
 echo "TX=${TX:-0}"
 echo "TCP_EST=${TCP_EST:-0}"
 echo "UDP_CONN=${UDP_CONN:-0}"
-printf "TOP_CONN=%s\n" "${TOP_CONN:-none}"
 echo "AWG0=$AWG0"
 echo "HS0=$HS0"
 echo "P0=$P0"
@@ -332,12 +348,26 @@ echo "AGH=$AGH"
 echo "DNS53=$DNS53"
 echo "WEB3000=$WEB3000"
 echo "WAN_PING=$WAN_PING"
-echo "CONNS=${CONNS}"
 echo "CPUS=${CPUS:-1}"
 echo "UPTIME_S=${UPTIME_S:-0}"
 echo "CPU_MHZ=${CPU_MHZ:-0}"
 echo "MEM_FREE=${MEM_FREE:-0}"
 echo "SWAP=${SWAP_RAW:-0/0MB}"
+echo "RX_TOTAL=${RX:-0}"
+echo "TX_TOTAL=${TX:-0}"
+MEM_TOTAL_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_AVAIL_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_BUFFERS_KB=$(awk '/Buffers/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+MEM_CACHED_KB=$(awk '/^Cached/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+echo "MEM_AVAIL=$(( MEM_AVAIL_KB / 1024 ))"
+echo "MEM_BUFFERS=$(( MEM_BUFFERS_KB / 1024 ))"
+echo "MEM_CACHED=$(( MEM_CACHED_KB / 1024 ))"
+DISK_INODES=$(df -i / 2>/dev/null | awk 'NR==2 {print $5}')
+echo "DISK_INODES=${DISK_INODES:-0%}"
+PROC_COUNT=$(ps aux 2>/dev/null | wc -l | tr -d ' ')
+echo "PROC_COUNT=${PROC_COUNT:-0}"
+OPEN_FILES=$(cat /proc/sys/fs/file-nr 2>/dev/null | awk '{print $1}')
+echo "OPEN_FILES=${OPEN_FILES:-0}"
 EOF
 )
     ssh_exec "VPS2" "$CURRENT_VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS" "$remote_cmd"
@@ -368,10 +398,13 @@ write_json() {
     local V1_MEM_USED="0" V1_MEM_TOTAL="0" V1_MEM_FREE="0"
     local V1_DISK_USED="" V1_DISK_TOTAL="" V1_DISK_PCT="0"
     local V1_NET_IF="" V1_RX="0" V1_TX="0"
-    local V1_TCP_EST="0" V1_UDP_CONN="0" V1_TOP_CONN="none"
+    local V1_TCP_EST="0" V1_UDP_CONN="0"
     local V1_AWG0="" V1_AWG1="" V1_HS0="-1" V1_HS1="-1" V1_A1_ACTIVE="0" V1_P0="0" V1_P1="0" V1_TUN_PING=""
-    local V1_RX_SPEED="0" V1_TX_SPEED="0" V1_ERROR="" V1_CONNS=""
+    local V1_RX_SPEED="0" V1_TX_SPEED="0" V1_ERROR=""
     local V1_CPUS="1" V1_UPTIME_S="0" V1_CPU_MHZ="0" V1_SWAP=""
+    local V1_RX_TOTAL="0" V1_TX_TOTAL="0"
+    local V1_MEM_AVAIL="0" V1_MEM_BUFFERS="0" V1_MEM_CACHED="0"
+    local V1_DISK_INODES="0%" V1_PROC_COUNT="0" V1_OPEN_FILES="0"
 
     if [[ -n "$vps1_data" ]]; then
         V1_ONLINE="true"
@@ -392,7 +425,6 @@ write_json() {
         V1_TX="$(parse_kv "$vps1_data" TX)"
         V1_TCP_EST="$(parse_kv "$vps1_data" TCP_EST)"
         V1_UDP_CONN="$(parse_kv "$vps1_data" UDP_CONN)"
-        V1_TOP_CONN="$(parse_kv "$vps1_data" TOP_CONN)"
         V1_AWG0="$(parse_kv "$vps1_data" AWG0)"
         V1_AWG1="$(parse_kv "$vps1_data" AWG1)"
         V1_HS0="$(parse_kv "$vps1_data" HS0)"; V1_HS0="${V1_HS0:--1}"
@@ -406,6 +438,14 @@ write_json() {
         V1_CPU_MHZ="$(parse_kv "$vps1_data" CPU_MHZ)"; V1_CPU_MHZ="${V1_CPU_MHZ:-0}"
         V1_MEM_FREE="$(parse_kv "$vps1_data" MEM_FREE)"; V1_MEM_FREE="${V1_MEM_FREE:-0}"
         V1_SWAP="$(parse_kv "$vps1_data" SWAP)"; V1_SWAP="${V1_SWAP:-0/0MB}"
+        V1_RX_TOTAL="$(parse_kv "$vps1_data" RX_TOTAL)"; V1_RX_TOTAL="${V1_RX_TOTAL:-0}"
+        V1_TX_TOTAL="$(parse_kv "$vps1_data" TX_TOTAL)"; V1_TX_TOTAL="${V1_TX_TOTAL:-0}"
+        V1_MEM_AVAIL="$(parse_kv "$vps1_data" MEM_AVAIL)"; V1_MEM_AVAIL="${V1_MEM_AVAIL:-0}"
+        V1_MEM_BUFFERS="$(parse_kv "$vps1_data" MEM_BUFFERS)"; V1_MEM_BUFFERS="${V1_MEM_BUFFERS:-0}"
+        V1_MEM_CACHED="$(parse_kv "$vps1_data" MEM_CACHED)"; V1_MEM_CACHED="${V1_MEM_CACHED:-0}"
+        V1_DISK_INODES="$(parse_kv "$vps1_data" DISK_INODES)"; V1_DISK_INODES="${V1_DISK_INODES:-0%}"
+        V1_PROC_COUNT="$(parse_kv "$vps1_data" PROC_COUNT)"; V1_PROC_COUNT="${V1_PROC_COUNT:-0}"
+        V1_OPEN_FILES="$(parse_kv "$vps1_data" OPEN_FILES)"; V1_OPEN_FILES="${V1_OPEN_FILES:-0}"
         if [[ "$VPS1_PREV_RX" -gt 0 && "${V1_RX:-0}" =~ ^[0-9]+$ ]]; then
             local d_rx1 d_tx1
             d_rx1=$(( ${V1_RX:-0} - VPS1_PREV_RX )); [[ $d_rx1 -lt 0 ]] && d_rx1=0
@@ -414,7 +454,7 @@ write_json() {
             V1_TX_SPEED=$(( d_tx1 / elapsed ))
         fi
         VPS1_PREV_RX="${V1_RX:-0}"; VPS1_PREV_TX="${V1_TX:-0}"
-        V1_CONNS="$(parse_kv "$vps1_data" CONNS)"
+        : # connection details intentionally not collected
     else
         V1_ERROR="${LAST_ERR_VPS1:-SSH connection failed}"
         VPS1_PREV_RX=0; VPS1_PREV_TX=0
@@ -425,11 +465,14 @@ write_json() {
     local V2_MEM_USED="0" V2_MEM_TOTAL="0" V2_MEM_FREE="0"
     local V2_DISK_USED="" V2_DISK_TOTAL="" V2_DISK_PCT="0"
     local V2_NET_IF="" V2_RX="0" V2_TX="0"
-    local V2_TCP_EST="0" V2_UDP_CONN="0" V2_TOP_CONN="none"
+    local V2_TCP_EST="0" V2_UDP_CONN="0"
     local V2_AWG0="" V2_HS0="-1" V2_P0="0"
     local V2_AGH="" V2_DNS53="" V2_WEB3000="" V2_WAN_PING=""
-    local V2_RX_SPEED="0" V2_TX_SPEED="0" V2_ERROR="" V2_CONNS=""
+    local V2_RX_SPEED="0" V2_TX_SPEED="0" V2_ERROR=""
     local V2_CPUS="1" V2_UPTIME_S="0" V2_CPU_MHZ="0" V2_SWAP=""
+    local V2_RX_TOTAL="0" V2_TX_TOTAL="0"
+    local V2_MEM_AVAIL="0" V2_MEM_BUFFERS="0" V2_MEM_CACHED="0"
+    local V2_DISK_INODES="0%" V2_PROC_COUNT="0" V2_OPEN_FILES="0"
 
     if [[ -n "$vps2_data" ]]; then
         V2_ONLINE="true"
@@ -450,7 +493,6 @@ write_json() {
         V2_TX="$(parse_kv "$vps2_data" TX)"
         V2_TCP_EST="$(parse_kv "$vps2_data" TCP_EST)"
         V2_UDP_CONN="$(parse_kv "$vps2_data" UDP_CONN)"
-        V2_TOP_CONN="$(parse_kv "$vps2_data" TOP_CONN)"
         V2_AWG0="$(parse_kv "$vps2_data" AWG0)"
         V2_HS0="$(parse_kv "$vps2_data" HS0)"; V2_HS0="${V2_HS0:--1}"
         V2_P0="$(parse_kv "$vps2_data" P0)"
@@ -463,6 +505,14 @@ write_json() {
         V2_CPU_MHZ="$(parse_kv "$vps2_data" CPU_MHZ)"; V2_CPU_MHZ="${V2_CPU_MHZ:-0}"
         V2_MEM_FREE="$(parse_kv "$vps2_data" MEM_FREE)"; V2_MEM_FREE="${V2_MEM_FREE:-0}"
         V2_SWAP="$(parse_kv "$vps2_data" SWAP)"; V2_SWAP="${V2_SWAP:-0/0MB}"
+        V2_RX_TOTAL="$(parse_kv "$vps2_data" RX_TOTAL)"; V2_RX_TOTAL="${V2_RX_TOTAL:-0}"
+        V2_TX_TOTAL="$(parse_kv "$vps2_data" TX_TOTAL)"; V2_TX_TOTAL="${V2_TX_TOTAL:-0}"
+        V2_MEM_AVAIL="$(parse_kv "$vps2_data" MEM_AVAIL)"; V2_MEM_AVAIL="${V2_MEM_AVAIL:-0}"
+        V2_MEM_BUFFERS="$(parse_kv "$vps2_data" MEM_BUFFERS)"; V2_MEM_BUFFERS="${V2_MEM_BUFFERS:-0}"
+        V2_MEM_CACHED="$(parse_kv "$vps2_data" MEM_CACHED)"; V2_MEM_CACHED="${V2_MEM_CACHED:-0}"
+        V2_DISK_INODES="$(parse_kv "$vps2_data" DISK_INODES)"; V2_DISK_INODES="${V2_DISK_INODES:-0%}"
+        V2_PROC_COUNT="$(parse_kv "$vps2_data" PROC_COUNT)"; V2_PROC_COUNT="${V2_PROC_COUNT:-0}"
+        V2_OPEN_FILES="$(parse_kv "$vps2_data" OPEN_FILES)"; V2_OPEN_FILES="${V2_OPEN_FILES:-0}"
         if [[ "$VPS2_PREV_RX" -gt 0 && "${V2_RX:-0}" =~ ^[0-9]+$ ]]; then
             local d_rx2 d_tx2
             d_rx2=$(( ${V2_RX:-0} - VPS2_PREV_RX )); [[ $d_rx2 -lt 0 ]] && d_rx2=0
@@ -471,7 +521,7 @@ write_json() {
             V2_TX_SPEED=$(( d_tx2 / elapsed ))
         fi
         VPS2_PREV_RX="${V2_RX:-0}"; VPS2_PREV_TX="${V2_TX:-0}"
-        V2_CONNS="$(parse_kv "$vps2_data" CONNS)"
+        : # connection details intentionally not collected
     else
         V2_ERROR="${LAST_ERR_VPS2:-SSH connection failed}"
         VPS2_PREV_RX=0; VPS2_PREV_TX=0
@@ -489,24 +539,29 @@ write_json() {
         J_V1_MEM_USED="${V1_MEM_USED:-0}" J_V1_MEM_TOTAL="${V1_MEM_TOTAL:-0}" J_V1_MEM_FREE="${V1_MEM_FREE:-0}" \
         J_V1_DISK_USED="${V1_DISK_USED:-}" J_V1_DISK_TOTAL="${V1_DISK_TOTAL:-}" J_V1_DISK_PCT="${V1_DISK_PCT:-0}" \
         J_V1_NET_IF="${V1_NET_IF:-}" J_V1_RX_SPEED="$V1_RX_SPEED" J_V1_TX_SPEED="$V1_TX_SPEED" \
-        J_V1_TCP_EST="${V1_TCP_EST:-0}" J_V1_UDP_CONN="${V1_UDP_CONN:-0}" J_V1_TOP_CONN="${V1_TOP_CONN:-none}" \
+        J_V1_TCP_EST="${V1_TCP_EST:-0}" J_V1_UDP_CONN="${V1_UDP_CONN:-0}" \
         J_V1_AWG0="${V1_AWG0:-}" J_V1_AWG1="${V1_AWG1:-}" J_V1_HS0="${V1_HS0:--1}" J_V1_HS1="${V1_HS1:--1}" J_V1_A1_ACTIVE="${V1_A1_ACTIVE:-0}" \
         J_V1_P0="${V1_P0:-0}" J_V1_P1="${V1_P1:-0}" J_V1_TUN_PING="${V1_TUN_PING:-}" \
         J_V1_CPUS="${V1_CPUS:-1}" J_V1_UPTIME_S="${V1_UPTIME_S:-0}" \
         J_V1_CPU_MHZ="${V1_CPU_MHZ:-0}" J_V1_SWAP="${V1_SWAP:-0/0MB}" \
+        J_V1_RX_TOTAL="${V1_RX_TOTAL:-0}" J_V1_TX_TOTAL="${V1_TX_TOTAL:-0}" \
+        J_V1_MEM_AVAIL="${V1_MEM_AVAIL:-0}" J_V1_MEM_BUFFERS="${V1_MEM_BUFFERS:-0}" J_V1_MEM_CACHED="${V1_MEM_CACHED:-0}" \
+        J_V1_DISK_INODES="${V1_DISK_INODES:-0%}" J_V1_PROC_COUNT="${V1_PROC_COUNT:-0}" J_V1_OPEN_FILES="${V1_OPEN_FILES:-0}" \
         J_V1_ERROR="${V1_ERROR:-}" \
         J_V2_ONLINE="$V2_ONLINE" J_V2_IP="$VPS2_IP" J_V2_HOST="${V2_HOST:-}" \
         J_V2_LOAD1="${V2_LOAD1:-0}" J_V2_LOAD5="${V2_LOAD5:-0}" J_V2_LOAD15="${V2_LOAD15:-0}" \
         J_V2_MEM_USED="${V2_MEM_USED:-0}" J_V2_MEM_TOTAL="${V2_MEM_TOTAL:-0}" J_V2_MEM_FREE="${V2_MEM_FREE:-0}" \
         J_V2_DISK_USED="${V2_DISK_USED:-}" J_V2_DISK_TOTAL="${V2_DISK_TOTAL:-}" J_V2_DISK_PCT="${V2_DISK_PCT:-0}" \
         J_V2_NET_IF="${V2_NET_IF:-}" J_V2_RX_SPEED="$V2_RX_SPEED" J_V2_TX_SPEED="$V2_TX_SPEED" \
-        J_V2_TCP_EST="${V2_TCP_EST:-0}" J_V2_UDP_CONN="${V2_UDP_CONN:-0}" J_V2_TOP_CONN="${V2_TOP_CONN:-none}" \
+        J_V2_TCP_EST="${V2_TCP_EST:-0}" J_V2_UDP_CONN="${V2_UDP_CONN:-0}" \
         J_V2_AWG0="${V2_AWG0:-}" J_V2_HS0="${V2_HS0:--1}" J_V2_P0="${V2_P0:-0}" \
         J_V2_AGH="${V2_AGH:-}" J_V2_DNS53="${V2_DNS53:-}" J_V2_WEB3000="${V2_WEB3000:-}" \
         J_V2_WAN_PING="${V2_WAN_PING:-}" J_V2_ERROR="${V2_ERROR:-}" \
         J_V2_CPUS="${V2_CPUS:-1}" J_V2_UPTIME_S="${V2_UPTIME_S:-0}" \
         J_V2_CPU_MHZ="${V2_CPU_MHZ:-0}" J_V2_SWAP="${V2_SWAP:-0/0MB}" \
-        J_V1_CONNS="${V1_CONNS:-}" J_V2_CONNS="${V2_CONNS:-}" \
+        J_V2_RX_TOTAL="${V2_RX_TOTAL:-0}" J_V2_TX_TOTAL="${V2_TX_TOTAL:-0}" \
+        J_V2_MEM_AVAIL="${V2_MEM_AVAIL:-0}" J_V2_MEM_BUFFERS="${V2_MEM_BUFFERS:-0}" J_V2_MEM_CACHED="${V2_MEM_CACHED:-0}" \
+        J_V2_DISK_INODES="${V2_DISK_INODES:-0%}" J_V2_PROC_COUNT="${V2_PROC_COUNT:-0}" J_V2_OPEN_FILES="${V2_OPEN_FILES:-0}" \
         J_LOG_FILE="$LOG_FILE"
 
     "${PYTHON_CMD[@]}" <<'PYEOF' > "$tmp_json"
@@ -523,19 +578,6 @@ def b(k): return os.environ.get(k, 'false') == 'true'
 def maybe_null(k):
     v = os.environ.get(k, '')
     return v if v else None
-
-def parse_conns(k):
-    raw = os.environ.get(k, '').strip(',')
-    if not raw: return []
-    result = []
-    for item in raw.split(','):
-        item = item.strip()
-        parts = item.split('|')
-        if len(parts) >= 3:
-            result.append({'proto': parts[0], 'local': parts[1], 'remote': parts[2]})
-        elif len(parts) == 2:
-            result.append({'proto': 'tcp', 'local': parts[0], 'remote': parts[1]})
-    return result
 
 def read_log_tail(n=30):
     path = os.environ.get('J_LOG_FILE', '')
@@ -572,7 +614,6 @@ data = {
         'tx_speed':     ni('J_V1_TX_SPEED'),
         'tcp_est':      ni('J_V1_TCP_EST'),
         'udp_conn':     ni('J_V1_UDP_CONN'),
-        'top_conn':     s('J_V1_TOP_CONN'),
         'awg0':         s('J_V1_AWG0'),
         'awg1':         s('J_V1_AWG1'),
         'hs0_age':      ni('J_V1_HS0', -1),
@@ -581,7 +622,14 @@ data = {
         'peers_awg0':   ni('J_V1_P0'),
         'peers_awg1':   ni('J_V1_P1'),
         'tun_ping':     s('J_V1_TUN_PING'),
-        'conns':        parse_conns('J_V1_CONNS'),
+        'rx_total':     ni('J_V1_RX_TOTAL'),
+        'tx_total':     ni('J_V1_TX_TOTAL'),
+        'mem_avail_mb': ni('J_V1_MEM_AVAIL'),
+        'mem_buffers_mb': ni('J_V1_MEM_BUFFERS'),
+        'mem_cached_mb': ni('J_V1_MEM_CACHED'),
+        'disk_inodes':  s('J_V1_DISK_INODES'),
+        'proc_count':   ni('J_V1_PROC_COUNT'),
+        'open_files':   ni('J_V1_OPEN_FILES'),
         'error':        maybe_null('J_V1_ERROR'),
     },
     'vps2': {
@@ -606,7 +654,6 @@ data = {
         'tx_speed':     ni('J_V2_TX_SPEED'),
         'tcp_est':      ni('J_V2_TCP_EST'),
         'udp_conn':     ni('J_V2_UDP_CONN'),
-        'top_conn':     s('J_V2_TOP_CONN'),
         'awg0':         s('J_V2_AWG0'),
         'hs0_age':      ni('J_V2_HS0', -1),
         'peers_awg0':   ni('J_V2_P0'),
@@ -614,7 +661,14 @@ data = {
         'dns53':        s('J_V2_DNS53'),
         'web3000':      s('J_V2_WEB3000'),
         'wan_ping':     s('J_V2_WAN_PING'),
-        'conns':        parse_conns('J_V2_CONNS'),
+        'rx_total':     ni('J_V2_RX_TOTAL'),
+        'tx_total':     ni('J_V2_TX_TOTAL'),
+        'mem_avail_mb': ni('J_V2_MEM_AVAIL'),
+        'mem_buffers_mb': ni('J_V2_MEM_BUFFERS'),
+        'mem_cached_mb': ni('J_V2_MEM_CACHED'),
+        'disk_inodes':  s('J_V2_DISK_INODES'),
+        'proc_count':   ni('J_V2_PROC_COUNT'),
+        'open_files':   ni('J_V2_OPEN_FILES'),
         'error':        maybe_null('J_V2_ERROR'),
     },
 }

@@ -259,9 +259,9 @@ net.ipv4.conf.default.send_redirects=0
 net.ipv4.conf.all.accept_source_route=0
 net.ipv4.conf.default.accept_source_route=0
 
-# Log martian packets
-net.ipv4.conf.all.log_martians=1
-net.ipv4.conf.default.log_martians=1
+# Martian packet logging disabled — VPN traffic triggers frequent false positives
+net.ipv4.conf.all.log_martians=0
+net.ipv4.conf.default.log_martians=0
 
 # SYN flood protection
 net.ipv4.tcp_syncookies=1
@@ -311,4 +311,19 @@ cat > /etc/logrotate.d/vpn-security << 'EOF'
 EOF
 
 echo "[security-harden] Log rotation configured"
+
+# ── 10. Systemd journal size limits ─────────────────────────────────────────
+echo "[security-harden] Configuring systemd journal limits..."
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/vpn-limits.conf << 'EOF'
+[Journal]
+SystemMaxUse=200M
+SystemKeepFree=500M
+MaxRetentionSec=14day
+MaxFileSec=7day
+EOF
+
+systemctl restart systemd-journald 2>/dev/null || true
+echo "[security-harden] Journal limits: max 200MB, retention 14 days"
+
 echo "[security-harden] Hardening complete."

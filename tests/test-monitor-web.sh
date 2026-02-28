@@ -297,6 +297,96 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 9c. scripts/monitor/monitor-web.sh: новые метрики (трафик, память, процессы)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 9c. scripts/monitor/monitor-web.sh: расширенные метрики ---"
+
+for field in RX_TOTAL TX_TOTAL MEM_AVAIL MEM_BUFFERS MEM_CACHED DISK_INODES PROC_COUNT OPEN_FILES; do
+    if grep -q "${field}" scripts/monitor/monitor-web.sh; then
+        ok "scripts/monitor/monitor-web.sh: метрика ${field} собирается"
+    else
+        fail "scripts/monitor/monitor-web.sh: метрика ${field} отсутствует"
+    fi
+done
+
+for jfield in rx_total tx_total mem_avail_mb mem_buffers_mb mem_cached_mb disk_inodes proc_count open_files; do
+    if grep -q "'${jfield}'" scripts/monitor/monitor-web.sh; then
+        ok "scripts/monitor/monitor-web.sh: JSON-поле ${jfield} записывается"
+    else
+        fail "scripts/monitor/monitor-web.sh: JSON-поле ${jfield} не записывается"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# 9d. scripts/monitor/dashboard.html: расширенные метрики и округление
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 9d. scripts/monitor/dashboard.html: расширенные метрики и округление ---"
+
+if grep -q 'fmtBytesTotal' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: функция fmtBytesTotal() для общего трафика"
+else
+    fail "scripts/monitor/dashboard.html: функция fmtBytesTotal() отсутствует"
+fi
+
+if grep -q 'fmtMB' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: функция fmtMB() для округления памяти"
+else
+    fail "scripts/monitor/dashboard.html: функция fmtMB() отсутствует"
+fi
+
+if grep -q 'hdr-traffic' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: общий трафик в шапке (hdr-traffic)"
+else
+    fail "scripts/monitor/dashboard.html: общий трафик в шапке отсутствует"
+fi
+
+for elemid in rxtotal-v1 txtotal-v1 rxtotal-v2 txtotal-v2; do
+    if grep -q "id=\"${elemid}\"" scripts/monitor/dashboard.html; then
+        ok "scripts/monitor/dashboard.html: элемент ${elemid} присутствует"
+    else
+        fail "scripts/monitor/dashboard.html: элемент ${elemid} отсутствует"
+    fi
+done
+
+if grep -q 'renderHdrTraffic' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: функция renderHdrTraffic() вызывается"
+else
+    fail "scripts/monitor/dashboard.html: функция renderHdrTraffic() не вызывается"
+fi
+
+if grep -q 'ringSvg' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: кольцевые диаграммы (ringSvg) для RAM/Disk"
+else
+    fail "scripts/monitor/dashboard.html: кольцевые диаграммы отсутствуют"
+fi
+
+if grep -q 'gauges-row' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: ряд gauge-диаграмм присутствует"
+else
+    fail "scripts/monitor/dashboard.html: ряд gauge-диаграмм отсутствует"
+fi
+
+if grep -q 'html\.light' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: светлая тема (html.light) присутствует"
+else
+    fail "scripts/monitor/dashboard.html: светлая тема отсутствует"
+fi
+
+if grep -q 'theme-btn' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: кнопка переключения темы присутствует"
+else
+    fail "scripts/monitor/dashboard.html: кнопка переключения темы отсутствует"
+fi
+
+if grep -q 'H=44' scripts/monitor/dashboard.html || grep -q 'height: 44px' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: увеличенная высота графика скорости"
+else
+    fail "scripts/monitor/dashboard.html: высота графика не увеличена"
+fi
+
+# ---------------------------------------------------------------------------
 # 10. scripts/windows/install-ca.ps1 присутствует и корректен
 # ---------------------------------------------------------------------------
 echo ""

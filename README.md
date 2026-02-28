@@ -697,9 +697,11 @@ powershell -ExecutionPolicy Bypass -File repair-local-configs.ps1
 | **iptables-persistent** | Правила файрвола сохраняются после перезагрузки |
 | **rkhunter** | Ежедневный скан на руткиты и майнеры |
 | **CPU watchdog** | Каждые 5 мин проверяет CPU >80% и логирует подозрительные процессы |
-| **Kernel hardening** | SYN flood protection, ICMP redirect blocking, martian packet logging |
+| **Kernel hardening** | SYN flood protection, ICMP redirect blocking, ptrace restriction |
 | **DROP logging** | Отброшенные пакеты логируются с префиксом `IPT_DROP:` |
 | **SSH rate limiting** | iptables блокирует >6 новых SSH-подключений за 60 сек |
+| **Journal limits** | systemd journal ограничен 200 МБ, хранение 14 дней |
+| **Log rotation** | `monitor.log` автоматически ротируется при 2 МБ |
 
 ### SSH host key verification
 

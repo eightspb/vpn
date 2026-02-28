@@ -637,11 +637,11 @@ filters:
     name: NoCoin Filter List
     id: 24
 querylog:
-  interval: 2160h
+  interval: 24h
   enabled: true
-  file_enabled: true
+  file_enabled: false
 statistics:
-  interval: 2160h
+  interval: 168h
   enabled: true
 schema_version: 28
 AGHEOF

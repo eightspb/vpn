@@ -34,7 +34,7 @@ VPS2_TUN_IP="10.8.0.2"
 INTERVAL=1
 SSH_TIMEOUT=8
 LOG_FILE="./vpn-output/monitor.log"
-LOG_LEVEL="DEBUG"
+LOG_LEVEL="INFO"
 LAST_ERR_VPS1=""
 LAST_ERR_VPS2=""
 TEMP_KEY_FILES=()
@@ -145,12 +145,26 @@ expand_tilde() {
     fi
 }
 
+LOG_MAX_BYTES=2097152  # 2 MB
+
+rotate_log_if_needed() {
+    [[ ! -f "$LOG_FILE" ]] && return
+    local sz
+    sz="$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)"
+    if [[ "$sz" -ge "$LOG_MAX_BYTES" ]]; then
+        mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null || true
+        : > "$LOG_FILE"
+    fi
+}
+
 log_line() {
     local level="$1"
     local msg="$2"
     local ts
+    [[ "$level" == "DEBUG" && "$LOG_LEVEL" != "DEBUG" ]] && return
     ts="$(date '+%Y-%m-%d %H:%M:%S')"
     printf "[%s] [%s] %s\n" "$ts" "$level" "$msg" >> "$LOG_FILE"
+    rotate_log_if_needed
 }
 
 set_last_error() {
@@ -495,8 +509,6 @@ RX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]
 TX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
 TCP_EST=\$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=\$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
-TOP_CONN=\$(ss -Htn state established 2>/dev/null | awk '{print \$5}' | sed 's/\\[//g; s/\\]//g' | awk -F: '{NF--; print}' OFS=: | sort | uniq -c | sort -nr | head -3 | awk '{printf "%s(%s) ", \$2, \$1}')
-[[ -z "\$TOP_CONN" ]] && TOP_CONN="none"
 AWG0=\$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
 AWG1=\$(sudo systemctl is-active awg-quick@awg1 2>/dev/null || echo unknown)
 HS0=\$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0) print systime()-\$2; else print -1}')
@@ -513,7 +525,6 @@ echo "RX=\${RX:-0}"
 echo "TX=\${TX:-0}"
 echo "TCP_EST=\${TCP_EST:-0}"
 echo "UDP_CONN=\${UDP_CONN:-0}"
-printf "TOP_CONN=%q\n" "${TOP_CONN:-none}"
 echo "AWG0=\$AWG0"
 echo "AWG1=\$AWG1"
 echo "HS0=\$HS0"
@@ -537,8 +548,6 @@ RX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i
 TX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
 TCP_EST=$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
-TOP_CONN=$(ss -Htn state established 2>/dev/null | awk '{print $5}' | sed 's/\[//g; s/\]//g' | awk -F: '{NF--; print}' OFS=: | sort | uniq -c | sort -nr | head -3 | awk '{printf "%s(%s) ", $2, $1}')
-[[ -z "$TOP_CONN" ]] && TOP_CONN="none"
 AWG0=$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
 HS0=$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if ($2>0) print systime()-$2; else print -1}')
 [[ -z "$HS0" ]] && HS0=-1
@@ -562,7 +571,6 @@ echo "RX=${RX:-0}"
 echo "TX=${TX:-0}"
 echo "TCP_EST=${TCP_EST:-0}"
 echo "UDP_CONN=${UDP_CONN:-0}"
-printf "TOP_CONN=%q\n" "${TOP_CONN:-none}"
 echo "AWG0=$AWG0"
 echo "HS0=$HS0"
 echo "P0=$P0"
@@ -578,7 +586,7 @@ EOF
 print_block_vps1() {
     local data="$1"
     local speed down up
-    local HOST LOAD MEM DISK MAIN_IF RX TX TCP_EST UDP_CONN TOP_CONN
+    local HOST LOAD MEM DISK MAIN_IF RX TX TCP_EST UDP_CONN
     local AWG0 AWG1 HS0 P0 P1 TUN_PING
     if [[ -z "$data" ]]; then
         echo -e "${RED}VPS1 недоступен по SSH${NC}"
@@ -594,7 +602,6 @@ print_block_vps1() {
     TX="$(parse_kv "$data" TX)"; TX="${TX:-0}"
     TCP_EST="$(parse_kv "$data" TCP_EST)"
     UDP_CONN="$(parse_kv "$data" UDP_CONN)"
-    TOP_CONN="$(parse_kv "$data" TOP_CONN)"
     AWG0="$(parse_kv "$data" AWG0)"
     AWG1="$(parse_kv "$data" AWG1)"
     HS0="$(parse_kv "$data" HS0)"; HS0="${HS0:--1}"
@@ -609,7 +616,7 @@ print_block_vps1() {
     echo -e "  host: ${HOST:-n/a}"
     echo -e "  load: ${LOAD:-n/a} | mem: ${MEM:-n/a} | disk: ${DISK:-n/a}"
     echo -e "  net ${MAIN_IF:-n/a}: ↓ ${down} | ↑ ${up}"
-    echo -e "  conn: TCP est ${TCP_EST:-0} | UDP ${UDP_CONN:-0} | top: ${TOP_CONN:-none}"
+    echo -e "  conn: TCP est ${TCP_EST:-0} | UDP ${UDP_CONN:-0}"
     echo -e "  awg0: $(fmt_status "${AWG0:-unknown}") | awg1: $(fmt_status "${AWG1:-unknown}")"
     echo -e "  awg0 handshake age: $(fmt_handshake "${HS0}") | peers awg0/awg1: ${P0:-0}/${P1:-0}"
     echo -e "  ping awg0 -> ${VPS2_TUN_IP}: $(fmt_status "${TUN_PING:-fail}")"
@@ -618,7 +625,7 @@ print_block_vps1() {
 print_block_vps2() {
     local data="$1"
     local speed down up
-    local HOST LOAD MEM DISK MAIN_IF RX TX TCP_EST UDP_CONN TOP_CONN
+    local HOST LOAD MEM DISK MAIN_IF RX TX TCP_EST UDP_CONN
     local AWG0 HS0 P0 AGH DNS53 WEB3000 WAN_PING
     if [[ -z "$data" ]]; then
         echo -e "${RED}VPS2 недоступен по SSH${NC}"
@@ -634,7 +641,6 @@ print_block_vps2() {
     TX="$(parse_kv "$data" TX)"; TX="${TX:-0}"
     TCP_EST="$(parse_kv "$data" TCP_EST)"
     UDP_CONN="$(parse_kv "$data" UDP_CONN)"
-    TOP_CONN="$(parse_kv "$data" TOP_CONN)"
     AWG0="$(parse_kv "$data" AWG0)"
     HS0="$(parse_kv "$data" HS0)"; HS0="${HS0:--1}"
     P0="$(parse_kv "$data" P0)"
@@ -650,7 +656,7 @@ print_block_vps2() {
     echo -e "  host: ${HOST:-n/a}"
     echo -e "  load: ${LOAD:-n/a} | mem: ${MEM:-n/a} | disk: ${DISK:-n/a}"
     echo -e "  net ${MAIN_IF:-n/a}: ↓ ${down} | ↑ ${up}"
-    echo -e "  conn: TCP est ${TCP_EST:-0} | UDP ${UDP_CONN:-0} | top: ${TOP_CONN:-none}"
+    echo -e "  conn: TCP est ${TCP_EST:-0} | UDP ${UDP_CONN:-0}"
     echo -e "  awg0: $(fmt_status "${AWG0:-unknown}") | handshake age: $(fmt_handshake "${HS0}") | peers: ${P0:-0}"
     echo -e "  AdGuard: $(fmt_status "${AGH:-inactive}") | DNS:53 $(fmt_status "${DNS53:-down}") | Web:3000 $(fmt_status "${WEB3000:-down}")"
     echo -e "  ping 8.8.8.8: $(fmt_status "${WAN_PING:-fail}")"
