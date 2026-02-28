@@ -211,6 +211,24 @@ ssh -i ~/.ssh/<your_key> <user>@38.135.122.81
 - VPS1: `/etc/amnezia/amneziawg/awg1.conf` (клиентский интерфейс, MTU 1280)
 - VPS2: `/etc/amnezia/amneziawg/awg0.conf` (туннель от VPS1, MTU 1280)
 
+## Публикация на GitHub
+
+Репозиторий: [https://github.com/eightspb/vpn](https://github.com/eightspb/vpn).
+
+При первом пуше нужно один раз настроить remote и отправить код:
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts/git-push-github.ps1
+```
+
+```bash
+# WSL / Git Bash
+bash scripts/git-push-github.sh
+```
+
+Скрипт добавляет `origin` → `https://github.com/eightspb/vpn.git` и выполняет `git push -u origin main`. Дальнейшие пуши: `git push`.
+
 ## Гигиена секретов
 
 - Скопируйте шаблон: `cp .env.example .env` и заполните своими данными.
@@ -500,6 +518,18 @@ bash tests/test-manage-peers.sh
 ```bash
 # Linux / WSL
 bash tests/test-security-harden.sh
+```
+
+Проверка настройки GitHub remote (git-push-github):
+
+```powershell
+# Windows
+powershell -File tests/test-git-push-github.ps1
+```
+
+```bash
+# Linux / WSL
+bash tests/test-git-push-github.sh
 ```
 
 ## Оптимизация производительности
