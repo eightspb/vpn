@@ -297,6 +297,54 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 9b3. Автоматическое завершение предыдущего экземпляра
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 9b3. Автоматическое завершение предыдущего экземпляра ---"
+
+if grep -q 'kill_previous_instance' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: функция kill_previous_instance() присутствует"
+else
+    fail "scripts/monitor/monitor-web.sh: функция kill_previous_instance() отсутствует"
+fi
+
+if grep -q 'PID_FILE=' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: PID_FILE определён"
+else
+    fail "scripts/monitor/monitor-web.sh: PID_FILE не определён"
+fi
+
+if grep -q 'monitor-web\.pid' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: PID-файл monitor-web.pid"
+else
+    fail "scripts/monitor/monitor-web.sh: PID-файл не найден"
+fi
+
+if grep -q 'echo "\$\$" > "\$PID_FILE"' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: записывает свой PID в файл"
+else
+    fail "scripts/monitor/monitor-web.sh: не записывает PID в файл"
+fi
+
+if grep -q 'rm -f "\$PID_FILE"' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: удаляет PID-файл при завершении (cleanup)"
+else
+    fail "scripts/monitor/monitor-web.sh: не удаляет PID-файл при завершении"
+fi
+
+if grep -q 'pgrep -f.*monitor-web' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: fallback через pgrep для orphan-процессов"
+else
+    fail "scripts/monitor/monitor-web.sh: нет fallback через pgrep"
+fi
+
+if grep -q 'kill -9' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: SIGKILL как последнее средство"
+else
+    fail "scripts/monitor/monitor-web.sh: нет SIGKILL fallback"
+fi
+
+# ---------------------------------------------------------------------------
 # 9c. scripts/monitor/monitor-web.sh: новые метрики (трафик, память, процессы)
 # ---------------------------------------------------------------------------
 echo ""
@@ -317,6 +365,82 @@ for jfield in rx_total tx_total mem_avail_mb mem_buffers_mb mem_cached_mb disk_i
         fail "scripts/monitor/monitor-web.sh: JSON-поле ${jfield} не записывается"
     fi
 done
+
+# ---------------------------------------------------------------------------
+# 9c2. VPN-интерфейсный трафик (awg0/awg1 вместо eth0/ens3)
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 9c2. VPN-интерфейсный трафик (awg0/awg1) ---"
+
+if grep -q 'read_if_bytes' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: функция read_if_bytes для чтения байт с VPN-интерфейсов"
+else
+    fail "scripts/monitor/monitor-web.sh: функция read_if_bytes отсутствует"
+fi
+
+if grep -q 'read_if_bytes awg0' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: читает байты с awg0"
+else
+    fail "scripts/monitor/monitor-web.sh: не читает байты с awg0"
+fi
+
+if grep -q 'read_if_bytes awg1' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: читает байты с awg1 (VPS1 клиентский интерфейс)"
+else
+    fail "scripts/monitor/monitor-web.sh: не читает байты с awg1"
+fi
+
+for field in VPN_RX VPN_TX VPN_RX_TOTAL VPN_TX_TOTAL; do
+    if grep -q "echo \"${field}=" scripts/monitor/monitor-web.sh; then
+        ok "scripts/monitor/monitor-web.sh: выводит ${field}"
+    else
+        fail "scripts/monitor/monitor-web.sh: не выводит ${field}"
+    fi
+done
+
+for field in VPS1_PREV_VPN_RX VPS1_PREV_VPN_TX VPS2_PREV_VPN_RX VPS2_PREV_VPN_TX; do
+    if grep -q "${field}" scripts/monitor/monitor-web.sh; then
+        ok "scripts/monitor/monitor-web.sh: переменная ${field} для расчёта VPN-скорости"
+    else
+        fail "scripts/monitor/monitor-web.sh: переменная ${field} отсутствует"
+    fi
+done
+
+for jfield in vpn_rx_speed vpn_tx_speed vpn_rx_total vpn_tx_total; do
+    if grep -q "'${jfield}'" scripts/monitor/monitor-web.sh; then
+        ok "scripts/monitor/monitor-web.sh: JSON-поле ${jfield} записывается"
+    else
+        fail "scripts/monitor/monitor-web.sh: JSON-поле ${jfield} не записывается"
+    fi
+done
+
+if grep -q 'vpn_rx_speed' scripts/monitor/dashboard.html && \
+   grep -q 'vpn_tx_speed' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: использует vpn_rx_speed/vpn_tx_speed для отображения"
+else
+    fail "scripts/monitor/dashboard.html: не использует vpn_rx_speed/vpn_tx_speed"
+fi
+
+if grep -q 'vpn_rx_total' scripts/monitor/dashboard.html && \
+   grep -q 'vpn_tx_total' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: использует vpn_rx_total/vpn_tx_total для отображения"
+else
+    fail "scripts/monitor/dashboard.html: не использует vpn_rx_total/vpn_tx_total"
+fi
+
+if grep -q "id=\"phys-v1\"" scripts/monitor/dashboard.html && \
+   grep -q "id=\"phys-v2\"" scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: физический интерфейс показывается как вторичная информация"
+else
+    fail "scripts/monitor/dashboard.html: нет вторичного отображения физического интерфейса"
+fi
+
+if grep -q 'v1_vpn_rx' scripts/monitor/dashboard.html && \
+   grep -q 'v2_vpn_rx' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: VPN-история (sparklines) использует vpn-метрики"
+else
+    fail "scripts/monitor/dashboard.html: sparklines не используют vpn-метрики"
+fi
 
 # ---------------------------------------------------------------------------
 # 9d. scripts/monitor/dashboard.html: расширенные метрики и округление

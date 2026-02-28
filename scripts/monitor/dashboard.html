@@ -465,7 +465,7 @@ body {
         <div class="details-grid" id="details-v1"></div>
         <div class="net-section">
           <div class="net-speeds">
-            <span class="net-if" id="if-v1">eth0</span>
+            <span class="net-if" id="if-v1">vpn</span>
             <div class="net-speed"><span class="arr arr-d">↓</span><span id="rx-v1">—</span></div>
             <div class="net-speed"><span class="arr arr-u">↑</span><span id="tx-v1">—</span></div>
             <div class="net-totals">
@@ -474,6 +474,7 @@ body {
             </div>
           </div>
           <div class="spark-wrap" id="spark-v1"></div>
+          <div class="net-speeds" id="phys-v1" style="font-size:10px;color:var(--dim);padding-top:2px"></div>
         </div>
         <div class="top-conn-row">
           <span class="top-conn-lbl">top:</span>
@@ -499,7 +500,7 @@ body {
         <div class="details-grid" id="details-v2"></div>
         <div class="net-section">
           <div class="net-speeds">
-            <span class="net-if" id="if-v2">eth0</span>
+            <span class="net-if" id="if-v2">vpn</span>
             <div class="net-speed"><span class="arr arr-d">↓</span><span id="rx-v2">—</span></div>
             <div class="net-speed"><span class="arr arr-u">↑</span><span id="tx-v2">—</span></div>
             <div class="net-totals">
@@ -508,6 +509,7 @@ body {
             </div>
           </div>
           <div class="spark-wrap" id="spark-v2"></div>
+          <div class="net-speeds" id="phys-v2" style="font-size:10px;color:var(--dim);padding-top:2px"></div>
         </div>
         <div class="top-conn-row">
           <span class="top-conn-lbl">top:</span>
@@ -606,7 +608,7 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
 });
 
 // ---- History ----
-const HKEYS = ['v1_rx','v1_tx','v2_rx','v2_tx'];
+const HKEYS = ['v1_rx','v1_tx','v2_rx','v2_tx','v1_vpn_rx','v1_vpn_tx','v2_vpn_rx','v2_vpn_tx'];
 let hist = (() => {
   const d = Object.fromEntries(HKEYS.map(k=>[k,[]]));
   try {
@@ -732,7 +734,7 @@ function countActiveVpnPeers(d){
   const active = Number(d.active_peers_awg1);
   if(Number.isFinite(active) && active >= 0) return active;
   const hs = Number(d.hs1_age);
-  const hsFresh = Number.isFinite(hs) && hs >= 0 && hs <= 180;
+  const hsFresh = Number.isFinite(hs) && hs >= 0 && hs <= 55;
   return hsFresh ? (Number(d.peers_awg1) || 0) : 0;
 }
 
@@ -746,13 +748,13 @@ function renderHdrVpnCount(data){
 
 function renderHdrTraffic(data){
   const v1 = data?.vps1, v2 = data?.vps2;
-  const rxT = (v1?.rx_total||0) + (v2?.rx_total||0);
-  const txT = (v1?.tx_total||0) + (v2?.tx_total||0);
-  const rxS = (v1?.rx_speed||0) + (v2?.rx_speed||0);
-  const txS = (v1?.tx_speed||0) + (v2?.tx_speed||0);
+  const vpnRxT = (v1?.vpn_rx_total||0) + (v2?.vpn_rx_total||0);
+  const vpnTxT = (v1?.vpn_tx_total||0) + (v2?.vpn_tx_total||0);
+  const vpnRxS = (v1?.vpn_rx_speed||0) + (v2?.vpn_rx_speed||0);
+  const vpnTxS = (v1?.vpn_tx_speed||0) + (v2?.vpn_tx_speed||0);
   const parts = [];
-  if(rxT>0||txT>0) parts.push(`↓${fmtBytesTotal(rxT)} ↑${fmtBytesTotal(txT)}`);
-  parts.push(`⇅ ${fmtBytes(rxS+txS)}`);
+  if(vpnRxT>0||vpnTxT>0) parts.push(`↓${fmtBytesTotal(vpnRxT)} ↑${fmtBytesTotal(vpnTxT)}`);
+  parts.push(`⇅ ${fmtBytes(vpnRxS+vpnTxS)}`);
   setT('hdr-traffic', parts.join('  '));
 }
 
@@ -813,15 +815,23 @@ function renderSrv(d, pfx){
   }
   setH(`details-${pfx}`, detHtml);
 
-  // ---- Network ----
-  setT(`if-${pfx}`, d.net_if||'');
-  setT(`rx-${pfx}`, fmtBytes(d.rx_speed));
-  setT(`tx-${pfx}`, fmtBytes(d.tx_speed));
-  setT(`rxtotal-${pfx}`, fmtBytesTotal(d.rx_total));
-  setT(`txtotal-${pfx}`, fmtBytesTotal(d.tx_total));
+  // ---- Network: VPN interfaces as primary, physical as secondary ----
+  setT(`if-${pfx}`, 'vpn');
+  setT(`rx-${pfx}`, fmtBytes(d.vpn_rx_speed||0));
+  setT(`tx-${pfx}`, fmtBytes(d.vpn_tx_speed||0));
+  setT(`rxtotal-${pfx}`, fmtBytesTotal(d.vpn_rx_total||0));
+  setT(`txtotal-${pfx}`, fmtBytesTotal(d.vpn_tx_total||0));
 
-  const rxH = hist[`${pfx}_rx`], txH = hist[`${pfx}_tx`];
-  setH(`spark-${pfx}`, spark(rxH, 'var(--green)', 'var(--blue)', txH));
+  const physInfo = el(`phys-${pfx}`);
+  if(physInfo){
+    physInfo.innerHTML = `<span class="net-if">${escH(d.net_if||'')}</span> `+
+      `<span class="arr arr-d" style="font-size:10px">↓</span><span style="font-size:10px;font-family:monospace">${fmtBytes(d.rx_speed)}</span> `+
+      `<span class="arr arr-u" style="font-size:10px">↑</span><span style="font-size:10px;font-family:monospace">${fmtBytes(d.tx_speed)}</span> `+
+      `<span style="font-size:9px;color:var(--dim);font-family:monospace">total: ↓${fmtBytesTotal(d.rx_total)} ↑${fmtBytesTotal(d.tx_total)}</span>`;
+  }
+
+  const vpnRxH = hist[`${pfx}_vpn_rx`], vpnTxH = hist[`${pfx}_vpn_tx`];
+  setH(`spark-${pfx}`, spark(vpnRxH, 'var(--green)', 'var(--blue)', vpnTxH));
 
   // Top connections
   const tc = d.top_conn && d.top_conn !== 'none' ? d.top_conn : '—';
@@ -926,16 +936,16 @@ function renderConns(v1, v2){
     const conns = d?.conns || [];
     const tcp = d?.tcp_est ?? 0;
     const udp = d?.udp_conn ?? 0;
-    const rxS = fmtBytes(d?.rx_speed||0);
-    const txS = fmtBytes(d?.tx_speed||0);
+    const vpnRxS = fmtBytes(d?.vpn_rx_speed||0);
+    const vpnTxS = fmtBytes(d?.vpn_tx_speed||0);
     html += `<div class="conn-section">`;
     html += `<div class="conn-section-hdr">
       <span>${label}</span>
       <span class="conn-count">TCP ${tcp}</span>
       <span class="conn-count">UDP ${udp}</span>
       <span style="margin-left:auto;font-size:10px;color:var(--dim);font-family:monospace;text-transform:none;font-weight:400">
-        <span style="color:var(--green)">↓${rxS}</span>
-        <span style="color:var(--blue)">↑${txS}</span>
+        <span style="color:var(--green)">↓${vpnRxS}</span>
+        <span style="color:var(--blue)">↑${vpnTxS}</span>
       </span>
     </div>`;
     if(conns.length===0){
@@ -961,7 +971,8 @@ let nextAt = 0;
 function mergeVps(prev, cur) {
   if (!prev || !cur) return cur;
   const merged = Object.assign({}, cur);
-  const keep = ['rx_total','tx_total','mem_total_mb','mem_used_mb','mem_avail_mb',
+  const keep = ['rx_total','tx_total','vpn_rx_total','vpn_tx_total',
+    'mem_total_mb','mem_used_mb','mem_avail_mb',
     'mem_free_mb','mem_buffers_mb','mem_cached_mb','disk_pct','disk_used','disk_total',
     'tcp_est','udp_conn','proc_count','open_files','cpus','cpu_mhz','uptime_s'];
   for (const k of keep) {
@@ -990,6 +1001,10 @@ async function poll(){
     pushHist('v1_tx', data.vps1?.tx_speed||0);
     pushHist('v2_rx', data.vps2?.rx_speed||0);
     pushHist('v2_tx', data.vps2?.tx_speed||0);
+    pushHist('v1_vpn_rx', data.vps1?.vpn_rx_speed||0);
+    pushHist('v1_vpn_tx', data.vps1?.vpn_tx_speed||0);
+    pushHist('v2_vpn_rx', data.vps2?.vpn_rx_speed||0);
+    pushHist('v2_vpn_tx', data.vps2?.vpn_tx_speed||0);
     saveHist();
 
     renderSrv(data.vps1, 'v1');
@@ -1093,7 +1108,6 @@ function getPingTargets() {
   return [
     { label: 'VPS1',    host: lastData?.vps1?.ip || '' },
     { label: 'VPS2',    host: lastData?.vps2?.ip || '' },
-    { label: 'Tunnel',  host: '10.8.0.2' },
     { label: '8.8.8.8', host: '8.8.8.8' },
   ].filter(t => t.host);
 }

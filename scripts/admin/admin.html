@@ -1,0 +1,2881 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AmneziaWG Admin</title>
+<style>
+/* ====== Theme variables ====== */
+:root[data-theme="dark"] {
+  --bg-primary: #0f1117;
+  --bg-secondary: #1a1d27;
+  --bg-card: #1e2130;
+  --bg-input: #252838;
+  --bg-hover: #262a3a;
+  --text-primary: #e4e6f0;
+  --text-secondary: #8b8fa3;
+  --text-muted: #5a5e72;
+  --accent: #00d4aa;
+  --accent-hover: #00e8bb;
+  --accent-glow: rgba(0,212,170,0.15);
+  --accent-glow2: rgba(0,212,170,0.08);
+  --border: #2a2d3a;
+  --border-light: #32364a;
+  --success: #00d4aa;
+  --warning: #f0a030;
+  --danger: #e84057;
+  --danger-hover: #ff5068;
+  --info: #4a9eff;
+  --shadow: rgba(0,0,0,0.3);
+  --shadow-lg: rgba(0,0,0,0.5);
+  --ring-bg: #252838;
+  --scrollbar: #2a2d3a;
+  --scrollbar-hover: #3a3e52;
+  --overlay: rgba(10,12,20,0.7);
+}
+:root[data-theme="light"] {
+  --bg-primary: #f5f6fa;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-input: #f0f1f5;
+  --bg-hover: #eef0f5;
+  --text-primary: #1a1d27;
+  --text-secondary: #6b7080;
+  --text-muted: #9a9eb0;
+  --accent: #00b894;
+  --accent-hover: #00d4aa;
+  --accent-glow: rgba(0,184,148,0.12);
+  --accent-glow2: rgba(0,184,148,0.06);
+  --border: #e0e2ea;
+  --border-light: #eaecf2;
+  --success: #00b894;
+  --warning: #e09020;
+  --danger: #d63050;
+  --danger-hover: #e84057;
+  --info: #3080e0;
+  --shadow: rgba(0,0,0,0.08);
+  --shadow-lg: rgba(0,0,0,0.15);
+  --ring-bg: #e8eaf0;
+  --scrollbar: #d0d2da;
+  --scrollbar-hover: #b0b3c0;
+  --overlay: rgba(0,0,0,0.4);
+}
+
+/* ====== Reset & base ====== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; }
+body {
+  min-height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  transition: background .25s, color .25s;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+
+/* ====== Sidebar ====== */
+.app-layout { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 240px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 100;
+  transition: transform .25s, background .25s;
+}
+.sidebar-header {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.02em;
+}
+.sidebar-logo svg { width: 28px; height: 28px; }
+.sidebar-version { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.sidebar-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  margin-bottom: 2px;
+  border: 1px solid transparent;
+}
+.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-item.active {
+  background: var(--accent-glow);
+  color: var(--accent);
+  border-color: rgba(0,212,170,0.15);
+}
+.nav-item .nav-icon { width: 18px; text-align: center; font-size: 15px; flex-shrink: 0; }
+.nav-item .nav-badge {
+  margin-left: auto;
+  background: var(--accent-glow);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+.sidebar-footer {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-user {
+  flex: 1;
+  overflow: hidden;
+}
+.sidebar-username {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-role { font-size: 11px; color: var(--text-muted); }
+.sidebar-footer .btn-icon { flex-shrink: 0; }
+
+/* ====== Main content ====== */
+.main-content {
+  flex: 1;
+  margin-left: 240px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.topbar {
+  height: 56px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  transition: background .25s;
+}
+.topbar-title { font-size: 16px; font-weight: 700; flex: 1; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+.page-content { flex: 1; padding: 24px; max-width: 1400px; width: 100%; margin: 0 auto; }
+
+/* ====== Buttons ====== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.btn:hover { border-color: var(--border-light); background: var(--bg-hover); }
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary {
+  background: var(--accent);
+  color: #0f1117;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-danger { color: var(--danger); border-color: rgba(232,64,87,0.3); }
+.btn-danger:hover { background: rgba(232,64,87,0.1); border-color: var(--danger); }
+.btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 6px; }
+.btn-icon {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all .15s;
+  font-size: 14px;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-icon.danger:hover { color: var(--danger); background: rgba(232,64,87,0.1); }
+.btn-group { display: flex; gap: 4px; }
+
+/* ====== Form elements ====== */
+.form-group { margin-bottom: 16px; }
+.form-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.form-input, .form-select, .form-textarea {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color .15s, box-shadow .15s;
+  outline: none;
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.form-input::placeholder { color: var(--text-muted); }
+.form-textarea { resize: vertical; min-height: 80px; }
+.form-select { cursor: pointer; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+/* ====== Cards ====== */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  transition: border-color .15s, box-shadow .15s, background .25s;
+}
+.card:hover { border-color: var(--border-light); }
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.card-title { font-size: 14px; font-weight: 700; }
+
+/* ====== Summary cards ====== */
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.summary-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  transition: all .15s;
+}
+.summary-card:hover { border-color: var(--accent); box-shadow: 0 4px 16px var(--accent-glow2); }
+.summary-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.summary-icon.teal { background: var(--accent-glow); color: var(--accent); }
+.summary-icon.blue { background: rgba(74,158,255,0.12); color: var(--info); }
+.summary-icon.yellow { background: rgba(240,160,48,0.12); color: var(--warning); }
+.summary-icon.red { background: rgba(232,64,87,0.12); color: var(--danger); }
+.summary-info { flex: 1; min-width: 0; }
+.summary-value { font-size: 28px; font-weight: 700; line-height: 1.1; }
+.summary-label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+/* ====== Server status cards ====== */
+.servers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.server-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all .15s;
+}
+.server-card:hover { border-color: var(--border-light); }
+.server-header {
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.server-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.server-dot.online { background: var(--success); box-shadow: 0 0 8px rgba(0,212,170,0.4); animation: pulse-dot 2s infinite; }
+.server-dot.offline { background: var(--danger); }
+@keyframes pulse-dot {
+  0%,100% { box-shadow: 0 0 8px rgba(0,212,170,0.4); }
+  50% { box-shadow: 0 0 16px rgba(0,212,170,0.6); }
+}
+.server-name { font-weight: 700; font-size: 15px; }
+.server-ip { font-family: monospace; font-size: 12px; color: var(--info); }
+.server-status-label { margin-left: auto; font-size: 12px; font-weight: 600; }
+.server-status-label.online { color: var(--success); }
+.server-status-label.offline { color: var(--danger); }
+.server-body { padding: 16px 18px; }
+.server-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.metric-item { text-align: center; }
+.metric-ring { position: relative; width: 56px; height: 56px; margin: 0 auto 6px; }
+.metric-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.metric-ring .ring-bg { fill: none; stroke: var(--ring-bg); stroke-width: 4; }
+.metric-ring .ring-fg { fill: none; stroke-width: 4; stroke-linecap: round; transition: stroke-dasharray .5s, stroke .5s; }
+.metric-ring .ring-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: monospace;
+}
+.metric-label { font-size: 10px; color: var(--text-secondary); }
+.metric-sub { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+.server-details-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px;
+  padding: 8px 0; font-size: 11px; border-top: 1px solid var(--border);
+}
+.server-detail-item { display: flex; gap: 4px; }
+.server-detail-key { color: var(--text-muted); font-size: 10px; }
+.server-detail-val { color: var(--text-primary); font-family: monospace; font-size: 11px; }
+.server-net-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 0; margin: 8px 0; border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.server-phys-row {
+  font-size: 11px; color: var(--text-muted); padding: 4px 0;
+  border-top: 1px solid var(--border);
+}
+.server-net-item { display: flex; align-items: center; gap: 4px; }
+.server-net-item .arr { font-size: 14px; }
+.server-net-item .arr-d { color: var(--success); }
+.server-net-item .arr-u { color: var(--info); }
+.server-interfaces {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.iface-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.iface-chip.up { background: rgba(0,212,170,0.1); border-color: rgba(0,212,170,0.2); color: var(--success); }
+.iface-chip.down { background: rgba(232,64,87,0.1); border-color: rgba(232,64,87,0.2); color: var(--danger); }
+.iface-chip .chip-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.server-chip { display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:600;margin:2px; }
+.server-chip.chip-ok { background:rgba(0,212,170,0.12); border:1px solid rgba(0,212,170,0.25); color:var(--success); }
+.server-chip.chip-warn { background:rgba(240,160,48,0.12); border:1px solid rgba(240,160,48,0.25); color:var(--warning); }
+.server-chip.chip-bad { background:rgba(232,64,87,0.12); border:1px solid rgba(232,64,87,0.25); color:var(--danger); }
+.server-chip.chip-dim { background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); }
+
+/* ====== Table ====== */
+.table-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.table-toolbar {
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.search-input {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 7px 12px 7px 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b8fa3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 10px center;
+}
+.search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.search-input::placeholder { color: var(--text-muted); }
+.filter-select {
+  padding: 7px 28px 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b8fa3' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: calc(100% - 8px) center;
+}
+.filter-select:focus { border-color: var(--accent); }
+.toolbar-right { margin-left: auto; display: flex; gap: 8px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+thead th {
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color .15s;
+}
+thead th:hover { color: var(--text-primary); }
+thead th .sort-arrow { font-size: 10px; margin-left: 4px; color: var(--text-muted); }
+thead th.sorted .sort-arrow { color: var(--accent); }
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background .1s;
+}
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: var(--bg-hover); }
+tbody td {
+  padding: 10px 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+td.mono { font-family: monospace; font-size: 12px; }
+
+/* ====== Badges ====== */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.badge-active { background: rgba(0,212,170,0.12); border-color: rgba(0,212,170,0.25); color: var(--success); }
+.badge-disabled { background: rgba(240,160,48,0.12); border-color: rgba(240,160,48,0.25); color: var(--warning); }
+.badge-expired { background: rgba(232,64,87,0.12); border-color: rgba(232,64,87,0.25); color: var(--danger); }
+.badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.type-icon { font-size: 15px; }
+
+/* ====== Handshake colors ====== */
+.hs-green { color: var(--success); }
+.hs-yellow { color: var(--warning); }
+.hs-red { color: var(--danger); }
+.hs-gray { color: var(--text-muted); }
+
+/* ====== Pagination ====== */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.pagination-info { }
+.pagination-btns { display: flex; gap: 4px; }
+.page-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all .15s;
+}
+.page-btn:hover { border-color: var(--accent); }
+.page-btn.active { background: var(--accent); color: #0f1117; border-color: var(--accent); }
+.page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ====== Modal ====== */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: fadeIn .15s;
+}
+.modal-overlay.open { display: flex; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px var(--shadow-lg);
+  animation: slideUp .2s;
+}
+@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.modal-lg { max-width: 640px; }
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-title { font-size: 16px; font-weight: 700; }
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+  transition: color .15s;
+}
+.modal-close:hover { color: var(--text-primary); }
+.modal-body { padding: 22px; }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--border);
+}
+
+/* ====== Tabs (inside modals) ====== */
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.tab-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all .15s;
+}
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+/* ====== Toast notifications ====== */
+.toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.toast {
+  padding: 12px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px var(--shadow-lg);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 280px;
+  max-width: 420px;
+  animation: slideIn .25s;
+  transition: opacity .2s, transform .2s;
+}
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.toast.hiding { opacity: 0; transform: translateX(100%); }
+.toast-icon { font-size: 16px; flex-shrink: 0; }
+.toast-success .toast-icon { color: var(--success); }
+.toast-error .toast-icon { color: var(--danger); }
+.toast-info .toast-icon { color: var(--info); }
+.toast-msg { flex: 1; }
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px;
+  transition: color .15s;
+}
+.toast-close:hover { color: var(--text-primary); }
+
+/* ====== Login page ====== */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  padding: 20px;
+}
+.login-box {
+  width: 100%;
+  max-width: 400px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 40px 36px;
+  box-shadow: 0 20px 60px var(--shadow-lg);
+}
+.login-logo {
+  text-align: center;
+  margin-bottom: 28px;
+}
+.login-logo-icon {
+  font-size: 40px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.login-logo-text {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.login-logo-sub { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+.login-error {
+  background: rgba(232,64,87,0.1);
+  border: 1px solid rgba(232,64,87,0.25);
+  color: var(--danger);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  display: none;
+}
+.login-error.show { display: block; }
+
+/* ====== QR modal ====== */
+.qr-container { text-align: center; padding: 10px 0; }
+.qr-container img {
+  max-width: 260px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  padding: 8px;
+}
+.qr-info { margin-top: 12px; font-size: 13px; color: var(--text-secondary); }
+.qr-info strong { color: var(--text-primary); }
+
+/* ====== Settings page ====== */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 20px;
+}
+.settings-section .card { height: 100%; }
+
+/* ====== Audit table ====== */
+.audit-details {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ====== Loading states ====== */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: var(--text-secondary);
+  gap: 10px;
+  font-size: 13px;
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-input) 25%, var(--bg-hover) 50%, var(--bg-input) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 6px;
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ====== Empty state ====== */
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-secondary);
+}
+.empty-state-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
+.empty-state-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.empty-state-text { font-size: 13px; margin-bottom: 20px; }
+
+/* ====== Traffic & Speed charts ====== */
+.traffic-charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+@media (max-width: 900px) { .traffic-charts-grid { grid-template-columns: 1fr; } }
+.chart-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  transition: all .15s;
+}
+.chart-card:hover { border-color: var(--border-light); }
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chart-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+.chart-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.chart-legend span { display: flex; align-items: center; gap: 4px; }
+.chart-legend .dot-rx { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+.chart-legend .dot-tx { width: 6px; height: 6px; border-radius: 50%; background: var(--info); }
+.chart-canvas {
+  width: 100%;
+  height: 100px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+.chart-canvas svg { width: 100%; height: 100%; display: block; }
+.peer-speed-cell {
+  cursor: default;
+  white-space: nowrap;
+}
+.peer-speed-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.peer-speed-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.18);
+}
+.peer-speed-dot.idle {
+  background: var(--text-muted);
+  box-shadow: none;
+}
+.peer-speed-tooltip {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  min-width: 220px;
+  max-width: 280px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  padding: 10px 11px;
+}
+.peer-speed-tooltip-title {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.peer-speed-tooltip-rate {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: monospace;
+  font-size: 11px;
+  margin-bottom: 7px;
+}
+.peer-speed-tooltip-rate .rx { color: var(--success); }
+.peer-speed-tooltip-rate .tx { color: var(--info); }
+.peer-speed-tooltip-chart {
+  height: 56px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+.traffic-summary-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.traffic-mini-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: all .15s;
+}
+.traffic-mini-card:hover { border-color: var(--accent); }
+.traffic-mini-icon {
+  width: 36px; height: 36px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; flex-shrink: 0;
+}
+.traffic-mini-icon.down { background: rgba(0,212,170,0.12); color: var(--success); }
+.traffic-mini-icon.up { background: rgba(74,158,255,0.12); color: var(--info); }
+.traffic-mini-value { font-size: 18px; font-weight: 700; line-height: 1.2; }
+.traffic-mini-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.dashboard-section-title {
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-secondary); margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
+}
+.dashboard-section-title::after {
+  content: ''; flex: 1; height: 1px; background: var(--border);
+}
+
+/* ====== Monitor log ====== */
+.monitor-log-wrap { max-height: 240px; overflow-y: auto; font-family: monospace; font-size: 11px; }
+.monitor-log-line {
+  padding: 2px 12px; border-left: 2px solid transparent;
+  white-space: pre-wrap; word-break: break-all; line-height: 1.5;
+}
+.monitor-log-line:hover { background: var(--bg-hover); }
+.monitor-log-line.INFO { border-color: var(--info); }
+.monitor-log-line.WARN { border-color: var(--warning); background: rgba(240,160,48,0.04); }
+.monitor-log-line.ERROR { border-color: var(--danger); background: rgba(232,64,87,0.06); }
+
+/* ====== Activity log on dashboard ====== */
+.activity-list { max-height: 320px; overflow-y: auto; }
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.activity-item:last-child { border-bottom: none; }
+.activity-time { color: var(--text-muted); font-size: 12px; font-family: monospace; white-space: nowrap; flex-shrink: 0; }
+.activity-action {
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.activity-action.login { background: rgba(74,158,255,0.12); color: var(--info); }
+.activity-action.peer { background: rgba(0,212,170,0.12); color: var(--success); }
+.activity-action.settings { background: rgba(240,160,48,0.12); color: var(--warning); }
+.activity-action.delete { background: rgba(232,64,87,0.12); color: var(--danger); }
+.activity-target { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ====== Confirm dialog ====== */
+.confirm-body { text-align: center; padding: 10px 0; }
+.confirm-icon { font-size: 48px; margin-bottom: 12px; }
+.confirm-text { font-size: 14px; color: var(--text-secondary); margin-bottom: 4px; }
+.confirm-name { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+
+/* ====== Progress bar ====== */
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--ring-bg);
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width .3s;
+}
+
+/* ====== Responsive ====== */
+.sidebar-toggle {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 22px;
+  cursor: pointer;
+  padding: 4px;
+}
+@media (max-width: 900px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .main-content { margin-left: 0; }
+  .sidebar-toggle { display: block; }
+  .server-metrics { grid-template-columns: repeat(2, 1fr); }
+  .form-row { grid-template-columns: 1fr; }
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .page-content { padding: 16px; }
+  .summary-grid { grid-template-columns: 1fr; }
+  .servers-grid { grid-template-columns: 1fr; }
+  .table-toolbar { flex-direction: column; align-items: stretch; }
+  .search-input { max-width: 100%; }
+  .toolbar-right { margin-left: 0; justify-content: flex-end; }
+}
+
+/* ====== Theme toggle ====== */
+.theme-toggle {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  cursor: pointer;
+  position: relative;
+  transition: all .25s;
+  flex-shrink: 0;
+}
+.theme-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  transition: transform .25s;
+}
+:root[data-theme="light"] .theme-toggle::after { transform: translateX(20px); }
+.theme-icons {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 5px;
+  font-size: 11px;
+  pointer-events: none;
+}
+</style>
+</head>
+<body>
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- App root -->
+<div id="app"></div>
+
+<script>
+'use strict';
+
+// ====== State ======
+const state = {
+  token: localStorage.getItem('admin_token'),
+  user: null,
+  peers: [],
+  peerStats: null,
+  monitoring: null,
+  monitoringPeers: [],
+  settings: {},
+  auditLog: { items: [], total: 0, page: 1, pages: 1 },
+  currentPage: 'dashboard',
+  theme: localStorage.getItem('admin_theme') || 'dark',
+  peersFilter: { search: '', status: '', type: '', group: '' },
+  peersSort: { col: 'name', dir: 'asc' },
+  peersPage: 1,
+  groups: [],
+};
+
+const PEERS_PER_PAGE = 50;
+let refreshTimer = null;
+const SPEED_HIST_MAX = 60;
+const PEER_SPEED_HIST_MAX = 40;
+const PEER_ONLINE_HS_SEC = 55;
+const speedHist = {
+  v1_rx: [], v1_tx: [], v2_rx: [], v2_tx: [],
+  combined_rx: [], combined_tx: [],
+  v1_total: [], v2_total: []
+};
+const peerLive = {};
+let peerSpeedTooltipEl = null;
+
+// ====== Theme ======
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  state.theme = t;
+  try { localStorage.setItem('admin_theme', t); } catch(_) {}
+}
+applyTheme(state.theme);
+
+function toggleTheme() {
+  applyTheme(state.theme === 'dark' ? 'light' : 'dark');
+}
+
+// ====== Toast ======
+function toast(msg, type = 'success') {
+  const icons = { success: '✓', error: '✕', info: 'ℹ' };
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.innerHTML = `<span class="toast-icon">${icons[type] || '•'}</span><span class="toast-msg">${esc(msg)}</span><button class="toast-close" onclick="this.parentElement.remove()">✕</button>`;
+  container.appendChild(el);
+  setTimeout(() => { el.classList.add('hiding'); setTimeout(() => el.remove(), 250); }, 4000);
+}
+
+// ====== API helper ======
+async function api(method, path, body, retryOn401) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  };
+  const token = state.token || localStorage.getItem('admin_token');
+  if (token && typeof token === 'string') opts.headers['Authorization'] = 'Bearer ' + token;
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  opts.credentials = 'include';
+
+  let res = await fetch(path, opts);
+  let data = await res.json().catch(() => ({}));
+
+  if (res.status === 401 && retryOn401 !== false && (state.token || localStorage.getItem('admin_token'))) {
+    await new Promise(r => setTimeout(r, 400));
+    res = await fetch(path, opts);
+    data = await res.json().catch(() => ({}));
+  }
+
+  if (res.status === 401) {
+    state.token = null;
+    state.user = null;
+    localStorage.removeItem('admin_token');
+    navigate('login');
+    throw new Error('Session expired');
+  }
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// ====== Formatting ======
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtDate(d) {
+  if (!d) return '—';
+  const dt = new Date(d.includes('T') || d.includes('Z') ? d : d + 'Z');
+  if (isNaN(dt)) return d;
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    + ' ' + dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function fmtBytes(b) {
+  if (!b || b <= 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0, v = b;
+  while (v >= 1024 && i < 4) { v /= 1024; i++; }
+  return i === 0 ? `${Math.round(v)} ${u[i]}` : `${v.toFixed(1)} ${u[i]}`;
+}
+
+function fmtBytesSpeed(bps) {
+  if (!bps || bps <= 0) return '0 B/s';
+  const u = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  let i = 0, v = bps;
+  while (v >= 1024 && i < 3) { v /= 1024; i++; }
+  return i === 0 ? `${Math.round(v)} ${u[i]}` : `${v.toFixed(1)} ${u[i]}`;
+}
+
+function fmtUptime(s) {
+  if (!s || s <= 0) return '—';
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function fmtHandshake(ageSec) {
+  if (ageSec == null || ageSec < 0) return { text: 'never', cls: 'hs-gray' };
+  if (ageSec < PEER_ONLINE_HS_SEC) return { text: `${ageSec}s ago`, cls: 'hs-green' };
+  if (ageSec < 600) return { text: `${Math.round(ageSec / 60)}m ago`, cls: 'hs-yellow' };
+  return { text: `${Math.round(ageSec / 60)}m ago`, cls: 'hs-red' };
+}
+
+function gaugeColor(pct) {
+  if (pct >= 85) return 'var(--danger)';
+  if (pct >= 60) return 'var(--warning)';
+  return 'var(--success)';
+}
+
+function fmtSwap(raw) {
+  if (!raw || raw === '0/0MB') return '—';
+  const m = String(raw).match(/^(\d+)\/(\d+)MB/);
+  if (!m) return raw;
+  return (+m[2] === 0) ? '—' : m[1] + '/' + m[2] + 'MB';
+}
+function fmtMB(mb) {
+  if (mb == null) return '—';
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+  return Math.round(mb) + ' MB';
+}
+function fmtNum(n) {
+  if (n == null || n === 0) return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+function chipCls(v) {
+  const s = String(v || '').toLowerCase();
+  return ['active','up','ok','yes'].includes(s) ? 'chip-ok' : ['unknown','degraded'].includes(s) ? 'chip-warn' : 'chip-bad';
+}
+
+function extractPeerIp(allowedIps) {
+  if (!allowedIps) return null;
+  const m = String(allowedIps).match(/(\d{1,3}(?:\.\d{1,3}){3})(?:\/\d{1,2})?/);
+  return m ? m[1] : null;
+}
+
+const TYPE_ICONS = { pc: '💻', phone: '📱', tablet: '📋', router: '🌐', desktop: '💻', laptop: '💻', mobile: '📱' };
+function typeIcon(t) { return TYPE_ICONS[t] || '📱'; }
+
+function statusBadge(s) {
+  const cls = s === 'active' ? 'badge-active' : s === 'disabled' ? 'badge-disabled' : s === 'from_config' ? 'badge-disabled' : 'badge-expired';
+  return `<span class="badge ${cls}"><span class="badge-dot"></span>${esc(s)}</span>`;
+}
+
+function connectionBadge(status, handshakeAgeSec) {
+  if (!status) return '';
+  const cls = status === 'online' ? 'badge-active' : 'badge-expired';
+  const hs = handshakeAgeSec == null ? 'no handshake' : `last handshake ${Math.max(0, Math.round(handshakeAgeSec))}s ago`;
+  const label = status === 'online' ? '● online' : '○ offline';
+  return `<span class="badge ${cls}" style="margin-left:4px" title="${esc(hs)}">${label}</span>`;
+}
+
+// ====== Router ======
+function navigate(page, tokenFromLogin) {
+  if (tokenFromLogin) {
+    state.token = tokenFromLogin;
+    try { localStorage.setItem('admin_token', tokenFromLogin); } catch (_) {}
+  }
+  if (!state.token && !state.user && page !== 'login') { page = 'login'; }
+  state.currentPage = page;
+  window.location.hash = '#' + page;
+  render();
+  if (page !== 'login') startAutoRefresh();
+}
+
+window.addEventListener('hashchange', () => {
+  const page = window.location.hash.slice(1) || 'dashboard';
+  if (page !== state.currentPage) navigate(page);
+});
+
+// ====== Auto refresh ======
+function startAutoRefresh() {
+  stopAutoRefresh();
+  refreshTimer = setInterval(async () => {
+    if (state.currentPage === 'dashboard') await loadDashboardData();
+    if (state.currentPage === 'peers') await loadPeers();
+  }, 2000);
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+}
+
+// ====== Data loading ======
+async function loadDashboardData() {
+  try {
+    const [stats, monitoring, peersRes, monPeersRes] = await Promise.all([
+      api('GET', '/api/peers/stats').catch(() => ({})),
+      api('GET', '/api/monitoring/data').catch(() => null),
+      api('GET', '/api/peers').catch(() => []),
+      api('GET', '/api/monitoring/peers').catch(() => []),
+    ]);
+    state.peerStats = stats;
+    state.monitoring = monitoring;
+    state.peers = Array.isArray(peersRes) ? peersRes : [];
+    state.monitoringPeers = Array.isArray(monPeersRes) ? monPeersRes : [];
+    const mpMap = {};
+    (state.monitoringPeers || []).forEach(mp => {
+      const ip = mp.peer_ip || extractPeerIp(mp.allowed_ips);
+      if (ip) mpMap[ip] = mp;
+      if (mp.public_key) mpMap[mp.public_key] = mp;
+    });
+    (state.peers || []).forEach(p => {
+      const mp = mpMap[p.ip] || mpMap[p.public_key];
+      updatePeerLiveStats(p, mp);
+    });
+    if (monitoring) pushSpeedHist(monitoring);
+    if (state.currentPage === 'dashboard') renderDashboardContent();
+  } catch (e) { /* silent */ }
+}
+
+async function loadPeers() {
+  try {
+    const params = new URLSearchParams();
+    if (state.peersFilter.status) params.set('status', state.peersFilter.status);
+    if (state.peersFilter.type) params.set('type', state.peersFilter.type);
+    if (state.peersFilter.group) params.set('group', state.peersFilter.group);
+    if (state.peersFilter.search) params.set('search', state.peersFilter.search);
+    const peers = await api('GET', '/api/peers?' + params.toString());
+    state.peers = peers;
+    state.groups = [...new Set(peers.map(p => p.group_name).filter(Boolean))];
+
+    try {
+      state.monitoringPeers = await api('GET', '/api/monitoring/peers');
+    } catch (_) {}
+
+    const mpMap = {};
+    (state.monitoringPeers || []).forEach(mp => {
+      const ip = mp.peer_ip || extractPeerIp(mp.allowed_ips);
+      if (ip) mpMap[ip] = mp;
+      if (mp.public_key) mpMap[mp.public_key] = mp;
+    });
+    (state.peers || []).forEach(p => {
+      const mp = mpMap[p.ip] || mpMap[p.public_key];
+      updatePeerLiveStats(p, mp);
+    });
+
+    if (state.currentPage === 'peers') renderPeersContent();
+  } catch (e) { /* silent */ }
+}
+
+async function loadSettings() {
+  try {
+    state.settings = await api('GET', '/api/settings');
+    if (state.currentPage === 'settings') renderSettingsContent();
+  } catch (e) { /* silent */ }
+}
+
+async function loadAudit(page = 1) {
+  try {
+    const params = new URLSearchParams({ page, per_page: 50 });
+    const actionFilter = document.getElementById('audit-action-filter');
+    if (actionFilter && actionFilter.value) params.set('action', actionFilter.value);
+    state.auditLog = await api('GET', '/api/audit?' + params.toString());
+    if (state.currentPage === 'audit') renderAuditContent();
+  } catch (e) { /* silent */ }
+}
+
+// ====== Speed history & sparkline ======
+function pushSpeedHist(mon) {
+  if (!mon) return;
+  const v1 = mon.vps1 || {}, v2 = mon.vps2 || {};
+  const v1rx = v1.vpn_rx_speed || 0, v1tx = v1.vpn_tx_speed || 0;
+  const v2rx = v2.vpn_rx_speed || 0, v2tx = v2.vpn_tx_speed || 0;
+  const push = (arr, val) => { arr.push(val || 0); if (arr.length > SPEED_HIST_MAX) arr.shift(); };
+  push(speedHist.v1_rx, v1rx); push(speedHist.v1_tx, v1tx);
+  push(speedHist.v2_rx, v2rx); push(speedHist.v2_tx, v2tx);
+  push(speedHist.combined_rx, v1rx + v2rx);
+  push(speedHist.combined_tx, v1tx + v2tx);
+  push(speedHist.v1_total, v1rx + v1tx);
+  push(speedHist.v2_total, v2rx + v2tx);
+}
+function sparkline(valsDown, valsUp, colorDown, colorUp) {
+  if (!valsDown || valsDown.length < 2) return '';
+  colorDown = colorDown || 'var(--success)';
+  colorUp = colorUp || 'var(--info)';
+  const W = 400, H = 100;
+  const all = valsUp ? valsDown.concat(valsUp) : valsDown;
+  const mx = Math.max(...all, 1);
+  function poly(arr, color, opacity) {
+    const pts = arr.map((v, i) => {
+      const x = (i / (arr.length - 1)) * W;
+      const y = H - 4 - ((v || 0) / mx) * (H - 8);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    const fill = pts + ' ' + W + ',' + H + ' 0,' + H;
+    return '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" opacity="' + opacity + '"/>' +
+      '<polygon points="' + fill + '" fill="' + color + '" opacity="' + (opacity * 0.12) + '"/>';
+  }
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">';
+  svg += poly(valsDown, colorDown, 0.9);
+  if (valsUp && valsUp.length >= 2) svg += poly(valsUp, colorUp, 0.7);
+  svg += '</svg>';
+  return svg;
+}
+
+function peerLiveKey(peer, monPeer) {
+  return String(
+    peer?.ip ||
+    monPeer?.peer_ip ||
+    peer?.public_key ||
+    monPeer?.public_key ||
+    peer?.name ||
+    ''
+  );
+}
+
+function updatePeerLiveStats(peer, monPeer) {
+  const key = peerLiveKey(peer, monPeer);
+  if (!key) return null;
+  const nowSec = Date.now() / 1000;
+  const rxBytes = Number(peer?.rx_bytes ?? monPeer?.rx_bytes ?? 0);
+  const txBytes = Number(peer?.tx_bytes ?? monPeer?.tx_bytes ?? 0);
+  const handshakeAgeSec = peer?.handshake_age_sec ?? monPeer?.handshake_age_sec ?? null;
+  const online = handshakeAgeSec != null && Number(handshakeAgeSec) >= 0 && Number(handshakeAgeSec) < PEER_ONLINE_HS_SEC;
+  const live = peerLive[key] || { rxHist: [], txHist: [], rxBps: 0, txBps: 0, ts: nowSec };
+
+  const dt = nowSec - (live.ts || nowSec);
+  if (Number.isFinite(dt) && dt > 0.4) {
+    const rxDelta = Math.max(0, rxBytes - (live.rxBytes || 0));
+    const txDelta = Math.max(0, txBytes - (live.txBytes || 0));
+    const rxBps = rxDelta / dt;
+    const txBps = txDelta / dt;
+    live.rxBps = rxBps;
+    live.txBps = txBps;
+    live.rxHist.push(rxBps);
+    live.txHist.push(txBps);
+    if (live.rxHist.length > PEER_SPEED_HIST_MAX) live.rxHist.shift();
+    if (live.txHist.length > PEER_SPEED_HIST_MAX) live.txHist.shift();
+  }
+
+  live.ts = nowSec;
+  live.rxBytes = rxBytes;
+  live.txBytes = txBytes;
+  live.online = online;
+  live.handshakeAgeSec = handshakeAgeSec;
+  peerLive[key] = live;
+  return { key, ...live };
+}
+
+function ensurePeerSpeedTooltip() {
+  if (peerSpeedTooltipEl && document.body.contains(peerSpeedTooltipEl)) return peerSpeedTooltipEl;
+  peerSpeedTooltipEl = document.createElement('div');
+  peerSpeedTooltipEl.className = 'peer-speed-tooltip';
+  peerSpeedTooltipEl.style.display = 'none';
+  document.body.appendChild(peerSpeedTooltipEl);
+  return peerSpeedTooltipEl;
+}
+
+function showPeerSpeedTooltip(e, key, title) {
+  const live = peerLive[key];
+  if (!live) return;
+  const tip = ensurePeerSpeedTooltip();
+  const rxHist = (live.rxHist && live.rxHist.length > 1) ? live.rxHist : [0, live.rxBps || 0];
+  const txHist = (live.txHist && live.txHist.length > 1) ? live.txHist : [0, live.txBps || 0];
+  tip.innerHTML = `
+    <div class="peer-speed-tooltip-title">${esc(title || key)}</div>
+    <div class="peer-speed-tooltip-rate">
+      <span class="rx">↓ ${fmtBytesSpeed(live.rxBps || 0)}</span>
+      <span class="tx">↑ ${fmtBytesSpeed(live.txBps || 0)}</span>
+    </div>
+    <div class="peer-speed-tooltip-chart">${sparkline(rxHist, txHist, 'var(--success)', 'var(--info)')}</div>
+  `;
+  tip.style.display = 'block';
+  movePeerSpeedTooltip(e);
+}
+
+function movePeerSpeedTooltip(e) {
+  if (!peerSpeedTooltipEl || peerSpeedTooltipEl.style.display === 'none') return;
+  const offset = 14;
+  const w = peerSpeedTooltipEl.offsetWidth || 240;
+  const h = peerSpeedTooltipEl.offsetHeight || 120;
+  let x = e.clientX + offset;
+  let y = e.clientY + offset;
+  if (x + w > window.innerWidth - 8) x = e.clientX - w - offset;
+  if (y + h > window.innerHeight - 8) y = e.clientY - h - offset;
+  peerSpeedTooltipEl.style.left = `${Math.max(8, x)}px`;
+  peerSpeedTooltipEl.style.top = `${Math.max(8, y)}px`;
+}
+
+function hidePeerSpeedTooltip() {
+  if (peerSpeedTooltipEl) peerSpeedTooltipEl.style.display = 'none';
+}
+
+// ====== Ring gauge SVG ======
+function ringGauge(pct, color) {
+  const r = 22, circ = 2 * Math.PI * r;
+  const dash = (Math.min(100, pct) / 100) * circ;
+  return `<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="${r}" class="ring-bg"/><circle cx="26" cy="26" r="${r}" class="ring-fg" stroke="${color}" stroke-dasharray="${dash.toFixed(1)} ${(circ - dash).toFixed(1)}"/></svg><div class="ring-text">${Math.round(pct)}%</div>`;
+}
+
+// ====== Render ======
+function render() {
+  const app = document.getElementById('app');
+  if (state.currentPage === 'login' || (!state.token && !state.user)) {
+    app.innerHTML = renderLoginPage();
+    return;
+  }
+  app.innerHTML = renderAppLayout();
+  onPageLoad();
+}
+
+function renderLoginPage() {
+  return `<div class="login-page">
+    <div class="login-box">
+      <div class="login-logo">
+        <div class="login-logo-icon">⬡</div>
+        <div class="login-logo-text">AmneziaWG Admin</div>
+        <div class="login-logo-sub">Sign in to manage your VPN</div>
+      </div>
+      <div class="login-error" id="login-error"></div>
+      <form onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input class="form-input" id="login-user" type="text" placeholder="admin" autocomplete="username" required autofocus>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input class="form-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px;font-size:14px;margin-top:8px" id="login-btn" type="submit">
+          Sign In
+        </button>
+      </form>
+    </div>
+  </div>`;
+}
+
+function renderAppLayout() {
+  const pages = [
+    { id: 'dashboard', icon: '⬡', label: 'Dashboard' },
+    { id: 'peers', icon: '⊞', label: 'Peers', badge: state.peers.length || '' },
+    { id: 'settings', icon: '⚙', label: 'Settings' },
+    { id: 'audit', icon: '☰', label: 'Audit Log' },
+  ];
+  const navItems = pages.map(p =>
+    `<div class="nav-item ${state.currentPage === p.id ? 'active' : ''}" onclick="navigate('${p.id}')">
+      <span class="nav-icon">${p.icon}</span>${p.label}${p.badge ? `<span class="nav-badge">${p.badge}</span>` : ''}
+    </div>`
+  ).join('');
+
+  return `<div class="app-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <svg viewBox="0 0 28 28" fill="none"><path d="M14 2L2 8v12l12 6 12-6V8L14 2z" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M14 2v24M2 8l12 6 12-6" stroke="currentColor" stroke-width="1.5" opacity="0.5"/></svg>
+          AmneziaWG
+        </div>
+        <div class="sidebar-version">Admin Panel v1.0</div>
+      </div>
+      <nav class="sidebar-nav">${navItems}</nav>
+      <div class="sidebar-footer">
+        <div class="sidebar-user">
+          <div class="sidebar-username">${esc(state.user?.username || 'admin')}</div>
+          <div class="sidebar-role">Administrator</div>
+        </div>
+        <button class="btn-icon" onclick="toggleTheme()" title="Toggle theme">
+          ${state.theme === 'dark' ? '☀' : '☾'}
+        </button>
+        <button class="btn-icon danger" onclick="handleLogout()" title="Sign out">⏻</button>
+      </div>
+    </aside>
+    <main class="main-content">
+      <div class="topbar">
+        <button class="sidebar-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+        <div class="topbar-title">${pages.find(p => p.id === state.currentPage)?.label || 'Dashboard'}</div>
+        <div class="topbar-actions">
+          <div class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+            <div class="theme-icons"><span>☾</span><span>☀</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="page-content" id="page-content">
+        <div class="loading-overlay"><span class="spinner"></span> Loading...</div>
+      </div>
+    </main>
+  </div>`;
+}
+
+function onPageLoad() {
+  switch (state.currentPage) {
+    case 'dashboard':
+      setTimeout(() => loadDashboardData(), 300);
+      break;
+    case 'peers':
+      setTimeout(() => loadPeers(), 200);
+      break;
+    case 'settings':
+      setTimeout(() => loadSettings(), 100);
+      break;
+    case 'audit':
+      setTimeout(() => loadAudit(), 100);
+      break;
+  }
+}
+
+// ====== Dashboard ======
+function renderDashboardContent() {
+  const pc = document.getElementById('page-content');
+  if (!pc || state.currentPage !== 'dashboard') return;
+
+  const stats = state.peerStats || {};
+  const mon = state.monitoring || {};
+  const v1 = mon.vps1 || {};
+  const v2 = mon.vps2 || {};
+  const totalPeers = stats.used || 0;
+  const activePeers = stats.by_status?.active || 0;
+  const disabledPeers = stats.by_status?.disabled || 0;
+  const available = stats.available || 0;
+
+  const vpnRxTotal = (v1.vpn_rx_total || 0) + (v2.vpn_rx_total || 0);
+  const vpnTxTotal = (v1.vpn_tx_total || 0) + (v2.vpn_tx_total || 0);
+  const vpnRxSpeed = (v1.vpn_rx_speed || 0) + (v2.vpn_rx_speed || 0);
+  const vpnTxSpeed = (v1.vpn_tx_speed || 0) + (v2.vpn_tx_speed || 0);
+
+  const vpnTotalCombined = vpnRxTotal + vpnTxTotal;
+  const CONNECTED_HS_SEC = PEER_ONLINE_HS_SEC;
+  const mpMap = {};
+  const mpByIp = {};
+  (state.monitoringPeers || []).forEach(mp => {
+    if (mp.public_key) mpMap[mp.public_key] = mp;
+    const ip = mp.peer_ip || extractPeerIp(mp.allowed_ips);
+    if (ip) mpByIp[ip] = mp;
+  });
+  const isActive = mp => mp && mp.handshake_age_sec != null && mp.handshake_age_sec < CONNECTED_HS_SEC;
+  const matchedIds = new Set();
+  let connectedPeers = (state.peers || [])
+    .filter(p => {
+      if (p.connection_status === 'online') return true;
+      const m = mpMap[p.public_key] || (p.ip ? mpByIp[p.ip] : null);
+      return isActive(m);
+    })
+    .map(p => {
+      const mp = mpMap[p.public_key] || mpByIp[p.ip] || {
+        handshake_age_sec: p.handshake_age_sec,
+        rx_bytes: p.rx_bytes,
+        tx_bytes: p.tx_bytes
+      };
+      if (mp.public_key) matchedIds.add(mp.public_key);
+      return { ...p, mp };
+    });
+  // Добавляем активные пиры из monitoring, которых нет в state.peers (напр. только на сервере)
+  (state.monitoringPeers || []).forEach(mp => {
+    if (!isActive(mp) || (mp.public_key && matchedIds.has(mp.public_key))) return;
+    const ip = mp.peer_ip || extractPeerIp(mp.allowed_ips) || '?';
+    const dbPeer = (state.peers || []).find(p => p.ip === ip || p.public_key === mp.public_key);
+    if (dbPeer) return;
+    connectedPeers.push({ name: ip, ip, mp });
+    if (mp.public_key) matchedIds.add(mp.public_key);
+  });
+  const connectedCount = connectedPeers.length;
+  const dataTs = mon?.ts ? new Date(mon.ts * 1000).toLocaleTimeString() : null;
+  const monitoringPeersSorted = [...(state.monitoringPeers || [])].sort((a, b) => {
+    const ah = a.handshake_age_sec == null ? Number.POSITIVE_INFINITY : a.handshake_age_sec;
+    const bh = b.handshake_age_sec == null ? Number.POSITIVE_INFINITY : b.handshake_age_sec;
+    return ah - bh;
+  });
+  const monitoringPeersCard = monitoringPeersSorted.length > 0
+    ? `<div class="card" style="margin-bottom:20px">
+        <div class="card-header">
+          <div class="card-title">WireGuard peers (live)</div>
+          <span class="badge" style="background:var(--bg-input);color:var(--text-secondary)">${monitoringPeersSorted.length}</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Peer IP</th>
+                <th>Endpoint</th>
+                <th>Allowed IPs</th>
+                <th>Handshake</th>
+                <th>Traffic</th>
+                <th>Public Key</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${monitoringPeersSorted.map(mp => {
+                const hs = fmtHandshake(mp.handshake_age_sec);
+                const peerIp = mp.peer_ip || extractPeerIp(mp.allowed_ips) || '—';
+                const shortKey = mp.public_key ? (mp.public_key.slice(0, 10) + '...' + mp.public_key.slice(-6)) : '—';
+                return `<tr>
+                  <td class="mono">${esc(peerIp)}</td>
+                  <td class="mono" style="font-size:12px">${esc(mp.endpoint || '—')}</td>
+                  <td class="mono" style="font-size:12px">${esc(mp.allowed_ips || '—')}</td>
+                  <td class="${hs.cls}" style="font-family:monospace;font-size:12px">${hs.text}</td>
+                  <td class="mono" style="font-size:12px"><span style="color:var(--success)">↓${fmtBytes(mp.rx_bytes || 0)}</span> <span style="color:var(--info)">↑${fmtBytes(mp.tx_bytes || 0)}</span></td>
+                  <td class="mono" style="font-size:11px;color:var(--text-secondary)" title="${esc(mp.public_key || '')}">${esc(shortKey)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`
+    : '';
+  const connectedBlock = connectedCount > 0
+    ? `<div class="card" style="margin-bottom:20px;border-color:var(--success)">
+        <div class="card-header">
+          <div class="card-title">Подключено сейчас (handshake &lt; ${CONNECTED_HS_SEC}с)</div>
+          <span class="badge badge-active">${connectedCount}</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          ${connectedPeers.map(p => `<div class="traffic-mini-card" style="min-width:140px">
+            <div class="traffic-mini-icon down">📱</div>
+            <div>
+              <div class="traffic-mini-value">${esc(p.name)}</div>
+              <div class="traffic-mini-label">${esc(p.ip || '-')} · ↓${fmtBytes(p.mp?.rx_bytes ?? 0)} ↑${fmtBytes(p.mp?.tx_bytes ?? 0)}</div>
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>`
+    : `<div class="card" style="margin-bottom:20px">
+        <div class="card-header">
+          <div class="card-title">Подключено сейчас</div>
+          <span class="badge badge-disabled">0</span>
+        </div>
+        <div class="empty-state" style="padding:20px">
+          <div class="empty-state-text">Нет активных подключений (handshake &lt; ${CONNECTED_HS_SEC}с). Данные через /api/monitoring/peers (SSH к VPS1).</div>
+        </div>
+      </div>`;
+  const trafficSummaryRow = `
+    <div class="dashboard-section-title">Трафик и скорость</div>
+    ${dataTs ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">Данные мониторинга: ' + dataTs + '</div>' : ''}
+    <div class="traffic-summary-row">
+      <div class="traffic-mini-card">
+        <div class="traffic-mini-icon down">↓</div>
+        <div><div class="traffic-mini-value">${fmtBytes(vpnRxTotal)}</div><div class="traffic-mini-label">Всего загрузка (RX)</div></div>
+      </div>
+      <div class="traffic-mini-card">
+        <div class="traffic-mini-icon up">↑</div>
+        <div><div class="traffic-mini-value">${fmtBytes(vpnTxTotal)}</div><div class="traffic-mini-label">Всего отдача (TX)</div></div>
+      </div>
+      <div class="traffic-mini-card">
+        <div class="traffic-mini-icon down">⇅</div>
+        <div><div class="traffic-mini-value">${fmtBytesSpeed(vpnRxSpeed)}</div><div class="traffic-mini-label">Скорость RX</div></div>
+      </div>
+      <div class="traffic-mini-card">
+        <div class="traffic-mini-icon up">⇅</div>
+        <div><div class="traffic-mini-value">${fmtBytesSpeed(vpnTxSpeed)}</div><div class="traffic-mini-label">Скорость TX</div></div>
+      </div>
+      <div class="traffic-mini-card" style="border-color:var(--accent)">
+        <div class="traffic-mini-icon" style="background:var(--accent-glow);color:var(--accent)">⇄</div>
+        <div><div class="traffic-mini-value">${fmtBytes(vpnTotalCombined)}</div><div class="traffic-mini-label">Общий трафик ↓+↑</div></div>
+      </div>
+    </div>
+    <div class="traffic-charts-grid">
+      <div class="chart-card">
+        <div class="chart-header">
+          <span class="chart-title">Скорость загрузки (RX)</span>
+          <div class="chart-legend"><span><span class="dot-rx"></span>↓ RX</span></div>
+        </div>
+        <div class="chart-canvas" id="chart-rx">${sparkline(speedHist.combined_rx, null, 'var(--success)', 'var(--info)')}</div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header">
+          <span class="chart-title">Скорость отдачи (TX)</span>
+          <div class="chart-legend"><span><span class="dot-tx"></span>↑ TX</span></div>
+        </div>
+        <div class="chart-canvas" id="chart-tx">${sparkline(speedHist.combined_tx, null, 'var(--info)', 'var(--success)')}</div>
+      </div>
+    </div>
+    <div class="chart-card" style="margin-bottom:24px">
+      <div class="chart-header">
+        <span class="chart-title">Скорость по серверам (RX+TX)</span>
+        <div class="chart-legend"><span><span style="width:6px;height:6px;border-radius:50%;background:var(--success);display:inline-block"></span>VPS1</span><span><span style="width:6px;height:6px;border-radius:50%;background:var(--info);display:inline-block"></span>VPS2</span></div>
+      </div>
+      <div class="chart-canvas" style="height:80px" id="chart-per-srv">${sparkline(speedHist.v1_total.length ? speedHist.v1_total : [0], speedHist.v2_total.length ? speedHist.v2_total : null, 'var(--success)', 'var(--info)')}</div>
+    </div>`;
+
+  const logLines = (mon.log || []).filter(l => l && l !== '|');
+  const logHtml = logLines.length
+    ? logLines.map(raw => {
+        const m = raw.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+(.*)/);
+        const cls = m ? (m[2] === 'ERROR' ? 'ERROR' : m[2] === 'WARN' ? 'WARN' : m[2] === 'INFO' ? 'INFO' : '') : '';
+        const ts = m ? m[1].slice(11) : '';
+        const msg = m ? m[3] : raw;
+        return `<div class="monitor-log-line ${cls}"><span style="color:var(--text-muted)">${ts}</span> ${esc(msg)}</div>`;
+      }).join('')
+    : '<div class="empty-state" style="padding:20px"><div class="empty-state-text">Лог мониторинга пуст. Запустите: manage.sh monitor --web</div></div>';
+  const monitorLogCard = `<div class="card" style="margin-bottom:20px">
+    <div class="card-header">
+      <div class="card-title">Лог мониторинга</div>
+      <span class="badge" style="background:var(--bg-input);color:var(--text-secondary)">${logLines.length} строк</span>
+    </div>
+    <div class="monitor-log-wrap" id="monitor-log-body">${logHtml}</div>
+  </div>`;
+  let recentActivity = '';
+  if (state.auditLog.items && state.auditLog.items.length > 0) {
+    recentActivity = state.auditLog.items.slice(0, 10).map(a => {
+      const actionCls = a.action.includes('login') ? 'login' : a.action.includes('delete') ? 'delete' : a.action.includes('setting') ? 'settings' : 'peer';
+      return `<div class="activity-item">
+        <span class="activity-time">${fmtDate(a.created_at).split(' ').slice(-1)}</span>
+        <span class="activity-action ${actionCls}">${esc(a.action)}</span>
+        <span class="activity-target">${esc(a.target || '')}</span>
+      </div>`;
+    }).join('');
+  } else {
+    recentActivity = '<div class="empty-state" style="padding:30px"><div class="empty-state-text">No recent activity</div></div>';
+  }
+
+  pc.innerHTML = `
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-icon teal">⊞</div>
+        <div class="summary-info"><div class="summary-value">${totalPeers}</div><div class="summary-label">Total Peers</div></div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-icon blue">◉</div>
+        <div class="summary-info"><div class="summary-value">${activePeers}</div><div class="summary-label">Active Peers</div></div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-icon yellow">⏸</div>
+        <div class="summary-info"><div class="summary-value">${disabledPeers}</div><div class="summary-label">Disabled Peers</div></div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-icon red">◎</div>
+        <div class="summary-info"><div class="summary-value">${available}</div><div class="summary-label">Available IPs (of 252)</div></div>
+      </div>
+      <div class="summary-card" style="${connectedCount > 0 ? 'border-color:var(--success);box-shadow:0 0 0 1px rgba(0,212,170,0.2)' : ''}">
+        <div class="summary-icon ${connectedCount > 0 ? 'teal' : 'red'}">📶</div>
+        <div class="summary-info"><div class="summary-value">${connectedCount}</div><div class="summary-label">Сейчас подключено</div></div>
+      </div>
+    </div>
+    ${connectedBlock}
+    ${monitoringPeersCard}
+    ${trafficSummaryRow}
+    <div class="dashboard-section-title">Серверы VPS</div>
+    <div class="servers-grid">
+      ${renderServerCard('VPS1', v1)}
+      ${renderServerCard('VPS2', v2)}
+    </div>
+    ${monitorLogCard}
+    <div class="dashboard-section-title">Недавняя активность</div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Recent Activity</div>
+        <button class="btn btn-sm" onclick="navigate('audit')">View All</button>
+      </div>
+      <div class="activity-list" id="activity-list">${recentActivity}</div>
+    </div>`;
+
+  api('GET', '/api/audit?per_page=10').then(data => {
+    state.auditLog = data;
+    const list = document.getElementById('activity-list');
+    if (!list) return;
+    if (data.items.length === 0) {
+      list.innerHTML = '<div class="empty-state" style="padding:30px"><div class="empty-state-text">No recent activity</div></div>';
+      return;
+    }
+    list.innerHTML = data.items.map(a => {
+      const actionCls = a.action.includes('login') ? 'login' : a.action.includes('delete') ? 'delete' : a.action.includes('setting') ? 'settings' : 'peer';
+      return `<div class="activity-item">
+        <span class="activity-time">${fmtDate(a.created_at).split(' ').pop()}</span>
+        <span class="activity-action ${actionCls}">${esc(a.action)}</span>
+        <span class="activity-target">${esc(a.target || '')}</span>
+      </div>`;
+    }).join('');
+  }).catch(() => {});
+}
+
+function renderServerCard(name, d) {
+  const online = !!d?.online;
+  const dotCls = online ? 'online' : 'offline';
+  const statusLabel = online ? 'Online' : 'Offline';
+
+  if (!online) {
+    return `<div class="server-card">
+      <div class="server-header">
+        <div class="server-dot ${dotCls}"></div>
+        <span class="server-name">${esc(name)}</span>
+        <span class="server-ip">${esc(d?.ip || '')}</span>
+        <span class="server-status-label ${dotCls}" style="margin-left:auto">${statusLabel}</span>
+      </div>
+      <div class="server-body">
+        <div class="empty-state" style="padding:20px">
+          <div class="empty-state-icon" style="font-size:28px">⚠</div>
+          <div class="empty-state-text">Server is offline or unreachable</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const cpuPct = Math.min(100, (d.load1 || 0) / (d.cpus || 1) * 100);
+  const ramPct = d.mem_total_mb > 0 ? Math.round(d.mem_used_mb / d.mem_total_mb * 100) : 0;
+  const diskPct = d.disk_pct || 0;
+  const fmtMB = mb => mb >= 1024 ? `${(mb/1024).toFixed(1)}G` : `${Math.round(mb)}M`;
+
+  const interfaces = [];
+  if (d.awg0 !== undefined) interfaces.push({ name: 'awg0', status: d.awg0 });
+  if (d.awg1 !== undefined) interfaces.push({ name: 'awg1', status: d.awg1 });
+
+  const ifaceChips = interfaces.map(i => {
+    const up = ['active','up','ok','yes'].includes(String(i.status).toLowerCase());
+    return `<span class="iface-chip ${up ? 'up' : 'down'}"><span class="chip-dot"></span>${esc(i.name)} ${esc(i.status || '—')}</span>`;
+  }).join('');
+
+  return `<div class="server-card">
+    <div class="server-header">
+      <div class="server-dot ${dotCls}"></div>
+      <span class="server-name">${esc(name)}</span>
+      <span class="server-ip">${esc(d.ip || '')}</span>
+      ${d.host ? `<span class="server-host" style="color:var(--text-muted);font-size:11px;margin-left:auto;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.host)}">${esc(d.host)}</span>` : ''}
+      <span class="server-status-label ${dotCls}" style="margin-left:auto">${statusLabel}</span>
+    </div>
+    <div class="server-body">
+      <div class="server-metrics">
+        <div class="metric-item">
+          <div class="metric-ring">${ringGauge(cpuPct, gaugeColor(cpuPct))}</div>
+          <div class="metric-label">CPU</div>
+          <div class="metric-sub">${d.cpus || 1} cores</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-ring">${ringGauge(ramPct, gaugeColor(ramPct))}</div>
+          <div class="metric-label">RAM</div>
+          <div class="metric-sub">${fmtMB(d.mem_used_mb || 0)}/${fmtMB(d.mem_total_mb || 0)}</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-ring">${ringGauge(diskPct, gaugeColor(diskPct))}</div>
+          <div class="metric-label">Disk</div>
+          <div class="metric-sub">${esc(d.disk_used || '?')}/${esc(d.disk_total || '?')}</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-ring" style="display:flex;align-items:center;justify-content:center;width:56px;height:56px">
+            <div style="text-align:center">
+              <div style="font-size:20px;font-weight:700;line-height:1">${fmtUptime(d.uptime_s)}</div>
+            </div>
+          </div>
+          <div class="metric-label">Uptime</div>
+          <div class="metric-sub">load ${d.load1 ?? '—'}</div>
+        </div>
+      </div>
+      <div class="server-details-grid">
+        <div class="server-detail-item"><span class="server-detail-key">Load avg</span><span class="server-detail-val">${d.load1 ?? '—'} / ${d.load5 ?? '—'} / ${d.load15 ?? '—'}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">Swap</span><span class="server-detail-val">${fmtSwap(d.swap)}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">Buf+Cache</span><span class="server-detail-val">${(d.mem_buffers_mb || 0) + (d.mem_cached_mb || 0) > 0 ? fmtMB((d.mem_buffers_mb || 0) + (d.mem_cached_mb || 0)) : '—'}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">Inodes</span><span class="server-detail-val">${esc(d.disk_inodes || '—')}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">TCP / UDP</span><span class="server-detail-val">${d.tcp_est ?? 0} / ${d.udp_conn ?? 0}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">Procs</span><span class="server-detail-val">${fmtNum(d.proc_count)}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">Open files</span><span class="server-detail-val">${fmtNum(d.open_files)}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">Free RAM</span><span class="server-detail-val">${d.mem_free_mb != null ? fmtMB(d.mem_free_mb) : '—'}</span></div>
+      </div>
+      <div class="server-phys-row">
+        <span class="net-if">${esc(d.net_if || '')}</span>
+        <span style="color:var(--success)">↓${fmtBytesSpeed(d.rx_speed)}</span>
+        <span style="color:var(--info)">↑${fmtBytesSpeed(d.tx_speed)}</span>
+        <span style="margin-left:8px">total: ↓${fmtBytes(d.rx_total)} ↑${fmtBytes(d.tx_total)}</span>
+      </div>
+      <div class="server-net-row">
+        <div class="server-net-item"><span class="arr arr-d">↓</span> ${fmtBytesSpeed(d.vpn_rx_speed)}</div>
+        <div class="server-net-item"><span class="arr arr-u">↑</span> ${fmtBytesSpeed(d.vpn_tx_speed)}</div>
+        <div class="server-net-item" style="color:var(--text-muted)">total:</div>
+        <div class="server-net-item"><span class="arr arr-d">↓</span> ${fmtBytes(d.vpn_rx_total)}</div>
+        <div class="server-net-item"><span class="arr arr-u">↑</span> ${fmtBytes(d.vpn_tx_total)}</div>
+      </div>
+      <div class="server-interfaces">${ifaceChips}
+        <span class="iface-chip" style="background:var(--bg-input);color:var(--text-secondary)">Peers: ${d.peers_awg0 ?? 0}${d.peers_awg1 != null ? '/' + d.peers_awg1 : ''}</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+        ${name === 'VPS1' ? `
+        <span class="server-chip ${chipCls(d.awg0)}">awg0 ${esc(d.awg0 || '—')}</span>
+        <span class="server-chip ${chipCls(d.awg1)}">awg1 ${esc(d.awg1 || '—')}</span>
+        <span class="server-chip chip-dim">HS ${d.hs1_age != null && d.hs1_age >= 0 && d.hs1_age < PEER_ONLINE_HS_SEC ? d.hs1_age + 's' : (d.hs0_age != null && d.hs0_age >= 0 ? (d.hs0_age < PEER_ONLINE_HS_SEC ? d.hs0_age + 's' : Math.round(d.hs0_age/60) + 'm') : '—')}</span>
+        <span class="server-chip chip-dim">P ${d.peers_awg0 ?? 0}/${d.peers_awg1 ?? 0}</span>
+        <span class="server-chip chip-dim">TCP ${d.tcp_est ?? 0}</span>
+        <span class="server-chip ${chipCls(d.tun_ping)}">tunnel ${esc(d.tun_ping || '—')}</span>
+        ` : `
+        <span class="server-chip ${chipCls(d.awg0)}">awg0 ${esc(d.awg0 || '—')}</span>
+        <span class="server-chip chip-dim">HS ${d.hs0_age != null && d.hs0_age >= 0 ? (d.hs0_age < PEER_ONLINE_HS_SEC ? d.hs0_age + 's' : Math.round(d.hs0_age/60) + 'm') : '—'}</span>
+        <span class="server-chip chip-dim">P ${d.peers_awg0 ?? 0}</span>
+        <span class="server-chip chip-dim">TCP ${d.tcp_est ?? 0}</span>
+        <span class="server-chip ${chipCls(d.agh)}">AdGuard</span>
+        <span class="server-chip ${chipCls(d.dns53)}">DNS:53</span>
+        <span class="server-chip ${chipCls(d.web3000)}">Web:3000</span>
+        <span class="server-chip ${chipCls(d.wan_ping)}">WAN ${esc(d.wan_ping || '—')}</span>
+        `}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ====== Peers ======
+function renderPeersContent() {
+  const pc = document.getElementById('page-content');
+  if (!pc || state.currentPage !== 'peers') return;
+
+  const groupOpts = state.groups.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+
+  let sorted = [...state.peers];
+  const { col, dir } = state.peersSort;
+  sorted.sort((a, b) => {
+    let va = a[col] ?? '', vb = b[col] ?? '';
+    if (typeof va === 'string') va = va.toLowerCase();
+    if (typeof vb === 'string') vb = vb.toLowerCase();
+    if (va < vb) return dir === 'asc' ? -1 : 1;
+    if (va > vb) return dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PEERS_PER_PAGE));
+  if (state.peersPage > totalPages) state.peersPage = totalPages;
+  const start = (state.peersPage - 1) * PEERS_PER_PAGE;
+  const paginated = sorted.slice(start, start + PEERS_PER_PAGE);
+
+  const mpMap = {};
+  const mpByIp = {};
+  (state.monitoringPeers || []).forEach(mp => {
+    if (mp.public_key) mpMap[mp.public_key] = mp;
+    const ip = mp.peer_ip || extractPeerIp(mp.allowed_ips);
+    if (ip) mpByIp[ip] = mp;
+  });
+
+  const sortArrow = (c) => {
+    if (col !== c) return '<span class="sort-arrow">↕</span>';
+    return `<span class="sort-arrow">${dir === 'asc' ? '↑' : '↓'}</span>`;
+  };
+  const sortCls = (c) => col === c ? 'sorted' : '';
+
+  let rows = '';
+  if (paginated.length === 0) {
+    rows = `<tr><td colspan="11">
+      <div class="empty-state">
+        <div class="empty-state-icon">⊞</div>
+        <div class="empty-state-title">No peers yet</div>
+        <div class="empty-state-text">Create your first peer to get started!</div>
+        <button class="btn btn-primary" onclick="openAddPeerModal()">+ Add Peer</button>
+      </div>
+    </td></tr>`;
+  } else {
+    rows = paginated.map(p => {
+      const monPeer = mpMap[p.public_key] || mpByIp[p.ip];
+      const hsAge = p.handshake_age_sec != null ? p.handshake_age_sec : monPeer?.handshake_age_sec;
+      const hs = fmtHandshake(hsAge);
+      const rx = (p.rx_bytes != null ? p.rx_bytes : monPeer?.rx_bytes) ? fmtBytes(p.rx_bytes ?? monPeer?.rx_bytes) : '—';
+      const tx = (p.tx_bytes != null ? p.tx_bytes : monPeer?.tx_bytes) ? fmtBytes(p.tx_bytes ?? monPeer?.tx_bytes) : '—';
+      const live = updatePeerLiveStats(p, monPeer);
+      const speedTotal = ((live?.rxBps || 0) + (live?.txBps || 0));
+      const speedKey = live?.key || '';
+      const speedDotCls = speedTotal > 1 ? 'peer-speed-dot' : 'peer-speed-dot idle';
+      const speedTitle = `${p.name || p.ip || 'peer'} · ${p.ip || ''}`;
+      const hasId = p.id != null;
+      const isOnline = hsAge != null && hsAge >= 0 && hsAge < PEER_ONLINE_HS_SEC;
+      const connBadge = connectionBadge(isOnline ? 'online' : 'offline', hsAge);
+      const actions = hasId
+        ? `<div class="btn-group">
+            <button class="btn-icon" onclick="openEditPeerModal(${p.id})" title="Edit">✏️</button>
+            <button class="btn-icon" onclick="downloadConfig(${p.id})" title="Download config">📥</button>
+            <button class="btn-icon" onclick="showQR(${p.id})" title="QR Code">📷</button>
+            ${p.status === 'active'
+              ? `<button class="btn-icon" onclick="togglePeer(${p.id},'disable')" title="Disable">⏸️</button>`
+              : p.status === 'disabled' ? `<button class="btn-icon" onclick="togglePeer(${p.id},'enable')" title="Enable">▶️</button>` : ''}
+            <button class="btn-icon danger" onclick="confirmDeletePeer(${p.id},'${esc(p.name).replace(/'/g, "\\'")}')" title="Delete">🗑️</button>
+          </div>`
+        : `<div class="btn-group">
+            <button class="btn-icon" onclick="downloadConfigByIp('${esc(p.ip).replace(/'/g, "\\'")}')" title="Download config">📥</button>
+            <span class="badge badge-disabled" style="font-size:10px" title="From config folder">file</span>
+          </div>`;
+      return `<tr>
+        <td><strong>${esc(p.name)}</strong></td>
+        <td class="mono">${esc(p.ip)}</td>
+        <td><span class="type-icon" title="${esc(p.type)}">${typeIcon(p.type)}</span> ${esc(p.type)}</td>
+        <td>${esc(p.mode)}</td>
+        <td>${statusBadge(p.status)}${connBadge}</td>
+        <td>${esc(p.group_name || '—')}</td>
+        <td style="font-size:12px;color:var(--text-secondary)">${fmtDate(p.created_at)}</td>
+        <td class="${hs.cls}" style="font-family:monospace;font-size:12px">${hs.text}</td>
+        <td class="mono" style="font-size:12px"><span style="color:var(--success)">↓${rx}</span> <span style="color:var(--info)">↑${tx}</span></td>
+        <td class="mono peer-speed-cell" data-peer-key="${esc(speedKey)}" data-peer-title="${esc(speedTitle)}">
+          <span class="peer-speed-main"><span class="${speedDotCls}"></span><span style="color:var(--success)">↓${fmtBytesSpeed(live?.rxBps || 0)}</span> <span style="color:var(--info)">↑${fmtBytesSpeed(live?.txBps || 0)}</span></span>
+        </td>
+        <td>${actions}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  let paginationHtml = '';
+  if (totalPages > 1) {
+    let btns = `<button class="page-btn" ${state.peersPage <= 1 ? 'disabled' : ''} onclick="changePeersPage(${state.peersPage - 1})">‹</button>`;
+    for (let i = 1; i <= totalPages; i++) {
+      if (totalPages > 7 && i > 2 && i < totalPages - 1 && Math.abs(i - state.peersPage) > 1) {
+        if (i === 3 || i === totalPages - 2) btns += '<span style="padding:0 4px;color:var(--text-muted)">…</span>';
+        continue;
+      }
+      btns += `<button class="page-btn ${i === state.peersPage ? 'active' : ''}" onclick="changePeersPage(${i})">${i}</button>`;
+    }
+    btns += `<button class="page-btn" ${state.peersPage >= totalPages ? 'disabled' : ''} onclick="changePeersPage(${state.peersPage + 1})">›</button>`;
+    paginationHtml = `<div class="pagination">
+      <div class="pagination-info">Showing ${start + 1}–${Math.min(start + PEERS_PER_PAGE, sorted.length)} of ${sorted.length}</div>
+      <div class="pagination-btns">${btns}</div>
+    </div>`;
+  }
+
+  pc.innerHTML = `<div class="table-wrap">
+    <div class="table-toolbar">
+      <input class="search-input" id="peers-search" type="text" placeholder="Search peers..." value="${esc(state.peersFilter.search)}" oninput="debouncedPeerSearch(this.value)">
+      <select class="filter-select" onchange="state.peersFilter.status=this.value;state.peersPage=1;loadPeers()">
+        <option value="">All Status</option>
+        <option value="active" ${state.peersFilter.status==='active'?'selected':''}>Active</option>
+        <option value="disabled" ${state.peersFilter.status==='disabled'?'selected':''}>Disabled</option>
+        <option value="from_config" ${state.peersFilter.status==='from_config'?'selected':''}>From config folder</option>
+      </select>
+      <select class="filter-select" onchange="state.peersFilter.type=this.value;state.peersPage=1;loadPeers()">
+        <option value="">All Types</option>
+        <option value="pc" ${state.peersFilter.type==='pc'?'selected':''}>PC</option>
+        <option value="phone" ${state.peersFilter.type==='phone'?'selected':''}>Phone</option>
+        <option value="tablet" ${state.peersFilter.type==='tablet'?'selected':''}>Tablet</option>
+        <option value="router" ${state.peersFilter.type==='router'?'selected':''}>Router</option>
+      </select>
+      ${state.groups.length ? `<select class="filter-select" onchange="state.peersFilter.group=this.value;state.peersPage=1;loadPeers()">
+        <option value="">All Groups</option>${groupOpts}
+      </select>` : ''}
+      <div class="toolbar-right">
+        <button class="btn" onclick="openBatchModal()">⊕ Batch Add</button>
+        <button class="btn btn-primary" onclick="openAddPeerModal()">+ Add Peer</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th class="${sortCls('name')}" onclick="sortPeers('name')">Name ${sortArrow('name')}</th>
+            <th class="${sortCls('ip')}" onclick="sortPeers('ip')">IP ${sortArrow('ip')}</th>
+            <th class="${sortCls('type')}" onclick="sortPeers('type')">Type ${sortArrow('type')}</th>
+            <th>Mode</th>
+            <th class="${sortCls('status')}" onclick="sortPeers('status')">Status ${sortArrow('status')}</th>
+            <th>Group</th>
+            <th class="${sortCls('created_at')}" onclick="sortPeers('created_at')">Created ${sortArrow('created_at')}</th>
+            <th>Handshake</th>
+            <th>Traffic</th>
+            <th>Speed</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${paginationHtml}
+  </div>`;
+
+  document.querySelectorAll('.peer-speed-cell').forEach(cell => {
+    const key = cell.getAttribute('data-peer-key') || '';
+    const title = cell.getAttribute('data-peer-title') || key;
+    cell.addEventListener('mouseenter', (e) => showPeerSpeedTooltip(e, key, title));
+    cell.addEventListener('mousemove', movePeerSpeedTooltip);
+    cell.addEventListener('mouseleave', hidePeerSpeedTooltip);
+  });
+}
+
+let _searchTimeout;
+function debouncedPeerSearch(val) {
+  clearTimeout(_searchTimeout);
+  _searchTimeout = setTimeout(() => {
+    state.peersFilter.search = val;
+    state.peersPage = 1;
+    loadPeers();
+  }, 300);
+}
+
+function sortPeers(col) {
+  if (state.peersSort.col === col) {
+    state.peersSort.dir = state.peersSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.peersSort.col = col;
+    state.peersSort.dir = 'asc';
+  }
+  renderPeersContent();
+}
+
+function changePeersPage(p) {
+  state.peersPage = p;
+  renderPeersContent();
+}
+
+// ====== Peer actions ======
+async function togglePeer(id, action) {
+  try {
+    await api('POST', `/api/peers/${id}/${action}`);
+    toast(`Peer ${action}d successfully`);
+    loadPeers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function downloadConfig(id) {
+  try {
+    const headers = {};
+    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+    const res = await fetch(`/api/peers/${id}/config`, {
+      headers,
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error('Failed to download');
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="?(.+?)"?$/);
+    const filename = match ? match[1] : `peer_${id}.conf`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    toast('Config downloaded');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function downloadConfigByIp(ip) {
+  try {
+    const pathIp = ip.replace(/\./g, '_');
+    const headers = {};
+    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+    const res = await fetch(`/api/peers/by-ip/${pathIp}/config`, {
+      headers,
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error('Failed to download');
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="?(.+?)"?$/);
+    const filename = match ? match[1] : `peer_${pathIp}.conf`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    toast('Config downloaded');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function showQR(id) {
+  try {
+    const data = await api('GET', `/api/peers/${id}/qr`);
+    const peer = state.peers.find(p => p.id === id);
+    openModal('qr-modal', `<div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">QR Code</div>
+        <button class="modal-close" onclick="closeModal('qr-modal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="qr-container">
+          <img src="data:image/png;base64,${data.qr_png_base64}" alt="QR Code">
+          <div class="qr-info"><strong>${esc(peer?.name || 'Peer')}</strong> — ${esc(peer?.ip || '')}</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="downloadConfig(${id});closeModal('qr-modal')">📥 Download Config</button>
+        <button class="btn" onclick="closeModal('qr-modal')">Close</button>
+      </div>
+    </div>`);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function confirmDeletePeer(id, name) {
+  openModal('confirm-modal', `<div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <div class="modal-title">Delete Peer</div>
+      <button class="modal-close" onclick="closeModal('confirm-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="confirm-body">
+        <div class="confirm-icon">⚠️</div>
+        <div class="confirm-text">Are you sure you want to delete this peer?</div>
+        <div class="confirm-name">${esc(name)}</div>
+        <div class="confirm-text" style="margin-top:8px;font-size:12px">This action cannot be undone. The peer will be removed from the VPN server.</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('confirm-modal')">Cancel</button>
+      <button class="btn btn-danger" onclick="deletePeer(${id})">Delete Peer</button>
+    </div>
+  </div>`);
+}
+
+async function deletePeer(id) {
+  try {
+    await api('DELETE', `/api/peers/${id}`);
+    toast('Peer deleted');
+    closeModal('confirm-modal');
+    loadPeers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ====== Add Peer Modal ======
+function openAddPeerModal() {
+  const groupList = state.groups.map(g => `<option value="${esc(g)}">`).join('');
+  openModal('add-peer-modal', `<div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Add New Peer</div>
+      <button class="modal-close" onclick="closeModal('add-peer-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Name *</label>
+        <input class="form-input" id="add-name" type="text" placeholder="e.g. john-phone" required>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select class="form-select" id="add-type">
+            <option value="phone">Phone</option>
+            <option value="pc">PC</option>
+            <option value="tablet">Tablet</option>
+            <option value="router">Router</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Mode</label>
+          <select class="form-select" id="add-mode">
+            <option value="full">Full Tunnel</option>
+            <option value="split">Split Tunnel</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Group</label>
+        <input class="form-input" id="add-group" type="text" placeholder="Optional group name" list="group-list">
+        <datalist id="group-list">${groupList}</datalist>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Expiry Date</label>
+          <input class="form-input" id="add-expiry" type="date">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Traffic Limit (MB)</label>
+          <input class="form-input" id="add-traffic" type="number" placeholder="Unlimited" min="0">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('add-peer-modal')">Cancel</button>
+      <button class="btn btn-primary" id="add-peer-btn" onclick="handleAddPeer()">Create Peer</button>
+    </div>
+  </div>`);
+  setTimeout(() => document.getElementById('add-name')?.focus(), 100);
+}
+
+async function handleAddPeer() {
+  const btn = document.getElementById('add-peer-btn');
+  const name = document.getElementById('add-name').value.trim();
+  if (!name) { toast('Name is required', 'error'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating...';
+
+  try {
+    const body = {
+      name,
+      type: document.getElementById('add-type').value,
+      mode: document.getElementById('add-mode').value,
+    };
+    const group = document.getElementById('add-group').value.trim();
+    if (group) body.group_name = group;
+    const expiry = document.getElementById('add-expiry').value;
+    if (expiry) body.expiry_date = expiry;
+    const traffic = document.getElementById('add-traffic').value;
+    if (traffic) body.traffic_limit_mb = parseInt(traffic);
+
+    const peer = await api('POST', '/api/peers', body);
+    toast(`Peer "${peer.name}" created (${peer.ip})`);
+    closeModal('add-peer-modal');
+    loadPeers();
+
+    try {
+      const qrData = await api('GET', `/api/peers/${peer.id}/qr`);
+      openModal('qr-modal', `<div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">Peer Created — QR Code</div>
+          <button class="modal-close" onclick="closeModal('qr-modal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="qr-container">
+            <img src="data:image/png;base64,${qrData.qr_png_base64}" alt="QR Code">
+            <div class="qr-info"><strong>${esc(peer.name)}</strong> — ${esc(peer.ip)}</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="downloadConfig(${peer.id})">📥 Download Config</button>
+          <button class="btn" onclick="closeModal('qr-modal')">Close</button>
+        </div>
+      </div>`);
+    } catch (_) {}
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Create Peer';
+  }
+}
+
+// ====== Edit Peer Modal ======
+async function openEditPeerModal(id) {
+  try {
+    const peer = await api('GET', `/api/peers/${id}`);
+    const groupList = state.groups.map(g => `<option value="${esc(g)}">`).join('');
+    openModal('edit-peer-modal', `<div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Edit Peer</div>
+        <button class="modal-close" onclick="closeModal('edit-peer-modal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Name</label>
+          <input class="form-input" id="edit-name" type="text" value="${esc(peer.name)}">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Type</label>
+            <select class="form-select" id="edit-type">
+              ${['phone','pc','tablet','router'].map(t => `<option value="${t}" ${peer.type===t?'selected':''}>${t}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Mode</label>
+            <select class="form-select" id="edit-mode">
+              <option value="full" ${peer.mode==='full'?'selected':''}>Full Tunnel</option>
+              <option value="split" ${peer.mode==='split'?'selected':''}>Split Tunnel</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Status</label>
+            <select class="form-select" id="edit-status">
+              <option value="active" ${peer.status==='active'?'selected':''}>Active</option>
+              <option value="disabled" ${peer.status==='disabled'?'selected':''}>Disabled</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Group</label>
+            <input class="form-input" id="edit-group" type="text" value="${esc(peer.group_name || '')}" list="edit-group-list">
+            <datalist id="edit-group-list">${groupList}</datalist>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Expiry Date</label>
+            <input class="form-input" id="edit-expiry" type="date" value="${peer.expiry_date || ''}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Traffic Limit (MB)</label>
+            <input class="form-input" id="edit-traffic" type="number" value="${peer.traffic_limit_mb || ''}" min="0" placeholder="Unlimited">
+          </div>
+        </div>
+        <div style="margin-top:8px;padding:10px;background:var(--bg-input);border-radius:8px;font-size:12px;color:var(--text-secondary)">
+          <div>IP: <strong style="color:var(--text-primary)">${esc(peer.ip)}</strong></div>
+          <div>Created: ${fmtDate(peer.created_at)}</div>
+          <div>Updated: ${fmtDate(peer.updated_at)}</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('edit-peer-modal')">Cancel</button>
+        <button class="btn btn-primary" id="edit-peer-btn" onclick="handleEditPeer(${id})">Save Changes</button>
+      </div>
+    </div>`);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function handleEditPeer(id) {
+  const btn = document.getElementById('edit-peer-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Saving...';
+
+  try {
+    const body = {
+      name: document.getElementById('edit-name').value.trim(),
+      type: document.getElementById('edit-type').value,
+      mode: document.getElementById('edit-mode').value,
+      status: document.getElementById('edit-status').value,
+      group_name: document.getElementById('edit-group').value.trim() || null,
+      expiry_date: document.getElementById('edit-expiry').value || null,
+      traffic_limit_mb: document.getElementById('edit-traffic').value ? parseInt(document.getElementById('edit-traffic').value) : null,
+    };
+    await api('PUT', `/api/peers/${id}`, body);
+    toast('Peer updated');
+    closeModal('edit-peer-modal');
+    loadPeers();
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Save Changes';
+  }
+}
+
+// ====== Batch Add Modal ======
+function openBatchModal() {
+  openModal('batch-modal', `<div class="modal modal-lg">
+    <div class="modal-header">
+      <div class="modal-title">Batch Add Peers</div>
+      <button class="modal-close" onclick="closeModal('batch-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchBatchTab('template',this)">Template</button>
+        <button class="tab-btn" onclick="switchBatchTab('csv',this)">CSV</button>
+      </div>
+      <div class="tab-pane active" id="batch-template">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Prefix</label>
+            <input class="form-input" id="batch-prefix" type="text" value="peer" placeholder="peer">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Count</label>
+            <input class="form-input" id="batch-count" type="number" min="1" max="252" value="5">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Type</label>
+            <select class="form-select" id="batch-type">
+              <option value="phone">Phone</option>
+              <option value="pc">PC</option>
+              <option value="tablet">Tablet</option>
+              <option value="router">Router</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Mode</label>
+            <select class="form-select" id="batch-mode">
+              <option value="full">Full Tunnel</option>
+              <option value="split">Split Tunnel</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-hint">Will create: peer-001, peer-002, peer-003, ...</div>
+      </div>
+      <div class="tab-pane" id="batch-csv">
+        <div class="form-group">
+          <label class="form-label">CSV Data</label>
+          <textarea class="form-textarea" id="batch-csv-data" rows="8" placeholder="name,type,mode&#10;john-phone,phone,full&#10;jane-pc,pc,split"></textarea>
+        </div>
+        <div class="form-hint">Format: name,type,mode (one per line). Header row is optional.</div>
+      </div>
+      <div id="batch-progress" style="display:none">
+        <div class="progress-bar"><div class="progress-fill" id="batch-progress-fill" style="width:0%"></div></div>
+        <div id="batch-progress-text" style="text-align:center;font-size:13px;color:var(--text-secondary)">Creating peers...</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('batch-modal')">Cancel</button>
+      <button class="btn btn-primary" id="batch-btn" onclick="handleBatchAdd()">Create All</button>
+    </div>
+  </div>`);
+}
+
+function switchBatchTab(tab, btnEl) {
+  document.querySelectorAll('#batch-modal .tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#batch-modal .tab-pane').forEach(p => p.classList.remove('active'));
+  btnEl.classList.add('active');
+  document.getElementById('batch-' + tab).classList.add('active');
+}
+
+async function handleBatchAdd() {
+  const btn = document.getElementById('batch-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating...';
+
+  const progressEl = document.getElementById('batch-progress');
+  progressEl.style.display = 'block';
+
+  try {
+    let body;
+    const csvPane = document.getElementById('batch-csv');
+    if (csvPane.classList.contains('active')) {
+      body = { csv: document.getElementById('batch-csv-data').value };
+    } else {
+      body = {
+        prefix: document.getElementById('batch-prefix').value || 'peer',
+        count: parseInt(document.getElementById('batch-count').value) || 1,
+        type: document.getElementById('batch-type').value,
+        mode: document.getElementById('batch-mode').value,
+      };
+    }
+
+    const result = await api('POST', '/api/peers/batch', body);
+    document.getElementById('batch-progress-fill').style.width = '100%';
+    document.getElementById('batch-progress-text').innerHTML =
+      `<span style="color:var(--success)">✓ Created: ${result.total}</span>` +
+      (result.failed > 0 ? ` <span style="color:var(--danger)">✕ Failed: ${result.failed}</span>` : '');
+
+    toast(`Batch complete: ${result.total} created, ${result.failed} failed`);
+    loadPeers();
+
+    setTimeout(() => closeModal('batch-modal'), 2000);
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'Create All';
+    progressEl.style.display = 'none';
+  }
+}
+
+// ====== Settings ======
+function renderSettingsContent() {
+  const pc = document.getElementById('page-content');
+  if (!pc || state.currentPage !== 'settings') return;
+
+  const s = state.settings;
+  pc.innerHTML = `<div class="settings-grid">
+    <div class="settings-section">
+      <div class="card">
+        <div class="card-header"><div class="card-title">VPN Settings</div></div>
+        <div class="form-group">
+          <label class="form-label">DNS Server</label>
+          <input class="form-input" id="set-dns" type="text" value="${esc(s.DNS || '10.8.0.2')}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Default MTU</label>
+          <input class="form-input" id="set-mtu" type="number" value="${esc(s.MTU || '1360')}">
+        </div>
+        <div class="card-header" style="margin-top:16px"><div class="card-title">Junk Parameters</div></div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Jc</label>
+            <input class="form-input" id="set-jc" type="number" value="${esc(s.Jc || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Jmin</label>
+            <input class="form-input" id="set-jmin" type="number" value="${esc(s.Jmin || '')}">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Jmax</label>
+            <input class="form-input" id="set-jmax" type="number" value="${esc(s.Jmax || '')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">S1</label>
+            <input class="form-input" id="set-s1" type="number" value="${esc(s.S1 || '')}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">S2</label>
+          <input class="form-input" id="set-s2" type="number" value="${esc(s.S2 || '')}">
+        </div>
+        <button class="btn btn-primary" style="margin-top:8px" id="save-settings-btn" onclick="handleSaveSettings()">Save Settings</button>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="card">
+        <div class="card-header"><div class="card-title">Change Password</div></div>
+        <div class="form-group">
+          <label class="form-label">Current Password</label>
+          <input class="form-input" id="pw-old" type="password" autocomplete="current-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">New Password</label>
+          <input class="form-input" id="pw-new" type="password" autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Confirm New Password</label>
+          <input class="form-input" id="pw-confirm" type="password" autocomplete="new-password">
+        </div>
+        <button class="btn btn-primary" id="change-pw-btn" onclick="handleChangePassword()">Change Password</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function handleSaveSettings() {
+  const btn = document.getElementById('save-settings-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Saving...';
+
+  try {
+    const body = {
+      DNS: document.getElementById('set-dns').value,
+      MTU: document.getElementById('set-mtu').value,
+      Jc: document.getElementById('set-jc').value,
+      Jmin: document.getElementById('set-jmin').value,
+      Jmax: document.getElementById('set-jmax').value,
+      S1: document.getElementById('set-s1').value,
+      S2: document.getElementById('set-s2').value,
+    };
+    state.settings = await api('PUT', '/api/settings', body);
+    toast('Settings saved');
+  } catch (e) { toast(e.message, 'error'); }
+
+  btn.disabled = false;
+  btn.textContent = 'Save Settings';
+}
+
+async function handleChangePassword() {
+  const btn = document.getElementById('change-pw-btn');
+  const oldPw = document.getElementById('pw-old').value;
+  const newPw = document.getElementById('pw-new').value;
+  const confirm = document.getElementById('pw-confirm').value;
+
+  if (!oldPw || !newPw) { toast('All fields are required', 'error'); return; }
+  if (newPw !== confirm) { toast('Passwords do not match', 'error'); return; }
+  if (newPw.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Changing...';
+
+  try {
+    await api('POST', '/api/auth/change-password', { old_password: oldPw, new_password: newPw });
+    toast('Password changed successfully');
+    document.getElementById('pw-old').value = '';
+    document.getElementById('pw-new').value = '';
+    document.getElementById('pw-confirm').value = '';
+  } catch (e) { toast(e.message, 'error'); }
+
+  btn.disabled = false;
+  btn.textContent = 'Change Password';
+}
+
+// ====== Audit Log ======
+function renderAuditContent() {
+  const pc = document.getElementById('page-content');
+  if (!pc || state.currentPage !== 'audit') return;
+
+  const { items, total, page, pages } = state.auditLog;
+
+  let rows = '';
+  if (items.length === 0) {
+    rows = `<tr><td colspan="6"><div class="empty-state" style="padding:40px"><div class="empty-state-text">No audit entries found</div></div></td></tr>`;
+  } else {
+    rows = items.map(a => {
+      let details = a.details || '';
+      if (details && typeof details === 'string') {
+        try { details = JSON.stringify(JSON.parse(details)); } catch(_) {}
+      }
+      return `<tr>
+        <td style="font-size:12px;color:var(--text-secondary);white-space:nowrap">${fmtDate(a.created_at)}</td>
+        <td>${esc(a.user_id || '—')}</td>
+        <td><span class="badge" style="background:var(--accent-glow2);color:var(--accent)">${esc(a.action)}</span></td>
+        <td>${esc(a.target || '—')}</td>
+        <td class="audit-details" title="${esc(details)}">${esc(details || '—')}</td>
+        <td class="mono" style="font-size:12px;color:var(--text-secondary)">${esc(a.ip_address || '—')}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  let paginationHtml = '';
+  if (pages > 1) {
+    let btns = `<button class="page-btn" ${page <= 1 ? 'disabled' : ''} onclick="loadAudit(${page - 1})">‹</button>`;
+    for (let i = 1; i <= pages; i++) {
+      if (pages > 7 && i > 2 && i < pages - 1 && Math.abs(i - page) > 1) {
+        if (i === 3 || i === pages - 2) btns += '<span style="padding:0 4px;color:var(--text-muted)">…</span>';
+        continue;
+      }
+      btns += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="loadAudit(${i})">${i}</button>`;
+    }
+    btns += `<button class="page-btn" ${page >= pages ? 'disabled' : ''} onclick="loadAudit(${page + 1})">›</button>`;
+    paginationHtml = `<div class="pagination">
+      <div class="pagination-info">Page ${page} of ${pages} (${total} entries)</div>
+      <div class="pagination-btns">${btns}</div>
+    </div>`;
+  }
+
+  pc.innerHTML = `<div class="table-wrap">
+    <div class="table-toolbar">
+      <select class="filter-select" id="audit-action-filter" onchange="loadAudit(1)">
+        <option value="">All Actions</option>
+        <option value="login">Login</option>
+        <option value="logout">Logout</option>
+        <option value="peer_created">Peer Created</option>
+        <option value="peer_updated">Peer Updated</option>
+        <option value="peer_deleted">Peer Deleted</option>
+        <option value="peer_disabled">Peer Disabled</option>
+        <option value="peer_enabled">Peer Enabled</option>
+        <option value="settings_updated">Settings Updated</option>
+        <option value="change_password">Password Changed</option>
+      </select>
+    </div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>User</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>Details</th>
+            <th>IP</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${paginationHtml}
+  </div>`;
+}
+
+// ====== Modal helpers ======
+function openModal(id, html) {
+  let overlay = document.getElementById(id);
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = id;
+    overlay.className = 'modal-overlay';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = html;
+  overlay.classList.add('open');
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(id); });
+}
+
+function closeModal(id) {
+  const overlay = document.getElementById(id);
+  if (overlay) { overlay.classList.remove('open'); overlay.innerHTML = ''; }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.open').forEach(m => {
+      m.classList.remove('open');
+      m.innerHTML = '';
+    });
+  }
+});
+
+// ====== Auth ======
+async function handleLogin(e) {
+  e.preventDefault();
+  const btn = document.getElementById('login-btn');
+  const errEl = document.getElementById('login-error');
+  const user = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Signing in...';
+  errEl.classList.remove('show');
+
+  try {
+    const data = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass }),
+      credentials: 'include',
+    }).then(async r => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Login failed');
+      return d;
+    });
+
+    state.user = data.user || { username: user };
+    navigate('dashboard', data.token);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.add('show');
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+}
+
+async function handleLogout() {
+  try { await api('POST', '/api/auth/logout'); } catch (_) {}
+  state.token = null;
+  state.user = null;
+  localStorage.removeItem('admin_token');
+  stopAutoRefresh();
+  navigate('login');
+}
+
+// ====== Init ======
+async function init() {
+  const savedToken = localStorage.getItem('admin_token');
+  try {
+    const headers = {};
+    if (savedToken && typeof savedToken === 'string') headers['Authorization'] = 'Bearer ' + savedToken;
+    const meResp = await fetch('/api/auth/me', { method: 'GET', headers, credentials: 'include' });
+    if (meResp.ok) {
+      state.token = savedToken || null;
+      state.user = await meResp.json().catch(() => null);
+      const page = window.location.hash.slice(1) || 'dashboard';
+      navigate(page);
+      return;
+    }
+  } catch (_) {}
+
+  if (savedToken && typeof savedToken === 'string' && savedToken.length > 20) {
+    state.token = savedToken;
+    try {
+      state.user = await api('GET', '/api/auth/me');
+      const page = window.location.hash.slice(1) || 'dashboard';
+      navigate(page);
+      return;
+    } catch (_) {
+      state.token = null;
+      localStorage.removeItem('admin_token');
+    }
+  } else {
+    localStorage.removeItem('admin_token');
+  }
+  navigate('login');
+}
+
+init();
+</script>
+</body>
+</html>

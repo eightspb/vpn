@@ -29,3 +29,9 @@ ru-ips.txt
 
 # SSH keys (private, do not commit)
 .ssh/
+
+# Admin panel runtime files
+scripts/admin/admin.db
+scripts/admin/admin.pid
+scripts/admin/admin.log
+scripts/admin/.venv/

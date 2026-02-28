@@ -32,9 +32,11 @@ INTERVAL=2
 HTTP_PORT=8080
 SSH_TIMEOUT=8
 JSON_FILE="./vpn-output/data.json"
+PID_FILE="./vpn-output/monitor-web.pid"
 LOG_FILE="./vpn-output/monitor.log"
 LOG_LEVEL="INFO"
 PYTHON_CMD=()
+HTTP_WINDOWS_RUNTIME=0
 
 TEMP_KEY_FILES=()
 LAST_ERR_VPS1=""
@@ -45,6 +47,10 @@ VPS1_PREV_RX=0
 VPS1_PREV_TX=0
 VPS2_PREV_RX=0
 VPS2_PREV_TX=0
+VPS1_PREV_VPN_RX=0
+VPS1_PREV_VPN_TX=0
+VPS2_PREV_VPN_RX=0
+VPS2_PREV_VPN_TX=0
 PREV_TS=0
 
 LOG_MAX_BYTES=2097152  # 2 MB
@@ -72,6 +78,7 @@ set_last_error() {
 }
 
 cleanup_all() {
+    rm -f "$PID_FILE" 2>/dev/null || true
     [[ -n "$HTTP_PID" ]] && kill "$HTTP_PID" 2>/dev/null || true
     cleanup_temp_keys
 }
@@ -138,6 +145,15 @@ DISK=\$(df -h / 2>/dev/null | awk 'NR==2 {print \$3"/"\$2",used="\$5}')
 MAIN_IF=\$(ip route 2>/dev/null | awk '/default/ {print \$5; exit}')
 RX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]}}' /proc/net/dev 2>/dev/null | head -1)
 TX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
+read_if_bytes() {
+  awk -v i="\$1" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]" "b[9]}}' /proc/net/dev 2>/dev/null | head -1
+}
+AWG0_BYTES=\$(read_if_bytes awg0)
+AWG0_RX=\${AWG0_BYTES%% *}; AWG0_TX=\${AWG0_BYTES##* }
+AWG1_BYTES=\$(read_if_bytes awg1)
+AWG1_RX=\${AWG1_BYTES%% *}; AWG1_TX=\${AWG1_BYTES##* }
+VPN_RX=\$(( \${AWG0_RX:-0} + \${AWG1_RX:-0} ))
+VPN_TX=\$(( \${AWG0_TX:-0} + \${AWG1_TX:-0} ))
 TCP_EST=\$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=\$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
 AWG0=\$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
@@ -146,7 +162,7 @@ HS0=\$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0)
 [[ -z "\$HS0" ]] && HS0=-1
 HS1=\$(sudo awg show awg1 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0) print systime()-\$2; else print -1}')
 [[ -z "\$HS1" ]] && HS1=-1
-A1_ACTIVE=\$(sudo awg show awg1 latest-handshakes 2>/dev/null | awk '\$2>0 && (systime()-\$2)<=180 {c++} END {print c+0}')
+A1_ACTIVE=\$(sudo awg show awg1 latest-handshakes 2>/dev/null | awk '\$2>0 && (systime()-\$2)<=55 {c++} END {print c+0}')
 [[ -z "\$A1_ACTIVE" ]] && A1_ACTIVE=0
 P0=\$(sudo awg show awg0 peers 2>/dev/null | wc -w | tr -d ' ')
 P1=\$(sudo awg show awg1 peers 2>/dev/null | wc -w | tr -d ' ')
@@ -180,6 +196,10 @@ echo "MEM_FREE=\${MEM_FREE:-0}"
 echo "SWAP=\${SWAP_RAW:-0/0MB}"
 echo "RX_TOTAL=\${RX:-0}"
 echo "TX_TOTAL=\${TX:-0}"
+echo "VPN_RX=\${VPN_RX:-0}"
+echo "VPN_TX=\${VPN_TX:-0}"
+echo "VPN_RX_TOTAL=\${VPN_RX:-0}"
+echo "VPN_TX_TOTAL=\${VPN_TX:-0}"
 MEM_TOTAL_KB=\$(awk '/MemTotal/ {print \$2}' /proc/meminfo 2>/dev/null || echo 0)
 MEM_AVAIL_KB=\$(awk '/MemAvailable/ {print \$2}' /proc/meminfo 2>/dev/null || echo 0)
 MEM_BUFFERS_KB=\$(awk '/Buffers/ {print \$2}' /proc/meminfo 2>/dev/null || echo 0)
@@ -208,6 +228,13 @@ DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2",used="$5}')
 MAIN_IF=$(ip route 2>/dev/null | awk '/default/ {print $5; exit}')
 RX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]}}' /proc/net/dev 2>/dev/null | head -1)
 TX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
+read_if_bytes() {
+  awk -v i="$1" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]" "b[9]}}' /proc/net/dev 2>/dev/null | head -1
+}
+AWG0_BYTES=$(read_if_bytes awg0)
+AWG0_RX=${AWG0_BYTES%% *}; AWG0_TX=${AWG0_BYTES##* }
+VPN_RX=${AWG0_RX:-0}
+VPN_TX=${AWG0_TX:-0}
 TCP_EST=$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
 AWG0=$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
@@ -252,6 +279,10 @@ echo "MEM_FREE=${MEM_FREE:-0}"
 echo "SWAP=${SWAP_RAW:-0/0MB}"
 echo "RX_TOTAL=${RX:-0}"
 echo "TX_TOTAL=${TX:-0}"
+echo "VPN_RX=${VPN_RX:-0}"
+echo "VPN_TX=${VPN_TX:-0}"
+echo "VPN_RX_TOTAL=${VPN_RX:-0}"
+echo "VPN_TX_TOTAL=${VPN_TX:-0}"
 MEM_TOTAL_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
 MEM_AVAIL_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
 MEM_BUFFERS_KB=$(awk '/Buffers/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
@@ -300,6 +331,8 @@ write_json() {
     local V1_RX_SPEED="0" V1_TX_SPEED="0" V1_ERROR=""
     local V1_CPUS="1" V1_UPTIME_S="0" V1_CPU_MHZ="0" V1_SWAP=""
     local V1_RX_TOTAL="0" V1_TX_TOTAL="0"
+    local V1_VPN_RX="0" V1_VPN_TX="0" V1_VPN_RX_SPEED="0" V1_VPN_TX_SPEED="0"
+    local V1_VPN_RX_TOTAL="0" V1_VPN_TX_TOTAL="0"
     local V1_MEM_AVAIL="0" V1_MEM_BUFFERS="0" V1_MEM_CACHED="0"
     local V1_DISK_INODES="0%" V1_PROC_COUNT="0" V1_OPEN_FILES="0"
 
@@ -337,6 +370,10 @@ write_json() {
         V1_SWAP="$(parse_kv "$vps1_data" SWAP)"; V1_SWAP="${V1_SWAP:-0/0MB}"
         V1_RX_TOTAL="$(parse_kv "$vps1_data" RX_TOTAL)"; V1_RX_TOTAL="${V1_RX_TOTAL:-0}"
         V1_TX_TOTAL="$(parse_kv "$vps1_data" TX_TOTAL)"; V1_TX_TOTAL="${V1_TX_TOTAL:-0}"
+        V1_VPN_RX="$(parse_kv "$vps1_data" VPN_RX)"; V1_VPN_RX="${V1_VPN_RX:-0}"
+        V1_VPN_TX="$(parse_kv "$vps1_data" VPN_TX)"; V1_VPN_TX="${V1_VPN_TX:-0}"
+        V1_VPN_RX_TOTAL="$(parse_kv "$vps1_data" VPN_RX_TOTAL)"; V1_VPN_RX_TOTAL="${V1_VPN_RX_TOTAL:-0}"
+        V1_VPN_TX_TOTAL="$(parse_kv "$vps1_data" VPN_TX_TOTAL)"; V1_VPN_TX_TOTAL="${V1_VPN_TX_TOTAL:-0}"
         V1_MEM_AVAIL="$(parse_kv "$vps1_data" MEM_AVAIL)"; V1_MEM_AVAIL="${V1_MEM_AVAIL:-0}"
         V1_MEM_BUFFERS="$(parse_kv "$vps1_data" MEM_BUFFERS)"; V1_MEM_BUFFERS="${V1_MEM_BUFFERS:-0}"
         V1_MEM_CACHED="$(parse_kv "$vps1_data" MEM_CACHED)"; V1_MEM_CACHED="${V1_MEM_CACHED:-0}"
@@ -350,11 +387,20 @@ write_json() {
             V1_RX_SPEED=$(( d_rx1 / elapsed ))
             V1_TX_SPEED=$(( d_tx1 / elapsed ))
         fi
+        if [[ "$VPS1_PREV_VPN_RX" -gt 0 && "${V1_VPN_RX:-0}" =~ ^[0-9]+$ ]]; then
+            local d_vpn_rx1 d_vpn_tx1
+            d_vpn_rx1=$(( ${V1_VPN_RX:-0} - VPS1_PREV_VPN_RX )); [[ $d_vpn_rx1 -lt 0 ]] && d_vpn_rx1=0
+            d_vpn_tx1=$(( ${V1_VPN_TX:-0} - VPS1_PREV_VPN_TX )); [[ $d_vpn_tx1 -lt 0 ]] && d_vpn_tx1=0
+            V1_VPN_RX_SPEED=$(( d_vpn_rx1 / elapsed ))
+            V1_VPN_TX_SPEED=$(( d_vpn_tx1 / elapsed ))
+        fi
         VPS1_PREV_RX="${V1_RX:-0}"; VPS1_PREV_TX="${V1_TX:-0}"
+        VPS1_PREV_VPN_RX="${V1_VPN_RX:-0}"; VPS1_PREV_VPN_TX="${V1_VPN_TX:-0}"
         : # connection details intentionally not collected
     else
         V1_ERROR="${LAST_ERR_VPS1:-SSH connection failed}"
         VPS1_PREV_RX=0; VPS1_PREV_TX=0
+        VPS1_PREV_VPN_RX=0; VPS1_PREV_VPN_TX=0
     fi
 
     # --- VPS2 ---
@@ -368,6 +414,8 @@ write_json() {
     local V2_RX_SPEED="0" V2_TX_SPEED="0" V2_ERROR=""
     local V2_CPUS="1" V2_UPTIME_S="0" V2_CPU_MHZ="0" V2_SWAP=""
     local V2_RX_TOTAL="0" V2_TX_TOTAL="0"
+    local V2_VPN_RX="0" V2_VPN_TX="0" V2_VPN_RX_SPEED="0" V2_VPN_TX_SPEED="0"
+    local V2_VPN_RX_TOTAL="0" V2_VPN_TX_TOTAL="0"
     local V2_MEM_AVAIL="0" V2_MEM_BUFFERS="0" V2_MEM_CACHED="0"
     local V2_DISK_INODES="0%" V2_PROC_COUNT="0" V2_OPEN_FILES="0"
 
@@ -404,6 +452,10 @@ write_json() {
         V2_SWAP="$(parse_kv "$vps2_data" SWAP)"; V2_SWAP="${V2_SWAP:-0/0MB}"
         V2_RX_TOTAL="$(parse_kv "$vps2_data" RX_TOTAL)"; V2_RX_TOTAL="${V2_RX_TOTAL:-0}"
         V2_TX_TOTAL="$(parse_kv "$vps2_data" TX_TOTAL)"; V2_TX_TOTAL="${V2_TX_TOTAL:-0}"
+        V2_VPN_RX="$(parse_kv "$vps2_data" VPN_RX)"; V2_VPN_RX="${V2_VPN_RX:-0}"
+        V2_VPN_TX="$(parse_kv "$vps2_data" VPN_TX)"; V2_VPN_TX="${V2_VPN_TX:-0}"
+        V2_VPN_RX_TOTAL="$(parse_kv "$vps2_data" VPN_RX_TOTAL)"; V2_VPN_RX_TOTAL="${V2_VPN_RX_TOTAL:-0}"
+        V2_VPN_TX_TOTAL="$(parse_kv "$vps2_data" VPN_TX_TOTAL)"; V2_VPN_TX_TOTAL="${V2_VPN_TX_TOTAL:-0}"
         V2_MEM_AVAIL="$(parse_kv "$vps2_data" MEM_AVAIL)"; V2_MEM_AVAIL="${V2_MEM_AVAIL:-0}"
         V2_MEM_BUFFERS="$(parse_kv "$vps2_data" MEM_BUFFERS)"; V2_MEM_BUFFERS="${V2_MEM_BUFFERS:-0}"
         V2_MEM_CACHED="$(parse_kv "$vps2_data" MEM_CACHED)"; V2_MEM_CACHED="${V2_MEM_CACHED:-0}"
@@ -417,11 +469,20 @@ write_json() {
             V2_RX_SPEED=$(( d_rx2 / elapsed ))
             V2_TX_SPEED=$(( d_tx2 / elapsed ))
         fi
+        if [[ "$VPS2_PREV_VPN_RX" -gt 0 && "${V2_VPN_RX:-0}" =~ ^[0-9]+$ ]]; then
+            local d_vpn_rx2 d_vpn_tx2
+            d_vpn_rx2=$(( ${V2_VPN_RX:-0} - VPS2_PREV_VPN_RX )); [[ $d_vpn_rx2 -lt 0 ]] && d_vpn_rx2=0
+            d_vpn_tx2=$(( ${V2_VPN_TX:-0} - VPS2_PREV_VPN_TX )); [[ $d_vpn_tx2 -lt 0 ]] && d_vpn_tx2=0
+            V2_VPN_RX_SPEED=$(( d_vpn_rx2 / elapsed ))
+            V2_VPN_TX_SPEED=$(( d_vpn_tx2 / elapsed ))
+        fi
         VPS2_PREV_RX="${V2_RX:-0}"; VPS2_PREV_TX="${V2_TX:-0}"
+        VPS2_PREV_VPN_RX="${V2_VPN_RX:-0}"; VPS2_PREV_VPN_TX="${V2_VPN_TX:-0}"
         : # connection details intentionally not collected
     else
         V2_ERROR="${LAST_ERR_VPS2:-SSH connection failed}"
         VPS2_PREV_RX=0; VPS2_PREV_TX=0
+        VPS2_PREV_VPN_RX=0; VPS2_PREV_VPN_TX=0
     fi
 
     PREV_TS="$now"
@@ -442,6 +503,8 @@ write_json() {
         J_V1_CPUS="${V1_CPUS:-1}" J_V1_UPTIME_S="${V1_UPTIME_S:-0}" \
         J_V1_CPU_MHZ="${V1_CPU_MHZ:-0}" J_V1_SWAP="${V1_SWAP:-0/0MB}" \
         J_V1_RX_TOTAL="${V1_RX_TOTAL:-0}" J_V1_TX_TOTAL="${V1_TX_TOTAL:-0}" \
+        J_V1_VPN_RX_SPEED="$V1_VPN_RX_SPEED" J_V1_VPN_TX_SPEED="$V1_VPN_TX_SPEED" \
+        J_V1_VPN_RX_TOTAL="${V1_VPN_RX_TOTAL:-0}" J_V1_VPN_TX_TOTAL="${V1_VPN_TX_TOTAL:-0}" \
         J_V1_MEM_AVAIL="${V1_MEM_AVAIL:-0}" J_V1_MEM_BUFFERS="${V1_MEM_BUFFERS:-0}" J_V1_MEM_CACHED="${V1_MEM_CACHED:-0}" \
         J_V1_DISK_INODES="${V1_DISK_INODES:-0%}" J_V1_PROC_COUNT="${V1_PROC_COUNT:-0}" J_V1_OPEN_FILES="${V1_OPEN_FILES:-0}" \
         J_V1_ERROR="${V1_ERROR:-}" \
@@ -457,6 +520,8 @@ write_json() {
         J_V2_CPUS="${V2_CPUS:-1}" J_V2_UPTIME_S="${V2_UPTIME_S:-0}" \
         J_V2_CPU_MHZ="${V2_CPU_MHZ:-0}" J_V2_SWAP="${V2_SWAP:-0/0MB}" \
         J_V2_RX_TOTAL="${V2_RX_TOTAL:-0}" J_V2_TX_TOTAL="${V2_TX_TOTAL:-0}" \
+        J_V2_VPN_RX_SPEED="$V2_VPN_RX_SPEED" J_V2_VPN_TX_SPEED="$V2_VPN_TX_SPEED" \
+        J_V2_VPN_RX_TOTAL="${V2_VPN_RX_TOTAL:-0}" J_V2_VPN_TX_TOTAL="${V2_VPN_TX_TOTAL:-0}" \
         J_V2_MEM_AVAIL="${V2_MEM_AVAIL:-0}" J_V2_MEM_BUFFERS="${V2_MEM_BUFFERS:-0}" J_V2_MEM_CACHED="${V2_MEM_CACHED:-0}" \
         J_V2_DISK_INODES="${V2_DISK_INODES:-0%}" J_V2_PROC_COUNT="${V2_PROC_COUNT:-0}" J_V2_OPEN_FILES="${V2_OPEN_FILES:-0}" \
         J_LOG_FILE="$LOG_FILE"
@@ -521,6 +586,10 @@ data = {
         'tun_ping':     s('J_V1_TUN_PING'),
         'rx_total':     ni('J_V1_RX_TOTAL'),
         'tx_total':     ni('J_V1_TX_TOTAL'),
+        'vpn_rx_speed': ni('J_V1_VPN_RX_SPEED'),
+        'vpn_tx_speed': ni('J_V1_VPN_TX_SPEED'),
+        'vpn_rx_total': ni('J_V1_VPN_RX_TOTAL'),
+        'vpn_tx_total': ni('J_V1_VPN_TX_TOTAL'),
         'mem_avail_mb': ni('J_V1_MEM_AVAIL'),
         'mem_buffers_mb': ni('J_V1_MEM_BUFFERS'),
         'mem_cached_mb': ni('J_V1_MEM_CACHED'),
@@ -560,6 +629,10 @@ data = {
         'wan_ping':     s('J_V2_WAN_PING'),
         'rx_total':     ni('J_V2_RX_TOTAL'),
         'tx_total':     ni('J_V2_TX_TOTAL'),
+        'vpn_rx_speed': ni('J_V2_VPN_RX_SPEED'),
+        'vpn_tx_speed': ni('J_V2_VPN_TX_SPEED'),
+        'vpn_rx_total': ni('J_V2_VPN_RX_TOTAL'),
+        'vpn_tx_total': ni('J_V2_VPN_TX_TOTAL'),
         'mem_avail_mb': ni('J_V2_MEM_AVAIL'),
         'mem_buffers_mb': ni('J_V2_MEM_BUFFERS'),
         'mem_cached_mb': ni('J_V2_MEM_CACHED'),
@@ -598,14 +671,32 @@ wsl_to_win_path() {
 detect_http_python() {
     HTTP_PYTHON_CMD=()
     HTTP_SERVE_DIR="$(pwd)"
+    HTTP_WINDOWS_RUNTIME=0
+
+    can_run_python_cmd() {
+        local cmd="$1"
+        timeout 3 "$cmd" -V >/dev/null 2>&1
+    }
+
     if grep -qi microsoft /proc/version 2>/dev/null; then
         local win_py
         for win_py in python.exe py.exe; do
             if command -v "$win_py" >/dev/null 2>&1; then
-                HTTP_PYTHON_CMD=("$win_py")
-                HTTP_SERVE_DIR="$(wsl_to_win_path "$(pwd)")"
-                log_line "INFO" "WSL detected — HTTP server will use Windows Python ($win_py) serving $HTTP_SERVE_DIR"
-                return
+                if can_run_python_cmd "$win_py"; then
+                    HTTP_PYTHON_CMD=("$win_py")
+                    HTTP_SERVE_DIR="$(wsl_to_win_path "$(pwd)")"
+                    HTTP_WINDOWS_RUNTIME=1
+                    log_line "INFO" "WSL detected — HTTP server will use Windows Python ($win_py) serving $HTTP_SERVE_DIR"
+                    return
+                fi
+                if command -v cmd.exe >/dev/null 2>&1 && timeout 5 cmd.exe /C "$win_py -V" >/dev/null 2>&1; then
+                    HTTP_PYTHON_CMD=("cmd.exe" "/C" "$win_py")
+                    HTTP_SERVE_DIR="$(wsl_to_win_path "$(pwd)")"
+                    HTTP_WINDOWS_RUNTIME=1
+                    log_line "INFO" "WSL detected — HTTP server will use Windows Python via cmd.exe ($win_py) serving $HTTP_SERVE_DIR"
+                    return
+                fi
+                log_line "WARN" "WSL detected but $win_py is not executable in current shell — falling back to local Python runtime"
             fi
         done
         log_line "WARN" "WSL detected but no Windows Python found — HTTP server will bind to WSL localhost (may not be reachable from Windows browser)"
@@ -700,7 +791,7 @@ port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 ThreadingHTTPServer(('127.0.0.1', port), VPNHandler).serve_forever()
 PYSERVER
     TEMP_KEY_FILES+=("$srv_script")
-    if grep -qi microsoft /proc/version 2>/dev/null; then
+    if grep -qi microsoft /proc/version 2>/dev/null && [[ "$HTTP_WINDOWS_RUNTIME" == "1" ]]; then
         local win_srv_dir win_srv_copy
         win_srv_dir="$(cmd.exe /C "echo %TEMP%" 2>/dev/null | tr -d '\r')"
         win_srv_copy="${win_srv_dir}\\monweb_srv_$$.py"
@@ -829,9 +920,67 @@ check_internal_ips() {
 }
 
 # ---------------------------------------------------------------------------
+# Kill previous instance if running
+# ---------------------------------------------------------------------------
+
+kill_previous_instance() {
+    # 1) PID file
+    if [[ -f "$PID_FILE" ]]; then
+        local old_pid
+        old_pid="$(cat "$PID_FILE" 2>/dev/null | tr -d '[:space:]')"
+        if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+            echo "  Stopping previous monitor-web (pid $old_pid)..."
+            kill "$old_pid" 2>/dev/null
+            local waited=0
+            while kill -0 "$old_pid" 2>/dev/null && [[ $waited -lt 5 ]]; do
+                sleep 1; waited=$((waited+1))
+            done
+            if kill -0 "$old_pid" 2>/dev/null; then
+                kill -9 "$old_pid" 2>/dev/null
+                sleep 0.5
+            fi
+            log_line "INFO" "killed previous instance pid=$old_pid"
+        fi
+        rm -f "$PID_FILE"
+    fi
+
+    # 2) Fallback: find by process name (catches instances started without PID file)
+    local my_pid=$$
+    local pids
+    pids="$(pgrep -f 'monitor-web\.sh' 2>/dev/null || true)"
+    for pid in $pids; do
+        [[ "$pid" -eq "$my_pid" ]] && continue
+        [[ "$pid" -eq "$PPID" ]] && continue
+        echo "  Stopping orphan monitor-web (pid $pid)..."
+        kill "$pid" 2>/dev/null
+        sleep 0.5
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+        log_line "INFO" "killed orphan instance pid=$pid"
+    done
+
+    # 3) Kill leftover HTTP server on our port
+    local http_pids
+    http_pids="$(lsof -ti :"$HTTP_PORT" 2>/dev/null || true)"
+    if [[ -z "$http_pids" ]]; then
+        http_pids="$(ss -tlnp 2>/dev/null | awk -v p=":${HTTP_PORT}" '$4~p {match($0,/pid=([0-9]+)/,m); if(m[1]) print m[1]}' || true)"
+    fi
+    for pid in $http_pids; do
+        [[ "$pid" -eq "$my_pid" ]] && continue
+        echo "  Stopping leftover HTTP server on port $HTTP_PORT (pid $pid)..."
+        kill "$pid" 2>/dev/null
+        sleep 0.3
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    done
+
+    # Write our PID
+    echo "$$" > "$PID_FILE"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+kill_previous_instance
 start_http_server
 
 echo ""

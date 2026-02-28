@@ -8,6 +8,7 @@
 # Команды:
 #   deploy      Деплой VPN (полный или по частям)
 #   monitor     Мониторинг серверов (реалтайм или веб-дашборд)
+#   admin       Админ-панель (start/stop/status/setup/restart/logs)
 #   add-peer    Добавить новый WireGuard-пир на VPS1
 #   peers       Управление пирами (add/batch/list/remove/export/info)
 #   check       Проверить связность VPN-цепочки
@@ -54,6 +55,7 @@ manage.sh — управление VPN-инфраструктурой (AmneziaWG
 Команды:
   deploy      Деплой VPN (полный или по частям)
   monitor     Мониторинг серверов
+  admin       Админ-панель (start/stop/status/setup/restart/logs)
   add-peer    Добавить новый WireGuard-пир (legacy)
   peers       Управление пирами (add/batch/list/remove/export/info)
   check       Проверить связность VPN-цепочки
@@ -243,6 +245,53 @@ cmd_monitor() {
     esac
 }
 
+# ── Подкоманда: admin ─────────────────────────────────────────────────────────
+
+usage_admin() {
+    cat <<'EOF'
+manage.sh admin — управление VPN Admin Panel
+
+Команды:
+  start        Запуск (dev: 127.0.0.1:8081, в WSL: 0.0.0.0:8081)
+  start-prod   Запуск HTTPS (0.0.0.0:8443)
+  stop         Остановка
+  status       Проверка статуса
+  setup        Установка зависимостей
+  restart      Перезапуск
+  logs         Просмотр логов
+  reset-password  Сбросить пароль admin на «admin» (если забыли)
+
+Опции:
+  --port PORT  Порт (по умолчанию: 8081 dev, 8443 prod)
+  --host HOST  Host для bind (по умолчанию: auto)
+  --cert FILE  SSL-сертификат (для start-prod)
+  --key FILE   SSL-ключ (для start-prod)
+
+Примеры:
+  bash manage.sh admin setup
+  bash manage.sh admin start
+  bash manage.sh admin start --host 0.0.0.0
+  bash manage.sh admin start --port 9000
+  bash manage.sh admin start-prod --cert cert.pem --key key.pem
+  bash manage.sh admin status
+  bash manage.sh admin stop
+  bash manage.sh admin logs
+  bash manage.sh admin reset-password   # если забыли пароль
+EOF
+}
+
+cmd_admin() {
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        usage_admin; return 0
+    fi
+
+    local subcmd="${1:-start}"
+    shift || true
+
+    log "Запуск админ-панели (deploy-admin.sh ${subcmd})..."
+    bash "${SCRIPT_DIR}/scripts/deploy/deploy-admin.sh" "$subcmd" "$@"
+}
+
 # ── Подкоманда: add-peer ──────────────────────────────────────────────────────
 
 cmd_add_peer() {
@@ -317,6 +366,7 @@ shift || true
 case "$COMMAND" in
     deploy)     cmd_deploy   "$@" ;;
     monitor)    cmd_monitor  "$@" ;;
+    admin)      cmd_admin    "$@" ;;
     add-peer)   cmd_add_peer "$@" ;;
     peers)      cmd_peers    "$@" ;;
     check)      cmd_check    "$@" ;;

@@ -377,6 +377,11 @@ bash manage.sh <команда> [опции]
 | `deploy --proxy` | Только YouTube Ad Proxy |
 | `monitor` | Реалтайм-монитор в терминале |
 | `monitor --web` | Веб-дашборд на http://localhost:8080 |
+| `admin` | Запуск админ-панели (по умолчанию start) |
+| `admin start` | Запуск админ-панели (dev: `127.0.0.1:8081`, в WSL: `0.0.0.0:8081`) |
+| `admin stop` | Остановка админ-панели |
+| `admin status` | Проверка статуса админ-панели |
+| `admin setup` | Установка Python-зависимостей |
 | `peers add` | Добавить пира (с выбором типа, режима, QR) |
 | `peers batch` | Массовое создание пиров (из CSV или по шаблону) |
 | `peers list` | Показать все пиры с трафиком и handshake |
@@ -570,9 +575,71 @@ bash scripts/monitor/monitor-web.sh
 > VPS2 всегда опрашивается по публичному IP — туннельный адрес `10.8.0.2` является
 > интерфейсом VPS1↔VPS2 и SSH там не слушает.
 > Индикатор `Active VPN` в веб-дашборде считает только активные peer'ы `awg1` с
-> `latest handshake <= 180s` (а не общее число всех peer'ов в конфиге).
+> `latest handshake <= 55s` (а не общее число всех peer'ов в конфиге).
 > Для запуска мониторинга нужен Python рантайм: подходит `python3`, `python` или `py -3`.
 > Данные обновляются каждые 2 секунды через SSH-подключение к серверам.
+
+## Админ-панель (REST API)
+
+Flask-бэкенд для управления VPN через веб-интерфейс. Хранит данные в SQLite, синхронизирует пиры с `vpn-output/peers.json`. **Все конфиги** хранятся в одной папке `vpn-output/` — оттуда они подгружаются для управления; вкладка **Peers** показывает все выданные пиры (из БД и из папки конфигов) с указанием статуса (active/disabled/from_config) и подключения (online/offline). После логина сессия запоминается через HTTP-only cookie (`admin_sid`), поэтому перезагрузка страницы не требует повторного ввода пароля, пока сессия не истечёт или не выполнен logout.
+
+**Адрес входа:** после запуска откройте в браузере **http://localhost:8081/** (или http://localhost:8081/admin.html).  
+Порт **8081** выбран специально, чтобы не конфликтовать с веб-дашбордом мониторинга (**monitor --web**), который занимает порт **8080**.
+Если запуск идёт в WSL через `manage.sh admin start`, сервис автоматически биндится на `0.0.0.0`, чтобы адрес `localhost:8081` был доступен из Windows-браузера.
+
+**Дашборд** включает: сводку по пирам, **подключённые сейчас** (через SSH к VPS1), карточки серверов с полными метриками как в мониторинге (Load, Swap, TCP/UDP, процессы, физический интерфейс, статус-чипы), **графики скорости** (RX/TX), **общий трафик**, лог мониторинга, журнал активности и таблицу **WireGuard peers (live)** с endpoint/allowed IPs/handshake/traffic/public key. Для полных данных серверов (CPU/RAM/сеть) запустите также `manage.sh monitor --web` — он пишет data.json, который читает админка. Подключения отображаются через `/api/monitoring/peers` (прямой SSH к VPS1), без зависимости от monitor. На вкладке `Peers` выводится текущая скорость (RX/TX) по каждому пиру; при наведении на скорость показывается мини-график последних значений.
+
+### Установка и запуск
+
+```bash
+# Установить зависимости
+pip install -r scripts/admin/requirements.txt
+
+# Запуск (dev — localhost:8081, без конфликта с monitor --web на 8080)
+python scripts/admin/admin-server.py
+
+# Для доступа из Windows-браузера при запуске внутри WSL
+python scripts/admin/admin-server.py --host 0.0.0.0
+
+# Запуск (prod — 0.0.0.0:8443 с HTTPS)
+python scripts/admin/admin-server.py --prod --cert cert.pem --key key.pem
+```
+
+При первом запуске создаётся пользователь `admin` / `admin` — **смените пароль сразу**.  
+Если пароль не подходит (например, меняли ранее или восстанавливали БД), сбросьте его:  
+`bash manage.sh admin reset-password` — пароль снова станет `admin`.
+
+### API
+
+| Метод | Эндпоинт | Описание |
+|-------|----------|----------|
+| POST | `/api/auth/login` | Авторизация → JWT токен |
+| POST | `/api/auth/logout` | Инвалидация токена |
+| POST | `/api/auth/change-password` | Смена пароля |
+| GET | `/api/auth/me` | Текущий пользователь |
+| GET | `/api/peers` | Список всех пиров: БД + папка vpn-output (фильтры: `?status=`, `?type=`, `?search=`), live-метрики (handshake/traffic) и `connection_threshold_sec` |
+| POST | `/api/peers` | Создать пира (генерация ключей, IP, регистрация на VPS1) |
+| POST | `/api/peers/batch` | Массовое создание (prefix+count или CSV) |
+| GET/PUT/DELETE | `/api/peers/:id` | CRUD пира |
+| POST | `/api/peers/:id/disable` | Отключить пира на сервере |
+| POST | `/api/peers/:id/enable` | Включить пира обратно |
+| GET | `/api/peers/:id/config` | Скачать .conf (для пиров из БД) |
+| GET | `/api/peers/by-ip/:ip/config` | Скачать .conf по IP (для пиров только из папки) |
+| GET | `/api/peers/:id/qr` | QR-код (base64 PNG) |
+| GET | `/api/peers/stats` | Статистика подсети |
+| GET | `/api/monitoring/data` | Данные мониторинга (из data.json, требует auth; localhost разрешён без токена) |
+| GET | `/api/monitoring/peers` | Live-пиры WireGuard с `peer_ip`, endpoint, handshake и трафиком (SSH; требует auth, localhost разрешён без токена) |
+| GET/PUT | `/api/settings` | VPN-настройки (DNS, MTU, Jc, Jmin, Jmax, S1, S2) |
+| GET | `/api/audit` | Аудит-лог с пагинацией |
+| GET | `/api/health` | Health check (без авторизации) |
+
+WebSocket: подключение к `/` — real-time обновления мониторинга.
+
+### Тесты админ-панели
+
+```bash
+bash tests/test-admin-server.sh
+```
 
 ## Тесты
 
@@ -665,6 +732,27 @@ powershell -File tests/test-git-push-github.ps1
 ```bash
 # Linux / WSL
 bash tests/test-git-push-github.sh
+```
+
+Проверка admin-server.py (файлы, структура, БД, API, безопасность):
+
+```bash
+# Linux / WSL / Git Bash
+bash tests/test-admin-server.sh
+```
+
+Статические тесты админ-панели (файлы, синтаксис, HTML, эндпоинты, deploy-скрипт):
+
+```bash
+# Linux / WSL / Git Bash
+bash tests/test-admin.sh
+```
+
+API integration тесты (запускает сервер, тестирует все эндпоинты):
+
+```bash
+# Linux / WSL / Git Bash (требует Python 3 + curl)
+bash tests/test-admin-api.sh
 ```
 
 ## Оптимизация производительности
