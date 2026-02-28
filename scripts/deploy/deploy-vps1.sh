@@ -63,24 +63,22 @@ VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
 require_vars "deploy-vps1.sh" VPS1_IP VPS2_IP
 [[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && err "Укажите --vps1-key или --vps1-pass (или VPS1_KEY в .env)"
 
-ssh_cmd() {
-    local ip=$1; local user=$2; local key=$3; local pass=$4
-    local opts="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no"
-    if [[ -n "$key" ]]; then
-        echo "ssh -T -i $key $opts ${user}@${ip}"
+run1() {
+    local -a ssh_opts=(-T -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no)
+    if [[ -n "$VPS1_KEY" ]]; then
+        ssh "${ssh_opts[@]}" -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1
     else
-        echo "sshpass -p '$pass' ssh -T $opts ${user}@${ip}"
+        sshpass -p "$VPS1_PASS" ssh "${ssh_opts[@]}" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1
     fi
 }
 
-run1() { eval "$(ssh_cmd $VPS1_IP $VPS1_USER "$VPS1_KEY" "$VPS1_PASS")" "$@" 2>&1; }
-
 upload1() {
     local f=$1; local dst=${2:-/tmp/$(basename $f)}
+    local -a scp_opts=(-o StrictHostKeyChecking=accept-new)
     if [[ -n "$VPS1_KEY" ]]; then
-        scp -i "$VPS1_KEY" -o StrictHostKeyChecking=accept-new "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        scp "${scp_opts[@]}" -i "$VPS1_KEY" "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS1_PASS" scp -o StrictHostKeyChecking=accept-new "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        sshpass -p "$VPS1_PASS" scp "${scp_opts[@]}" "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     fi
 }
 

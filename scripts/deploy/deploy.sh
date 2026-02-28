@@ -103,32 +103,39 @@ require_vars "deploy.sh" VPS1_IP VPS2_IP
 [[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && err "Укажите --vps2-key или --vps2-pass (или VPS2_KEY в .env)"
 
 # ── SSH хелперы ────────────────────────────────────────────────────────────
-ssh_cmd() {
-    local ip=$1; local user=$2; local key=$3; local pass=$4
-    local opts="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no"
-    if [[ -n "$key" ]]; then
-        echo "ssh -T -i $key $opts ${user}@${ip}"
+run1() {
+    local -a ssh_opts=(-T -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no)
+    if [[ -n "$VPS1_KEY" ]]; then
+        ssh "${ssh_opts[@]}" -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1
     else
-        echo "sshpass -p '$pass' ssh -T $opts ${user}@${ip}"
+        sshpass -p "$VPS1_PASS" ssh "${ssh_opts[@]}" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1
     fi
 }
 
-run1() { eval "$(ssh_cmd $VPS1_IP $VPS1_USER "$VPS1_KEY" "$VPS1_PASS")" "$@" 2>&1; }
-run2() { eval "$(ssh_cmd $VPS2_IP $VPS2_USER "$VPS2_KEY" "$VPS2_PASS")" "$@" 2>&1; }
+run2() {
+    local -a ssh_opts=(-T -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no)
+    if [[ -n "$VPS2_KEY" ]]; then
+        ssh "${ssh_opts[@]}" -i "$VPS2_KEY" "${VPS2_USER}@${VPS2_IP}" "$@" 2>&1
+    else
+        sshpass -p "$VPS2_PASS" ssh "${ssh_opts[@]}" "${VPS2_USER}@${VPS2_IP}" "$@" 2>&1
+    fi
+}
 
 upload1() { local f=$1; local dst=${2:-/tmp/$(basename $f)}
+    local -a scp_opts=(-o StrictHostKeyChecking=accept-new)
     if [[ -n "$VPS1_KEY" ]]; then
-        scp -i "$VPS1_KEY" -o StrictHostKeyChecking=accept-new "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        scp "${scp_opts[@]}" -i "$VPS1_KEY" "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS1_PASS" scp -o StrictHostKeyChecking=accept-new "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        sshpass -p "$VPS1_PASS" scp "${scp_opts[@]}" "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     fi
 }
 
 upload2() { local f=$1; local dst=${2:-/tmp/$(basename $f)}
+    local -a scp_opts=(-o StrictHostKeyChecking=accept-new)
     if [[ -n "$VPS2_KEY" ]]; then
-        scp -i "$VPS2_KEY" -o StrictHostKeyChecking=accept-new "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
+        scp "${scp_opts[@]}" -i "$VPS2_KEY" "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS2_PASS" scp -o StrictHostKeyChecking=accept-new "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
+        sshpass -p "$VPS2_PASS" scp "${scp_opts[@]}" "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
     fi
 }
 
