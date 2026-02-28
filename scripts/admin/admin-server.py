@@ -73,12 +73,36 @@ log = logging.getLogger("admin")
 # =============================================================================
 
 app = Flask(__name__)
-# Fixed default key so JWT from login validates on /api/auth/me (reloader spawns new process with new random key otherwise)
-app.config["SECRET_KEY"] = os.environ.get("ADMIN_SECRET_KEY", "dev-admin-secret-key-do-not-use-in-production")
+DEFAULT_DEV_CORS_ORIGINS = [
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
+
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    """Parse comma-separated CORS origins."""
+    origins = [item.strip() for item in (raw or "").split(",")]
+    return [o for o in origins if o]
+
+
+def _resolve_cors_origins(prod: bool) -> list[str]:
+    """Return CORS allowlist from env, or safe defaults for dev."""
+    raw = (get_env("ADMIN_CORS_ORIGINS") or os.environ.get("ADMIN_CORS_ORIGINS", "")).strip()
+    parsed = _parse_cors_origins(raw)
+    if parsed:
+        return parsed
+    return [] if prod else list(DEFAULT_DEV_CORS_ORIGINS)
+
+
+# In dev we use an ephemeral key if ADMIN_SECRET_KEY is not set.
+app.config["SECRET_KEY"] = os.environ.get("ADMIN_SECRET_KEY", "") or secrets.token_hex(32)
 app.config["JWT_TTL_HOURS"] = int(os.environ.get("ADMIN_JWT_TTL_HOURS", "24"))
 
-CORS(app, resources={r"/api/*": {"origins": "*"}})
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+_bootstrap_origins = _parse_cors_origins(os.environ.get("ADMIN_CORS_ORIGINS", "")) or list(DEFAULT_DEV_CORS_ORIGINS)
+CORS(app, resources={r"/api/*": {"origins": _bootstrap_origins}}, supports_credentials=True)
+socketio = SocketIO(app, cors_allowed_origins=_bootstrap_origins, async_mode="threading")
 
 # =============================================================================
 # Rate limiter (in-memory, per IP)
@@ -445,7 +469,8 @@ def sync_peers_to_json() -> None:
 def _ssh_connect(host: str, user: str, key_path: str, password: str) -> paramiko.SSHClient:
     """Open an SSH connection using key or password."""
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
     connect_kwargs: dict[str, Any] = {
         "hostname": host,
@@ -590,7 +615,7 @@ def _get_token_from_request() -> str | None:
         token = _get_session_token(sid)
         if token:
             return token
-    return request.cookies.get("admin_token") or None
+    return None
 
 
 def _is_local_request() -> bool:
@@ -619,10 +644,14 @@ def auth_required(fn):
 
 
 def auth_required_or_local(fn):
-    """Require auth, but allow from localhost without auth (for dashboard data)."""
+    """Require auth, but allow localhost bypass only for read-only monitoring."""
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        if _is_local_request():
+        is_monitoring_readonly = (
+            request.method in {"GET", "HEAD", "OPTIONS"}
+            and request.path in {"/api/monitoring/data", "/api/monitoring/peers"}
+        )
+        if _is_local_request() and is_monitoring_readonly:
             g.user_id = 1
             g.username = "local"
             g.token = None
@@ -1001,7 +1030,7 @@ def _get_monitoring_by_ip() -> dict[str, dict]:
 
 
 @app.route("/api/peers", methods=["GET"])
-@auth_required_or_local
+@auth_required
 def peers_list():
     """List all issued peers: from DB + config folder. Includes connection status."""
     db = get_db()
@@ -1086,16 +1115,42 @@ def peers_list():
 
 
 @app.route("/api/peers", methods=["POST"])
-@auth_required_or_local
+@auth_required
 def peers_create():
     """Create a new peer: generate keys, allocate IP, register on server."""
     data = request.get_json(silent=True) or {}
     name = data.get("name", "").strip()
     device_type = data.get("type", "phone").strip().lower()
     mode = data.get("mode", "full").strip().lower()
+    group_name = data.get("group_name")
+    expiry_date = data.get("expiry_date")
+    traffic_limit_mb = data.get("traffic_limit_mb")
 
     if not name:
         return jsonify({"error": "name is required"}), 400
+    if mode not in {"full", "split"}:
+        return jsonify({"error": "mode must be one of: full, split"}), 400
+
+    group_name = str(group_name).strip() if group_name is not None else None
+    if group_name == "":
+        group_name = None
+
+    if expiry_date in (None, ""):
+        expiry_date = None
+    else:
+        expiry_date = str(expiry_date).strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", expiry_date):
+            return jsonify({"error": "expiry_date must be YYYY-MM-DD"}), 400
+
+    if traffic_limit_mb in (None, ""):
+        traffic_limit_mb = None
+    else:
+        try:
+            traffic_limit_mb = int(traffic_limit_mb)
+        except (TypeError, ValueError):
+            return jsonify({"error": "traffic_limit_mb must be an integer"}), 400
+        if traffic_limit_mb < 0:
+            return jsonify({"error": "traffic_limit_mb must be >= 0"}), 400
 
     db = get_db()
 
@@ -1144,9 +1199,23 @@ def peers_create():
     db.execute(
         """INSERT INTO peers
            (name, ip, type, mode, public_key, private_key, preshared_key,
-            created_at, updated_at, status, config_file)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
-        (name, ip, device_type, mode, pub, priv, psk, now, now, str(config_path)),
+            created_at, updated_at, status, config_file, group_name, expiry_date, traffic_limit_mb)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)""",
+        (
+            name,
+            ip,
+            device_type,
+            mode,
+            pub,
+            priv,
+            psk,
+            now,
+            now,
+            str(config_path),
+            group_name,
+            expiry_date,
+            traffic_limit_mb,
+        ),
     )
     db.commit()
 
@@ -1158,7 +1227,7 @@ def peers_create():
 
 
 @app.route("/api/peers/batch", methods=["POST"])
-@auth_required_or_local
+@auth_required
 def peers_batch_create():
     """Batch-create peers from prefix+count or CSV data."""
     data = request.get_json(silent=True) or {}
@@ -1228,7 +1297,7 @@ def peers_batch_create():
 
 
 @app.route("/api/peers/<int:peer_id>", methods=["GET"])
-@auth_required_or_local
+@auth_required
 def peers_get(peer_id: int):
     """Get a single peer by ID."""
     db = get_db()
@@ -1239,7 +1308,7 @@ def peers_get(peer_id: int):
 
 
 @app.route("/api/peers/<int:peer_id>", methods=["PUT"])
-@auth_required_or_local
+@auth_required
 def peers_update(peer_id: int):
     """Update peer metadata (name, type, mode, group, status, expiry, traffic limit)."""
     db = get_db()
@@ -1249,18 +1318,79 @@ def peers_update(peer_id: int):
 
     data = request.get_json(silent=True) or {}
     allowed_fields = {
-        "name", "type", "mode", "group_name", "status",
-        "expiry_date", "traffic_limit_mb",
+        "name",
+        "type",
+        "mode",
+        "group_name",
+        "status",
+        "expiry_date",
+        "traffic_limit_mb",
+        "public_key",
+        "private_key",
+        "preshared_key",
+        "config_file",
     }
+    allowed_statuses = {"active", "disabled", "revoked"}
+    allowed_modes = {"full", "split"}
     updates: list[str] = []
     params: list[Any] = []
     changes: dict[str, Any] = {}
 
     for field in allowed_fields:
         if field in data:
+            value = data[field]
+
+            if field == "name":
+                value = str(value or "").strip()
+                if not value:
+                    return jsonify({"error": "name cannot be empty"}), 400
+                existing = db.execute(
+                    "SELECT id FROM peers WHERE name = ? AND id != ?",
+                    (value, peer_id),
+                ).fetchone()
+                if existing:
+                    return jsonify({"error": f"Peer with name '{value}' already exists"}), 409
+            elif field == "type":
+                value = str(value or "").strip().lower()
+                if not value:
+                    return jsonify({"error": "type cannot be empty"}), 400
+            elif field == "mode":
+                value = str(value or "").strip().lower()
+                if value not in allowed_modes:
+                    return jsonify({"error": f"mode must be one of: {', '.join(sorted(allowed_modes))}"}), 400
+            elif field == "status":
+                value = str(value or "").strip().lower()
+                if value not in allowed_statuses:
+                    return jsonify({"error": f"status must be one of: {', '.join(sorted(allowed_statuses))}"}), 400
+            elif field == "group_name":
+                value = str(value).strip() if value is not None else None
+                if value == "":
+                    value = None
+            elif field == "expiry_date":
+                if value in (None, ""):
+                    value = None
+                else:
+                    value = str(value).strip()
+                    if not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+                        return jsonify({"error": "expiry_date must be YYYY-MM-DD"}), 400
+            elif field == "traffic_limit_mb":
+                if value in (None, ""):
+                    value = None
+                else:
+                    try:
+                        value = int(value)
+                    except (ValueError, TypeError):
+                        return jsonify({"error": "traffic_limit_mb must be an integer"}), 400
+                    if value < 0:
+                        return jsonify({"error": "traffic_limit_mb must be >= 0"}), 400
+            elif field in {"public_key", "private_key", "preshared_key", "config_file"}:
+                value = str(value).strip() if value is not None else None
+                if value == "":
+                    value = None
+
             updates.append(f"{field} = ?")
-            params.append(data[field])
-            changes[field] = data[field]
+            params.append(value)
+            changes[field] = value
 
     if not updates:
         return jsonify({"error": "No valid fields to update"}), 400
@@ -1268,9 +1398,15 @@ def peers_update(peer_id: int):
     updates.append("updated_at = datetime('now')")
     params.append(peer_id)
 
-    db.execute(
-        f"UPDATE peers SET {', '.join(updates)} WHERE id = ?", params
-    )
+    try:
+        db.execute(
+            f"UPDATE peers SET {', '.join(updates)} WHERE id = ?", params
+        )
+    except sqlite3.IntegrityError as exc:
+        msg = str(exc).lower()
+        if "name" in msg:
+            return jsonify({"error": "Peer name must be unique"}), 409
+        return jsonify({"error": f"Constraint error: {exc}"}), 409
     db.commit()
 
     sync_peers_to_json()
@@ -1281,7 +1417,7 @@ def peers_update(peer_id: int):
 
 
 @app.route("/api/peers/<int:peer_id>", methods=["DELETE"])
-@auth_required_or_local
+@auth_required
 def peers_delete(peer_id: int):
     """Delete a peer from DB and remove from VPN server."""
     db = get_db()
@@ -1307,7 +1443,7 @@ def peers_delete(peer_id: int):
 
 
 @app.route("/api/peers/<int:peer_id>/disable", methods=["POST"])
-@auth_required_or_local
+@auth_required
 def peers_disable(peer_id: int):
     """Disable a peer on the VPN server without deleting it."""
     db = get_db()
@@ -1330,7 +1466,7 @@ def peers_disable(peer_id: int):
 
 
 @app.route("/api/peers/<int:peer_id>/enable", methods=["POST"])
-@auth_required_or_local
+@auth_required
 def peers_enable(peer_id: int):
     """Re-enable a disabled peer on the VPN server."""
     db = get_db()
@@ -1369,7 +1505,7 @@ def _resolve_config_path(config_file: str | None) -> Path | None:
 
 
 @app.route("/api/peers/<int:peer_id>/config", methods=["GET"])
-@auth_required_or_local
+@auth_required
 def peers_config(peer_id: int):
     """Download the .conf file for a peer."""
     db = get_db()
@@ -1406,7 +1542,7 @@ def peers_config(peer_id: int):
 
 
 @app.route("/api/peers/by-ip/<path:peer_ip>/config", methods=["GET"])
-@auth_required_or_local
+@auth_required
 def peers_config_by_ip(peer_ip: str):
     """Download .conf file for a peer by IP (для пиров из папки config)."""
     peer_ip = peer_ip.replace("_", ".")
@@ -1427,7 +1563,7 @@ def peers_config_by_ip(peer_ip: str):
 
 
 @app.route("/api/peers/<int:peer_id>/qr", methods=["GET"])
-@auth_required_or_local
+@auth_required
 def peers_qr(peer_id: int):
     """Get QR code as base64 PNG for a peer's config."""
     db = get_db()
@@ -1460,7 +1596,7 @@ def peers_qr(peer_id: int):
 
 
 @app.route("/api/peers/stats", methods=["GET"])
-@auth_required_or_local
+@auth_required
 def peers_stats():
     """Return subnet statistics: total, used, available IPs."""
     db = get_db()
@@ -1597,7 +1733,7 @@ def _ws_disconnect():
 
 
 @app.route("/api/settings", methods=["GET"])
-@auth_required_or_local
+@auth_required
 def settings_get():
     """Return all VPN settings."""
     db = get_db()
@@ -1605,7 +1741,7 @@ def settings_get():
 
 
 @app.route("/api/settings", methods=["PUT"])
-@auth_required_or_local
+@auth_required
 def settings_update():
     """Update VPN settings (DNS, MTU, Jc, Jmin, Jmax, S1, S2, etc.)."""
     data = request.get_json(silent=True) or {}
@@ -1636,7 +1772,7 @@ def settings_update():
 
 
 @app.route("/api/audit", methods=["GET"])
-@auth_required_or_local
+@auth_required
 def audit_list():
     """Return audit log with pagination."""
     page = max(1, int(request.args.get("page", 1)))
@@ -1733,6 +1869,14 @@ def main() -> None:
     parser.add_argument("--key", default=None, help="SSL key file (prod)")
     args = parser.parse_args()
 
+    startup_env = load_env()
+    secret = (os.environ.get("ADMIN_SECRET_KEY") or startup_env.get("ADMIN_SECRET_KEY", "")).strip()
+    if args.prod and not secret:
+        log.error("ADMIN_SECRET_KEY is required in production mode")
+        sys.exit(2)
+
+    app.config["SECRET_KEY"] = secret or app.config["SECRET_KEY"]
+
     init_db()
     _ensure_default_admin()
     _load_default_settings()
@@ -1743,8 +1887,11 @@ def main() -> None:
 
     log.info("Starting admin server on %s:%d (prod=%s)", host, port, args.prod)
     log.info("Admin panel UI: http://%s:%d/", "localhost" if host == "127.0.0.1" else host, port)
-    if args.prod and not os.environ.get("ADMIN_SECRET_KEY"):
-        log.warning("ADMIN_SECRET_KEY not set — using default key. Set it in production!")
+
+    cors_origins = _resolve_cors_origins(args.prod)
+    CORS(app, resources={r"/api/*": {"origins": cors_origins}}, supports_credentials=True)
+    socketio.server_options["cors_allowed_origins"] = cors_origins
+    log.info("CORS allowlist: %s", cors_origins if cors_origins else "none")
 
     ssl_context = None
     if args.prod and args.cert and args.key:
@@ -1753,7 +1900,6 @@ def main() -> None:
 
     if args.prod:
         app.config["SESSION_COOKIE_SECURE"] = True
-        CORS(app, resources={r"/api/*": {"origins": []}})
 
     # use_reloader=False in dev so SECRET_KEY is the same for all requests (no child process)
     socketio.run(

@@ -1066,7 +1066,6 @@ td.mono { font-family: monospace; font-size: 12px; }
 
 // ====== State ======
 const state = {
-  token: localStorage.getItem('admin_token'),
   user: null,
   peers: [],
   peerStats: null,
@@ -1124,24 +1123,20 @@ async function api(method, path, body, retryOn401) {
     method,
     headers: { 'Content-Type': 'application/json' },
   };
-  const token = state.token || localStorage.getItem('admin_token');
-  if (token && typeof token === 'string') opts.headers['Authorization'] = 'Bearer ' + token;
   if (body !== undefined) opts.body = JSON.stringify(body);
   opts.credentials = 'include';
 
   let res = await fetch(path, opts);
   let data = await res.json().catch(() => ({}));
 
-  if (res.status === 401 && retryOn401 !== false && (state.token || localStorage.getItem('admin_token'))) {
+  if (res.status === 401 && retryOn401 !== false && state.user) {
     await new Promise(r => setTimeout(r, 400));
     res = await fetch(path, opts);
     data = await res.json().catch(() => ({}));
   }
 
   if (res.status === 401) {
-    state.token = null;
     state.user = null;
-    localStorage.removeItem('admin_token');
     navigate('login');
     throw new Error('Session expired');
   }
@@ -1245,12 +1240,8 @@ function connectionBadge(status, handshakeAgeSec) {
 }
 
 // ====== Router ======
-function navigate(page, tokenFromLogin) {
-  if (tokenFromLogin) {
-    state.token = tokenFromLogin;
-    try { localStorage.setItem('admin_token', tokenFromLogin); } catch (_) {}
-  }
-  if (!state.token && !state.user && page !== 'login') { page = 'login'; }
+function navigate(page) {
+  if (!state.user && page !== 'login') { page = 'login'; }
   state.currentPage = page;
   window.location.hash = '#' + page;
   render();
@@ -1486,7 +1477,7 @@ function ringGauge(pct, color) {
 // ====== Render ======
 function render() {
   const app = document.getElementById('app');
-  if (state.currentPage === 'login' || (!state.token && !state.user)) {
+  if (state.currentPage === 'login' || !state.user) {
     app.innerHTML = renderLoginPage();
     return;
   }
@@ -2174,10 +2165,7 @@ async function togglePeer(id, action) {
 
 async function downloadConfig(id) {
   try {
-    const headers = {};
-    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
     const res = await fetch(`/api/peers/${id}/config`, {
-      headers,
       credentials: 'include',
     });
     if (!res.ok) throw new Error('Failed to download');
@@ -2196,10 +2184,7 @@ async function downloadConfig(id) {
 async function downloadConfigByIp(ip) {
   try {
     const pathIp = ip.replace(/\./g, '_');
-    const headers = {};
-    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
     const res = await fetch(`/api/peers/by-ip/${pathIp}/config`, {
-      headers,
       credentials: 'include',
     });
     if (!res.ok) throw new Error('Failed to download');
@@ -2429,6 +2414,22 @@ async function openEditPeerModal(id) {
             <input class="form-input" id="edit-traffic" type="number" value="${peer.traffic_limit_mb || ''}" min="0" placeholder="Unlimited">
           </div>
         </div>
+        <div class="form-group">
+          <label class="form-label">Config File Path</label>
+          <input class="form-input mono" id="edit-config-file" type="text" value="${esc(peer.config_file || '')}" placeholder="vpn-output/peer_name.conf">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Public Key</label>
+          <input class="form-input mono" id="edit-public-key" type="text" value="${esc(peer.public_key || '')}" placeholder="Optional">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Private Key</label>
+          <input class="form-input mono" id="edit-private-key" type="text" value="${esc(peer.private_key || '')}" placeholder="Optional">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Preshared Key</label>
+          <input class="form-input mono" id="edit-preshared-key" type="text" value="${esc(peer.preshared_key || '')}" placeholder="Optional">
+        </div>
         <div style="margin-top:8px;padding:10px;background:var(--bg-input);border-radius:8px;font-size:12px;color:var(--text-secondary)">
           <div>IP: <strong style="color:var(--text-primary)">${esc(peer.ip)}</strong></div>
           <div>Created: ${fmtDate(peer.created_at)}</div>
@@ -2445,18 +2446,32 @@ async function openEditPeerModal(id) {
 
 async function handleEditPeer(id) {
   const btn = document.getElementById('edit-peer-btn');
+  const name = document.getElementById('edit-name').value.trim();
+  if (!name) {
+    toast('Name is required', 'error');
+    return;
+  }
+  const trafficRaw = document.getElementById('edit-traffic').value.trim();
+  if (trafficRaw && (!/^\d+$/.test(trafficRaw) || Number(trafficRaw) < 0)) {
+    toast('Traffic limit must be a non-negative integer', 'error');
+    return;
+  }
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Saving...';
 
   try {
     const body = {
-      name: document.getElementById('edit-name').value.trim(),
+      name,
       type: document.getElementById('edit-type').value,
       mode: document.getElementById('edit-mode').value,
       status: document.getElementById('edit-status').value,
       group_name: document.getElementById('edit-group').value.trim() || null,
       expiry_date: document.getElementById('edit-expiry').value || null,
-      traffic_limit_mb: document.getElementById('edit-traffic').value ? parseInt(document.getElementById('edit-traffic').value) : null,
+      traffic_limit_mb: trafficRaw ? parseInt(trafficRaw, 10) : null,
+      config_file: document.getElementById('edit-config-file').value.trim() || null,
+      public_key: document.getElementById('edit-public-key').value.trim() || null,
+      private_key: document.getElementById('edit-private-key').value.trim() || null,
+      preshared_key: document.getElementById('edit-preshared-key').value.trim() || null,
     };
     await api('PUT', `/api/peers/${id}`, body);
     toast('Peer updated');
@@ -2824,7 +2839,7 @@ async function handleLogin(e) {
     });
 
     state.user = data.user || { username: user };
-    navigate('dashboard', data.token);
+    navigate('dashboard');
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.add('show');
@@ -2835,43 +2850,22 @@ async function handleLogin(e) {
 
 async function handleLogout() {
   try { await api('POST', '/api/auth/logout'); } catch (_) {}
-  state.token = null;
   state.user = null;
-  localStorage.removeItem('admin_token');
   stopAutoRefresh();
   navigate('login');
 }
 
 // ====== Init ======
 async function init() {
-  const savedToken = localStorage.getItem('admin_token');
   try {
-    const headers = {};
-    if (savedToken && typeof savedToken === 'string') headers['Authorization'] = 'Bearer ' + savedToken;
-    const meResp = await fetch('/api/auth/me', { method: 'GET', headers, credentials: 'include' });
+    const meResp = await fetch('/api/auth/me', { method: 'GET', credentials: 'include' });
     if (meResp.ok) {
-      state.token = savedToken || null;
       state.user = await meResp.json().catch(() => null);
       const page = window.location.hash.slice(1) || 'dashboard';
       navigate(page);
       return;
     }
   } catch (_) {}
-
-  if (savedToken && typeof savedToken === 'string' && savedToken.length > 20) {
-    state.token = savedToken;
-    try {
-      state.user = await api('GET', '/api/auth/me');
-      const page = window.location.hash.slice(1) || 'dashboard';
-      navigate(page);
-      return;
-    } catch (_) {
-      state.token = null;
-      localStorage.removeItem('admin_token');
-    }
-  } else {
-    localStorage.removeItem('admin_token');
-  }
   navigate('login');
 }
 

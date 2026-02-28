@@ -25,9 +25,9 @@ PASS=0
 FAIL=0
 SKIP=0
 
-pass() { ((PASS++)); echo -e "\033[0;32m  ✓ $*\033[0m"; }
-fail() { ((FAIL++)); echo -e "\033[0;31m  ✗ $*\033[0m"; }
-skip() { ((SKIP++)); echo -e "\033[1;33m  ⊘ $* (skipped)\033[0m"; }
+pass() { PASS=$((PASS + 1)); echo -e "\033[0;32m  ✓ $*\033[0m"; }
+fail() { FAIL=$((FAIL + 1)); echo -e "\033[0;31m  ✗ $*\033[0m"; }
+skip() { SKIP=$((SKIP + 1)); echo -e "\033[1;33m  ⊘ $* (skipped)\033[0m"; }
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -145,6 +145,7 @@ check_pattern "SSH exec helper"            "def ssh_exec"
 check_pattern "SSH upload helper"          "def ssh_upload"
 check_pattern "WebSocket monitor"          "_monitor_loop"
 check_pattern "Auth decorator"             "def auth_required"
+check_pattern "Local bypass decorator"     "def auth_required_or_local"
 check_pattern "Monitoring peer_ip field"   "peer_ip"
 check_pattern "AllowedIPs IP extraction"   "_extract_peer_ip"
 check_pattern "Peer online threshold env"   "ADMIN_PEER_ONLINE_HANDSHAKE_SEC"
@@ -359,12 +360,21 @@ check_pattern "H1-H4 params"              "H1.*H2.*H3.*H4"
 echo ""
 echo "── 7. Security ──"
 
-check_pattern "Rate limit constant"        "LOGIN_MAX_ATTEMPTS\s*=\s*5"
-check_pattern "Rate limit window 60s"      "LOGIN_WINDOW_SEC\s*=\s*60"
+check_pattern "Rate limit constant"        "LOGIN_MAX_ATTEMPTS\s*=\s*20"
+check_pattern "Rate limit window 120s"     "LOGIN_WINDOW_SEC\s*=\s*120"
 check_pattern "bcrypt rounds=12"           "rounds=12"
 check_pattern "JWT TTL configurable"       "JWT_TTL_HOURS"
 check_pattern "CORS configuration"         "cors_allowed_origins"
 check_pattern "Password min length"        "len.*new_pw.*<\s*6"
+check_pattern "Cookie session name"        "SESSION_COOKIE_NAME"
+check_pattern "Prod secret required"       "ADMIN_SECRET_KEY is required in production mode"
+check_pattern "Monitoring-only localhost bypass" "/api/monitoring/data.*api/monitoring/peers"
+
+if grep -q "request.cookies.get(\"admin_token\")" "$ADMIN_SCRIPT" 2>/dev/null; then
+    fail "Legacy admin_token cookie fallback still present"
+else
+    pass "Legacy admin_token cookie fallback removed"
+fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 
