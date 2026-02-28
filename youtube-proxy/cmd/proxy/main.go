@@ -31,13 +31,14 @@ type Config struct {
 	} `yaml:"dns"`
 
 	Proxy struct {
-		Listen       string   `yaml:"listen"`
-		CACert       string   `yaml:"ca_cert"`
-		CAKey        string   `yaml:"ca_key"`
-		ServerCert   string   `yaml:"server_cert"`
-		ServerKey    string   `yaml:"server_key"`
-		UpstreamHost string   `yaml:"upstream_host"`
-		ServerIPs    []string `yaml:"server_ips"`
+		Listen            string   `yaml:"listen"`
+		CACert            string   `yaml:"ca_cert"`
+		CAKey             string   `yaml:"ca_key"`
+		ServerCert        string   `yaml:"server_cert"`
+		ServerKey         string   `yaml:"server_key"`
+		UpstreamHost      string   `yaml:"upstream_host"`
+		UpstreamAllowlist []string `yaml:"upstream_allowlist"`
+		ServerIPs         []string `yaml:"server_ips"`
 	} `yaml:"proxy"`
 
 	Filter struct {
@@ -111,10 +112,11 @@ func main() {
 
 	// 4. Start HTTPS proxy
 	_, err = proxy.New(proxy.Config{
-		Listen:       cfg.Proxy.Listen,
-		UpstreamHost: cfg.Proxy.UpstreamHost,
-		TLSConfig:    certMgr.TLSConfig,
-		Filter:       f,
+		Listen:            cfg.Proxy.Listen,
+		UpstreamHost:      cfg.Proxy.UpstreamHost,
+		UpstreamAllowlist: cfg.Proxy.UpstreamAllowlist,
+		TLSConfig:         certMgr.TLSConfig,
+		Filter:            f,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Proxy server error: %v\n", err)

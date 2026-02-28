@@ -100,6 +100,7 @@ echo "      Binary size: $(du -sh $BINARY_NAME | cut -f1)"
 # ── Step 2: Upload files ──────────────────────────────────────────────────────
 echo "[2/5] Uploading files to VPS2..."
 $SSH "mkdir -p $REMOTE_DIR/certs $REMOTE_DIR/blocklists"
+$SSH "id -u youtube-proxy >/dev/null 2>&1 || useradd --system --home-dir $REMOTE_DIR --shell /usr/sbin/nologin --no-create-home youtube-proxy"
 
 # Останавливаем сервис перед заменой бинарника (иначе "Text file busy")
 $SSH "systemctl stop youtube-proxy 2>/dev/null || true"
@@ -110,6 +111,7 @@ $SCP "$PROXY_DIR/config.yaml"        "${VPS2_USER}@$VPS2_IP:$REMOTE_DIR/"
 $SCP "$PROXY_DIR/blocklists/"*.txt   "${VPS2_USER}@$VPS2_IP:$REMOTE_DIR/blocklists/"
 
 $SSH "chmod +x $REMOTE_DIR/$BINARY_NAME"
+$SSH "chown -R youtube-proxy:youtube-proxy $REMOTE_DIR"
 
 # Remove old server cert so it is regenerated with updated SANs from config.yaml.
 # CA cert is intentionally preserved — it is already installed on client devices.
@@ -127,6 +129,9 @@ Wants=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/youtube-proxy
+User=youtube-proxy
+Group=youtube-proxy
+PermissionsStartOnly=true
 ExecStartPre=+/bin/sh -c '/sbin/iptables -D INPUT -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || true'
 ExecStartPre=+/bin/sh -c '/sbin/iptables -I INPUT 1 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable'
 ExecStart=/opt/youtube-proxy/youtube-proxy --config /opt/youtube-proxy/config.yaml
@@ -137,7 +142,23 @@ StandardOutput=journal
 StandardError=journal
 # Allow binding to ports 53 and 443
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/youtube-proxy
 
 [Install]
 WantedBy=multi-user.target

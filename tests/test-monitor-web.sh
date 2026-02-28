@@ -76,6 +76,23 @@ else
     fail "scripts/monitor/monitor-web.sh: ping_host не использует timeout"
 fi
 
+# SSH host key policy: безопасная авто-доверка только для новых хостов
+if grep -q 'StrictHostKeyChecking=accept-new' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: использует StrictHostKeyChecking=accept-new"
+else
+    fail "scripts/monitor/monitor-web.sh: должен использовать StrictHostKeyChecking=accept-new"
+fi
+if grep -q 'StrictHostKeyChecking=no' scripts/monitor/monitor-web.sh; then
+    fail "scripts/monitor/monitor-web.sh: найден небезопасный StrictHostKeyChecking=no"
+else
+    ok "scripts/monitor/monitor-web.sh: нет StrictHostKeyChecking=no"
+fi
+if grep -q 'UserKnownHostsFile=/dev/null' scripts/monitor/monitor-web.sh; then
+    fail "scripts/monitor/monitor-web.sh: найден небезопасный UserKnownHostsFile=/dev/null"
+else
+    ok "scripts/monitor/monitor-web.sh: нет UserKnownHostsFile=/dev/null"
+fi
+
 # check_internal_ips использует ping_host
 if grep -A15 '^check_internal_ips()' scripts/monitor/monitor-web.sh | grep -q 'ping_host'; then
     ok "scripts/monitor/monitor-web.sh: check_internal_ips использует ping_host()"
@@ -219,16 +236,16 @@ for var in VPS1_IP VPS2_IP VPS1_INTERNAL VPS2_INTERNAL INTERVAL HTTP_PORT SSH_TI
 done
 
 # ---------------------------------------------------------------------------
-# 7b. manage.sh monitor --web: копирование .env из корня в scripts/monitor
+# 7b. manage.sh monitor --web: корректная делегация в monitor-web.sh
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 7b. manage.sh: при monitor --web копируется .env в scripts/monitor ---"
+echo "--- 7b. manage.sh: monitor --web делегируется в monitor-web.sh ---"
 
 if [[ -f "manage.sh" ]]; then
-    if grep -q 'scripts/monitor/.env' manage.sh && grep -qE 'cp.*\.env.*scripts/monitor' manage.sh; then
-        ok "manage.sh: при monitor --web копирует .env в scripts/monitor"
+    if grep -q 'scripts/monitor/monitor-web.sh' manage.sh; then
+        ok "manage.sh: monitor --web делегируется в scripts/monitor/monitor-web.sh"
     else
-        fail "manage.sh: при monitor --web должен копировать .env в scripts/monitor"
+        fail "manage.sh: monitor --web должен делегироваться в scripts/monitor/monitor-web.sh"
     fi
 else
     fail "manage.sh отсутствует"
@@ -240,7 +257,8 @@ fi
 echo ""
 echo "--- 8. scripts/monitor/monitor-web.sh: ключевые функции ---"
 
-for func in clean_value read_kv load_defaults_from_files expand_tilde ssh_exec collect_vps1 collect_vps2 write_json start_http_server check_internal_ips ping_host; do
+# clean_value/read_kv/load_defaults_from_files/expand_tilde приходят из lib/common.sh
+for func in ssh_exec collect_vps1 collect_vps2 write_json start_http_server check_internal_ips ping_host; do
     if grep -qE "^${func}\(\)" scripts/monitor/monitor-web.sh; then
         ok "scripts/monitor/monitor-web.sh: функция ${func}()"
     else
@@ -536,16 +554,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 9f. Интервал обновления: backend <= 3s, frontend <= 3s
+# 9f. Интервал обновления и adaptive backoff
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- 9f. Интервал обновления ---"
 
 backend_interval=$(grep -m1 '^INTERVAL=' scripts/monitor/monitor-web.sh | head -1 | sed 's/INTERVAL=//')
-if [[ -n "$backend_interval" && "$backend_interval" -le 3 ]]; then
-    ok "scripts/monitor/monitor-web.sh: INTERVAL=${backend_interval}s (<= 3s)"
+if [[ -n "$backend_interval" && "$backend_interval" -ge 5 && "$backend_interval" -le 10 ]]; then
+    ok "scripts/monitor/monitor-web.sh: INTERVAL=${backend_interval}s (в безопасном диапазоне 5-10s)"
 else
-    fail "scripts/monitor/monitor-web.sh: INTERVAL=${backend_interval:-?}s (должен быть <= 3s для быстрого обновления)"
+    fail "scripts/monitor/monitor-web.sh: INTERVAL=${backend_interval:-?}s (должен быть в диапазоне 5-10s)"
 fi
 
 frontend_poll=$(grep -m1 'POLL_MS' scripts/monitor/dashboard.html | head -1 | grep -oE '[0-9]+')
@@ -553,6 +571,20 @@ if [[ -n "$frontend_poll" && "$frontend_poll" -le 3000 ]]; then
     ok "scripts/monitor/dashboard.html: POLL_MS=${frontend_poll}ms (<= 3000ms)"
 else
     fail "scripts/monitor/dashboard.html: POLL_MS=${frontend_poll:-?}ms (должен быть <= 3000ms)"
+fi
+
+if grep -q 'VPS1_FAIL_STREAK\|VPS2_FAIL_STREAK' scripts/monitor/monitor-web.sh && \
+   grep -q 'compute_effective_interval' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: adaptive backoff включен при повторных SSH-сбоях"
+else
+    fail "scripts/monitor/monitor-web.sh: adaptive backoff не найден"
+fi
+
+if [[ -f "scripts/monitor/monitor-realtime.sh" ]] && \
+   grep -q 'compute_effective_interval' scripts/monitor/monitor-realtime.sh; then
+    ok "scripts/monitor/monitor-realtime.sh: adaptive backoff включен"
+else
+    fail "scripts/monitor/monitor-realtime.sh: adaptive backoff не найден"
 fi
 
 # ---------------------------------------------------------------------------
@@ -622,10 +654,10 @@ else
     fail "scripts/deploy/deploy-proxy.sh: TCP 443 с awg0 не разрешён — YouTube прокси может не работать"
 fi
 
-if grep -q 'scripts/windows/install-ca.ps1' scripts/deploy/deploy-proxy.sh 2>/dev/null; then
-    ok "scripts/deploy/deploy-proxy.sh: упоминает scripts/windows/install-ca.ps1 в инструкции"
+if grep -q '10.8.0.2:8080/ca.crt\|install-ca.ps1' scripts/deploy/deploy-proxy.sh 2>/dev/null; then
+    ok "scripts/deploy/deploy-proxy.sh: содержит инструкцию установки CA"
 else
-    fail "scripts/deploy/deploy-proxy.sh: не упоминает scripts/windows/install-ca.ps1"
+    fail "scripts/deploy/deploy-proxy.sh: должна быть инструкция установки CA (URL или install-ca.ps1)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -647,7 +679,7 @@ else
 fi
 
 for check in 'youtube-proxy' 'AdGuardHome' 'MASQUERADE' 'awg0' 'port53' '--fix'; do
-    if grep -q "$check" scripts/tools/diagnose.sh 2>/dev/null; then
+    if grep -q -- "$check" scripts/tools/diagnose.sh 2>/dev/null; then
         ok "scripts/tools/diagnose.sh: проверяет '$check'"
     else
         fail "scripts/tools/diagnose.sh: не проверяет '$check'"

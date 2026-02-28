@@ -20,6 +20,7 @@ import (
 type Server struct {
 	listenAddr   string
 	upstreamHost string
+	upstreamAL   map[string]struct{}
 	tlsConfig    *tls.Config
 	filter       *filter.Filter
 	upstream     *http.Client
@@ -27,10 +28,11 @@ type Server struct {
 
 // Config holds proxy server configuration.
 type Config struct {
-	Listen       string
-	UpstreamHost string
-	TLSConfig    *tls.Config
-	Filter       *filter.Filter
+	Listen            string
+	UpstreamHost      string
+	UpstreamAllowlist []string
+	TLSConfig         *tls.Config
+	Filter            *filter.Filter
 }
 
 // New creates and starts the HTTPS proxy server.
@@ -60,9 +62,19 @@ func New(cfg Config) (*Server, error) {
 	if err := http2.ConfigureTransport(transport); err != nil {
 		fmt.Printf("[proxy] Warning: failed to enable HTTP/2 for upstream: %v\n", err)
 	}
+	upstreamAL := make(map[string]struct{})
+	if normalized := normalizeHost(cfg.UpstreamHost); normalized != "" {
+		upstreamAL[normalized] = struct{}{}
+	}
+	for _, host := range cfg.UpstreamAllowlist {
+		if normalized := normalizeHost(host); normalized != "" {
+			upstreamAL[normalized] = struct{}{}
+		}
+	}
 	s := &Server{
 		listenAddr:   cfg.Listen,
 		upstreamHost: cfg.UpstreamHost,
+		upstreamAL:   upstreamAL,
 		tlsConfig:    cfg.TLSConfig,
 		filter:       cfg.Filter,
 		upstream: &http.Client{
@@ -111,12 +123,17 @@ func New(cfg Config) (*Server, error) {
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
-	if host == "" {
-		host = strings.Split(s.upstreamHost, ":")[0]
+	targetHost := s.upstreamHost
+	requestedHost := normalizeHost(r.Host)
+	if requestedHost != "" {
+		if _, ok := s.upstreamAL[requestedHost]; ok {
+			targetHost = requestedHost
+		} else {
+			fmt.Printf("[proxy] Blocked upstream host from request Host=%q, fallback to %s\n", r.Host, s.upstreamHost)
+		}
 	}
 
-	upstreamURL := fmt.Sprintf("https://%s%s", host, r.RequestURI)
+	upstreamURL := fmt.Sprintf("https://%s%s", targetHost, r.RequestURI)
 
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, r.Body)
 	if err != nil {
@@ -126,7 +143,12 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	// Copy headers, fix Host
 	copyHeaders(upReq.Header, r.Header)
-	upReq.Header.Set("Host", host)
+	upstreamHostHeader := normalizeHost(targetHost)
+	if upstreamHostHeader == "" {
+		upstreamHostHeader = normalizeHost(s.upstreamHost)
+	}
+	upReq.Host = upstreamHostHeader
+	upReq.Header.Set("Host", upstreamHostHeader)
 
 	// Don't ask for compressed response if we need to filter — simplifies decompression
 	if s.filter.ShouldFilter(r.URL.Path) {
@@ -203,4 +225,19 @@ func copyHeaders(dst, src http.Header) {
 			dst.Add(k, v)
 		}
 	}
+}
+
+func normalizeHost(host string) string {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" {
+		return ""
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	} else if strings.Count(host, ":") == 1 {
+		if idx := strings.LastIndex(host, ":"); idx > 0 {
+			host = host[:idx]
+		}
+	}
+	return strings.TrimSuffix(host, ".")
 }

@@ -28,7 +28,7 @@ VPS1_INTERNAL="10.9.0.1"
 VPS2_INTERNAL=""
 
 VPS2_TUN_IP="10.8.0.2"
-INTERVAL=2
+INTERVAL=5
 HTTP_PORT=8080
 SSH_TIMEOUT=8
 JSON_FILE="./vpn-output/data.json"
@@ -52,6 +52,10 @@ VPS1_PREV_VPN_TX=0
 VPS2_PREV_VPN_RX=0
 VPS2_PREV_VPN_TX=0
 PREV_TS=0
+VPS1_FAIL_STREAK=0
+VPS2_FAIL_STREAK=0
+BACKOFF_MAX_INTERVAL=30
+LAST_SLEEP_INTERVAL=0
 
 LOG_MAX_BYTES=2097152  # 2 MB
 
@@ -89,7 +93,7 @@ ssh_exec() {
     local server="$1" ip="$2" user="$3" key="$4" pass="$5" cmd="$6"
     # AddressFamily=inet: skip IPv6 lookup (avoids DNS hang when VPN is active)
     # ServerAliveInterval/CountMax: detect dead connections quickly
-    local ssh_opts=(-F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    local ssh_opts=(-F /dev/null -o StrictHostKeyChecking=accept-new \
                     -o BatchMode=no -o ConnectTimeout="$SSH_TIMEOUT" \
                     -o AddressFamily=inet \
                     -o ServerAliveInterval=3 -o ServerAliveCountMax=2)
@@ -919,6 +923,19 @@ check_internal_ips() {
     CURRENT_VPS2_IP="$VPS2_IP"
 }
 
+compute_effective_interval() {
+    local max_streak="$VPS1_FAIL_STREAK"
+    [[ "$VPS2_FAIL_STREAK" -gt "$max_streak" ]] && max_streak="$VPS2_FAIL_STREAK"
+    local step=0 effective="$INTERVAL"
+    if [[ "$max_streak" -gt 1 ]]; then
+        step=$(( max_streak - 1 ))
+        [[ "$step" -gt 3 ]] && step=3
+        effective=$(( INTERVAL * (1 << step) ))
+    fi
+    [[ "$effective" -gt "$BACKOFF_MAX_INTERVAL" ]] && effective="$BACKOFF_MAX_INTERVAL"
+    printf "%s" "$effective"
+}
+
 # ---------------------------------------------------------------------------
 # Kill previous instance if running
 # ---------------------------------------------------------------------------
@@ -1018,6 +1035,13 @@ while true; do
     VPS2_DATA="$(cat "$local_tmp2")"; rm -f "$local_tmp2"
 
     write_json "$VPS1_DATA" "$VPS2_DATA"
-    printf "\r  [%s] JSON updated  (next in %ss)" "$(date '+%H:%M:%S')" "$INTERVAL"
-    sleep "$INTERVAL"
+    if [[ -n "$VPS1_DATA" ]]; then VPS1_FAIL_STREAK=0; else VPS1_FAIL_STREAK=$((VPS1_FAIL_STREAK + 1)); fi
+    if [[ -n "$VPS2_DATA" ]]; then VPS2_FAIL_STREAK=0; else VPS2_FAIL_STREAK=$((VPS2_FAIL_STREAK + 1)); fi
+    EFFECTIVE_INTERVAL="$(compute_effective_interval)"
+    if [[ "$EFFECTIVE_INTERVAL" -ne "$LAST_SLEEP_INTERVAL" ]]; then
+        log_line "INFO" "poll interval adapted: base=${INTERVAL}s effective=${EFFECTIVE_INTERVAL}s fail_streak_vps1=${VPS1_FAIL_STREAK} fail_streak_vps2=${VPS2_FAIL_STREAK}"
+        LAST_SLEEP_INTERVAL="$EFFECTIVE_INTERVAL"
+    fi
+    printf "\r  [%s] JSON updated  (next in %ss)" "$(date '+%H:%M:%S')" "$EFFECTIVE_INTERVAL"
+    sleep "$EFFECTIVE_INTERVAL"
 done

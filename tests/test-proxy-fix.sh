@@ -82,6 +82,45 @@ else
   fail "proxy.go: TLSNextProto не найден"
 fi
 
+# 11. config.yaml — upstream allowlist включён
+if grep -q 'upstream_allowlist:' youtube-proxy/config.yaml; then
+  ok "config.yaml: upstream_allowlist присутствует"
+else
+  fail "config.yaml: upstream_allowlist отсутствует"
+fi
+
+if grep -q 'youtubei.googleapis.com' youtube-proxy/config.yaml; then
+  ok "config.yaml: allowlist содержит youtubei.googleapis.com"
+else
+  fail "config.yaml: allowlist не содержит youtubei.googleapis.com"
+fi
+
+# 12. proxy.go — upstream host ограничен allowlist
+if grep -q 'Blocked upstream host from request Host' youtube-proxy/internal/proxy/proxy.go && \
+   grep -q 'normalizeHost' youtube-proxy/internal/proxy/proxy.go; then
+  ok "proxy.go: Host header ограничен allowlist (нет произвольного upstream)"
+else
+  fail "proxy.go: нет enforce allowlist для Host header"
+fi
+
+# 13. deploy-proxy.sh — service запускается от отдельного пользователя
+if grep -q 'User=youtube-proxy' scripts/deploy/deploy-proxy.sh && \
+   grep -q 'useradd --system' scripts/deploy/deploy-proxy.sh; then
+  ok "deploy-proxy.sh: youtube-proxy запускается от dedicated user"
+else
+  fail "deploy-proxy.sh: dedicated user для youtube-proxy не настроен"
+fi
+
+# 14. deploy-proxy.sh — systemd hardening directives присутствуют
+if grep -q 'NoNewPrivileges=true' scripts/deploy/deploy-proxy.sh && \
+   grep -q 'ProtectSystem=strict' scripts/deploy/deploy-proxy.sh && \
+   grep -q 'ProtectHome=true' scripts/deploy/deploy-proxy.sh && \
+   grep -q 'PrivateTmp=true' scripts/deploy/deploy-proxy.sh; then
+  ok "deploy-proxy.sh: базовые hardening directives systemd присутствуют"
+else
+  fail "deploy-proxy.sh: не хватает systemd hardening directives"
+fi
+
 echo ""
 echo "Результат: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]] && echo "OK — все проверки прошли" && exit 0

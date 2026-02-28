@@ -204,9 +204,10 @@ cat vpn-output/peer_myphone_10_9_0_3.conf | qr
 - Открыть AmneziaVPN → `+` → **Импортировать конфиг** → выбрать `.conf` файл
 - Нажать **Подключиться**
 
-### Шаг 4. Установить Root CA (опционально — только для MITM-фильтрации JSON в браузере)
+### Шаг 4 (опционально). Установить Root CA только для MITM в браузере
 
-> **Примечание:** Этот шаг **необязателен**. YouTube-приложение на iOS/Android работает нормально без CA-сертификата — DNS-блокировка рекламных доменов работает автоматически. CA-сертификат нужен только если вы хотите включить MITM-фильтрацию рекламных блоков из JSON-ответов YouTube в браузере (Chrome, Firefox, Safari на macOS/Windows).
+> **По умолчанию этот шаг пропускается.** Для обычной работы (VPN + DNS-блокировка) Root CA **не нужен**.
+> Устанавливайте CA только если вам сознательно нужен MITM-перехват JSON-ответов YouTube в браузере (Chrome, Firefox, Safari на macOS/Windows).
 
 Сначала подключиться к VPN, затем установить сертификат:
 
@@ -239,26 +240,28 @@ ssh -i .ssh/ssh-key-1772056840349 slava@130.193.41.13 "sudo awg show awg1"
 |---|---|---|
 | DNS-сервер | `10.8.0.2:53` | Блокировка рекламных/трекинг/malware доменов, кэш ответов по TTL; слушает только на VPN-интерфейсе |
 | HTTPS-прокси | `10.8.0.2:443` | Опциональный MITM-перехват `youtubei.googleapis.com` для фильтрации рекламы из JSON; слушает только на VPN-интерфейсе |
-| CA-сервер | `http://10.8.0.2:8080` | Скачать Root CA сертификат (только через VPN-туннель, только для MITM-режима) |
+| CA-сервер | `http://10.8.0.2:8080` | Скачать Root CA сертификат (только через VPN-туннель; нужен только для опционального MITM-режима в браузере) |
 
 **Основной метод блокировки — DNS.** DNS-сервер блокирует рекламные домены на уровне резолвинга — это работает и в браузере, и в YouTube-приложении на iOS/Android без каких-либо дополнительных настроек на устройстве.
 
-**MITM-перехват отключён по умолчанию.** YouTube-приложение на iOS/Android использует certificate pinning и не принимает подменные сертификаты, поэтому MITM-фильтрация JSON включается только опционально — для браузеров, где CA-сертификат установлен вручную.
+**MITM-перехват отключён по умолчанию.** YouTube-приложение на iOS/Android использует certificate pinning и не принимает подменные сертификаты, поэтому MITM-фильтрация JSON доступна только как опция для браузеров, где CA-сертификат установлен вручную.
 
-> **YouTube-приложение на iOS/Android работает без установки CA-сертификата** — DNS-блокировка рекламных доменов достаточна для базовой фильтрации.
+**Ограничение upstream host:** HTTPS-прокси принимает только allowlist upstream-доменов из `youtube-proxy/config.yaml` и не использует произвольный входящий `Host` как целевой upstream.
+
+> **YouTube-приложение на iOS/Android работает без установки CA-сертификата.** Для базовой фильтрации достаточно DNS-блокировки.
 
 **Безопасность CA-сервера:** порт 8080 слушает только на VPN-интерфейсе `10.8.0.2` и заблокирован для публичного интернета через iptables. Скачать сертификат можно только после подключения к VPN.
 
-### Установка Root CA на устройства (опционально, только для MITM-фильтрации в браузере)
+### Установка Root CA на устройства (только при включённом MITM в браузере)
 
-> **Примечание:** CA-сертификат нужен только если вы хотите включить MITM-фильтрацию JSON в браузере (Chrome, Firefox, Safari на macOS/Windows). YouTube-приложение на iOS/Android работает нормально без CA-сертификата — DNS-блокировка рекламных доменов работает автоматически.
+> **Этот раздел пропускайте, если MITM вам не нужен.** Для стандартного режима (VPN + DNS) Root CA не требуется.
 
 Подключись к VPN, затем установи сертификат:
 
 - **Windows (автоматически):** `powershell -ExecutionPolicy Bypass -File install-ca.ps1`
 - **Windows (вручную):** открыть `http://10.8.0.2:8080` → скачать `ca.crt` → двойной клик → Установить → Локальный компьютер → Доверенные корневые центры сертификации → перезапустить браузер
-- **iOS:** Safari → `http://10.8.0.2:8080` → скачать → `Настройки → Загружен профиль → Установить` → `Основные → Об устройстве → Доверие сертификатам → включить`
-- **Android:** скачать `ca.crt` с `http://10.8.0.2:8080` → `Настройки → Безопасность → Установить сертификат → Сертификат ЦС`
+- **iOS (только для браузерного MITM):** Safari → `http://10.8.0.2:8080` → скачать → `Настройки → Загружен профиль → Установить` → `Основные → Об устройстве → Доверие сертификатам → включить`
+- **Android (только для браузерного MITM):** скачать `ca.crt` с `http://10.8.0.2:8080` → `Настройки → Безопасность → Установить сертификат → Сертификат ЦС`
 
 ### Управление сервисом
 
@@ -278,6 +281,8 @@ systemctl restart youtube-proxy
 nano /opt/youtube-proxy/config.yaml
 systemctl restart youtube-proxy
 ```
+
+`youtube-proxy.service` запускается от отдельного системного пользователя `youtube-proxy` и использует systemd hardening (NoNewPrivileges, ProtectSystem, ProtectHome, PrivateTmp и др.) при сохранении capability для bind на порты 53/443.
 
 ## SSH доступ
 
@@ -390,6 +395,7 @@ bash manage.sh <команда> [опции]
 | `peers info` | Лимиты и статистика подсети |
 | `add-peer` | Добавить пир (legacy, см. `peers add`) |
 | `check` | Проверить связность VPN-цепочки |
+| `audit` | Read-only аудит безопасности и эффективности (статический + опционально SSH-проверки) |
 | `help` | Справка |
 
 Дополнительные скрипты (запускаются напрямую):
@@ -399,6 +405,7 @@ bash manage.sh <команда> [опции]
 | `bash scripts/tools/optimize-vpn.sh` | Применить оптимизации производительности на серверах |
 | `bash scripts/tools/benchmark.sh` | Замер ping, скорости, MTU, handshake, задержки туннеля |
 | `bash scripts/tools/load-test.sh` | Нагрузочное тестирование: соединения, bandwidth, CPU/RAM |
+| `bash scripts/tools/audit-security-efficiency.sh` | Быстрый аудит кода/настроек по security + efficiency, отчёт по severity |
 
 ```bash
 # Полный деплой (параметры из .env, достаточно указать только флаги)
@@ -413,6 +420,11 @@ bash manage.sh deploy \
 # Мониторинг (параметры из .env)
 bash manage.sh monitor
 bash manage.sh monitor --web
+
+# Аудит безопасности/эффективности (read-only)
+bash manage.sh audit
+bash manage.sh audit --strict
+bash manage.sh audit --with-servers --output ./vpn-output/audit-report.txt
 
 # Добавить пир (новый способ)
 bash manage.sh peers add --name tablet --type tablet --qr
@@ -467,6 +479,25 @@ bash manage.sh deploy --vps1 --vps1-ip ... --vps1-key ... --vps2-ip ...
 # Сначала deploy-vps1.sh, затем:
 bash manage.sh deploy --vps2 --vps2-ip ... --vps2-key ... --keys-file ./vpn-output/keys.env
 ```
+
+## Когда перевыпускать конфиги/ключи/сертификаты
+
+| Что запускаем | Что перевыпускается автоматически | Что нужно сделать вручную после |
+|---|---|---|
+| `bash manage.sh deploy` (полный деплой) | Полная пересоздача WG-ключей (туннель + сервер + базовый клиент), новый `vpn-output/keys.env`, новый `vpn-output/client.conf` | Переимпортировать актуальные `.conf` на устройства (старые конфиги могут перестать работать) |
+| `bash manage.sh deploy --vps1` / `bash scripts/deploy/deploy-vps1.sh` | Генерируются новые ключи для связки VPS1↔VPS2 и клиента, пересобираются `keys.env` и `client.conf` | Обязательно выполнить деплой VPS2 с этим же `keys.env`; затем переимпортировать клиентские конфиги |
+| `bash manage.sh deploy --vps2` / `bash scripts/deploy/deploy-vps2.sh --keys-file ...` | Новые ключи не генерируются (используется переданный `keys.env`) | Обычно ничего перевыпускать на клиентах не нужно, если `keys.env` не меняли |
+| `bash manage.sh deploy --proxy` / `bash scripts/deploy/deploy-proxy.sh` | Перегенерируется только TLS server cert для `youtube-proxy` (CA сохраняется) | VPN-конфиги и WG-ключи не трогаются; Root CA на устройствах переустанавливать не нужно |
+| `bash manage.sh peers add ...` / `peers batch` | Создаётся новый peer-ключ и новый `peer_*.conf` только для добавляемых устройств | Импортировать только новые `peer_*.conf`; существующие устройства не трогать |
+| `bash scripts/tools/generate-all-configs.sh` | Пересборка `client.conf`, `phone.conf`, split-конфигов; обновление `keys.env`; ключ телефона может быть пересоздан, если утерян/невалиден | Переимпортировать пересобранные конфиги; если был пересоздан ключ телефона, старый телефонный конфиг нужно заменить |
+| `powershell -File scripts/windows/repair-local-configs.ps1` | Пересобирает локальные `client.conf`/`phone.conf` под текущие серверные параметры без ротации приватных ключей | Если файл изменился (Endpoint/PublicKey/Junk), переимпортировать конфиг на устройстве |
+| `bash scripts/tools/repair-vps1.sh` | Восстанавливает `awg1.conf` на VPS1 без пересоздания ключей | Перевыпуск конфигов обычно не нужен |
+
+Короткое правило:
+- Если запускался скрипт, который генерирует новые WG-ключи (`deploy`, `deploy --vps1`, `deploy-vps1.sh`) — переимпорт клиентских `.conf` обязателен.
+- Если менялся только прокси (`deploy --proxy`) — VPN-конфиги и ключи не перевыпускаются.
+- В стандартном режиме (без MITM) Root CA на клиентские устройства устанавливать не нужно.
+- Root CA на устройствах переустанавливайте только при явной ротации CA (в обычном `deploy-proxy.sh` CA не ротируется).
 
 ## Управление пирами (устройствами)
 
@@ -577,11 +608,11 @@ bash scripts/monitor/monitor-web.sh
 > Индикатор `Active VPN` в веб-дашборде считает только активные peer'ы `awg1` с
 > `latest handshake <= 55s` (а не общее число всех peer'ов в конфиге).
 > Для запуска мониторинга нужен Python рантайм: подходит `python3`, `python` или `py -3`.
-> Данные обновляются каждые 2 секунды через SSH-подключение к серверам.
+> Базовый интервал обновления — 5 секунд (безопаснее по нагрузке). При повторных SSH timeout/error мониторинг автоматически увеличивает паузу опроса (adaptive backoff) и возвращается к базовому интервалу после восстановления.
 
 ## Админ-панель (REST API)
 
-Flask-бэкенд для управления VPN через веб-интерфейс. Хранит данные в SQLite, синхронизирует пиры с `vpn-output/peers.json`. **Все конфиги** хранятся в одной папке `vpn-output/` — оттуда они подгружаются для управления; вкладка **Peers** показывает все выданные пиры (из БД и из папки конфигов) с указанием статуса (active/disabled/from_config) и подключения (online/offline). После логина сессия запоминается через HTTP-only cookie (`admin_sid`), поэтому перезагрузка страницы не требует повторного ввода пароля, пока сессия не истечёт или не выполнен logout.
+Flask-бэкенд для управления VPN через веб-интерфейс. Хранит данные в SQLite, синхронизирует пиры с `vpn-output/peers.json`. **Все конфиги** хранятся в одной папке `vpn-output/` — оттуда они подгружаются для управления; вкладка **Peers** показывает все выданные пиры (из БД и из папки конфигов) с указанием статуса (active/disabled/from_config) и подключения (online/offline). Авторизация в UI работает только через HTTP-only сессию (`admin_sid`, cookie + `credentials: include`) — токен в `localStorage` больше не используется.
 
 **Адрес входа:** после запуска откройте в браузере **http://localhost:8081/** (или http://localhost:8081/admin.html).  
 Порт **8081** выбран специально, чтобы не конфликтовать с веб-дашбордом мониторинга (**monitor --web**), который занимает порт **8080**.
@@ -605,6 +636,9 @@ python scripts/admin/admin-server.py --host 0.0.0.0
 python scripts/admin/admin-server.py --prod --cert cert.pem --key key.pem
 ```
 
+Для запуска в `--prod` обязательно задайте `ADMIN_SECRET_KEY` (в `.env` или env окружении).  
+Если ключ не задан, сервер завершится с ошибкой и не стартует с дефолтным секретом.
+
 При первом запуске создаётся пользователь `admin` / `admin` — **смените пароль сразу**.  
 Если пароль не подходит (например, меняли ранее или восстанавливали БД), сбросьте его:  
 `bash manage.sh admin reset-password` — пароль снова станет `admin`.
@@ -613,22 +647,22 @@ python scripts/admin/admin-server.py --prod --cert cert.pem --key key.pem
 
 | Метод | Эндпоинт | Описание |
 |-------|----------|----------|
-| POST | `/api/auth/login` | Авторизация → JWT токен |
+| POST | `/api/auth/login` | Авторизация и установка cookie-сессии (`admin_sid`) |
 | POST | `/api/auth/logout` | Инвалидация токена |
 | POST | `/api/auth/change-password` | Смена пароля |
 | GET | `/api/auth/me` | Текущий пользователь |
 | GET | `/api/peers` | Список всех пиров: БД + папка vpn-output (фильтры: `?status=`, `?type=`, `?search=`), live-метрики (handshake/traffic) и `connection_threshold_sec` |
 | POST | `/api/peers` | Создать пира (генерация ключей, IP, регистрация на VPS1) |
 | POST | `/api/peers/batch` | Массовое создание (prefix+count или CSV) |
-| GET/PUT/DELETE | `/api/peers/:id` | CRUD пира |
+| GET/PUT/DELETE | `/api/peers/:id` | CRUD пира; через `PUT` можно редактировать имя, type/mode/status, группу, expiry/traffic, а также `public_key` / `private_key` / `preshared_key` / `config_file` |
 | POST | `/api/peers/:id/disable` | Отключить пира на сервере |
 | POST | `/api/peers/:id/enable` | Включить пира обратно |
 | GET | `/api/peers/:id/config` | Скачать .conf (для пиров из БД) |
 | GET | `/api/peers/by-ip/:ip/config` | Скачать .conf по IP (для пиров только из папки) |
 | GET | `/api/peers/:id/qr` | QR-код (base64 PNG) |
 | GET | `/api/peers/stats` | Статистика подсети |
-| GET | `/api/monitoring/data` | Данные мониторинга (из data.json, требует auth; localhost разрешён без токена) |
-| GET | `/api/monitoring/peers` | Live-пиры WireGuard с `peer_ip`, endpoint, handshake и трафиком (SSH; требует auth, localhost разрешён без токена) |
+| GET | `/api/monitoring/data` | Данные мониторинга (из data.json; localhost может читать без auth) |
+| GET | `/api/monitoring/peers` | Live-пиры WireGuard с `peer_ip`, endpoint, handshake и трафиком (SSH; localhost может читать без auth) |
 | GET/PUT | `/api/settings` | VPN-настройки (DNS, MTU, Jc, Jmin, Jmax, S1, S2) |
 | GET | `/api/audit` | Аудит-лог с пагинацией |
 | GET | `/api/health` | Health check (без авторизации) |
@@ -722,6 +756,13 @@ bash tests/test-manage-peers.sh
 bash tests/test-security-harden.sh
 ```
 
+Проверка скрипта аудита безопасности/эффективности:
+
+```bash
+# Linux / WSL
+bash tests/test-audit-security-efficiency.sh
+```
+
 Проверка настройки GitHub remote (git-push-github):
 
 ```powershell
@@ -754,6 +795,8 @@ API integration тесты (запускает сервер, тестирует 
 # Linux / WSL / Git Bash (требует Python 3 + curl)
 bash tests/test-admin-api.sh
 ```
+
+Поэтапный безопасный план доработок (без риска ломать текущий деплой): `PATCH-PLAN-security-efficiency.md`.
 
 ## Оптимизация производительности
 

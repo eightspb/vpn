@@ -27,7 +27,7 @@ VPS2_KEY=""
 VPS2_PASS=""
 
 VPS2_TUN_IP="10.8.0.2"
-INTERVAL=1
+INTERVAL=5
 SSH_TIMEOUT=8
 LOG_FILE="./vpn-output/monitor.log"
 LOG_LEVEL="INFO"
@@ -39,6 +39,9 @@ VPS1_PREV_TX=0
 VPS2_PREV_RX=0
 VPS2_PREV_TX=0
 PREV_TS=0
+VPS1_FAIL_STREAK=0
+VPS2_FAIL_STREAK=0
+BACKOFF_MAX_INTERVAL=30
 
 usage() {
     cat <<'EOF'
@@ -54,7 +57,7 @@ usage() {
 
 Опции:
   --vps2-tun-ip IP      Туннельный IP VPS2 для ping с VPS1 (default: 10.8.0.2)
-  --interval SEC        Интервал обновления экрана (default: 1)
+  --interval SEC        Интервал обновления экрана (default: 5)
   --ssh-timeout SEC     Таймаут SSH-команды (default: 8)
   --log-file PATH       Файл лога (default: ./vpn-output/monitor.log)
   --help                Показать эту справку
@@ -304,7 +307,7 @@ ssh_exec() {
     local key="$4"
     local pass="$5"
     local cmd="$6"
-    local ssh_opts=(-F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=no -o ConnectTimeout="$SSH_TIMEOUT")
+    local ssh_opts=(-F /dev/null -o StrictHostKeyChecking=accept-new -o BatchMode=no -o ConnectTimeout="$SSH_TIMEOUT")
     local stderr_file rc out err
     stderr_file="$(mktemp)"
 
@@ -509,24 +512,40 @@ print_block_vps2() {
     echo -e "  ping 8.8.8.8: $(fmt_status "${WAN_PING:-fail}")"
 }
 
+compute_effective_interval() {
+    local max_streak="$VPS1_FAIL_STREAK"
+    [[ "$VPS2_FAIL_STREAK" -gt "$max_streak" ]] && max_streak="$VPS2_FAIL_STREAK"
+    local step=0 effective="$INTERVAL"
+    if [[ "$max_streak" -gt 1 ]]; then
+        step=$(( max_streak - 1 ))
+        [[ "$step" -gt 3 ]] && step=3
+        effective=$(( INTERVAL * (1 << step) ))
+    fi
+    [[ "$effective" -gt "$BACKOFF_MAX_INTERVAL" ]] && effective="$BACKOFF_MAX_INTERVAL"
+    printf "%s" "$effective"
+}
+
 printf "\033[?25l"
 tput civis 2>/dev/null || true
 while true; do
+    EFFECTIVE_INTERVAL="$(compute_effective_interval)"
     printf "\033[H"
     echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}║                 LIVE VPN SERVER MONITOR                     ║${NC}"
     echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
-    echo -e "time: $(date '+%Y-%m-%d %H:%M:%S') | refresh: ${INTERVAL}s | Ctrl+C to exit"
+    echo -e "time: $(date '+%Y-%m-%d %H:%M:%S') | refresh: ${EFFECTIVE_INTERVAL}s | Ctrl+C to exit"
     echo -e "log: ${LOG_FILE}"
     echo ""
 
     PREV_TS="$(date +%s)"
     VPS1_DATA="$(collect_vps1)"
     VPS2_DATA="$(collect_vps2)"
+    if [[ -n "$VPS1_DATA" ]]; then VPS1_FAIL_STREAK=0; else VPS1_FAIL_STREAK=$((VPS1_FAIL_STREAK + 1)); fi
+    if [[ -n "$VPS2_DATA" ]]; then VPS2_FAIL_STREAK=0; else VPS2_FAIL_STREAK=$((VPS2_FAIL_STREAK + 1)); fi
 
     print_block_vps1 "$VPS1_DATA"
     echo ""
     print_block_vps2 "$VPS2_DATA"
     echo ""
-    sleep "$INTERVAL"
+    sleep "$EFFECTIVE_INTERVAL"
 done

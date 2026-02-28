@@ -37,6 +37,13 @@ proxy:
   server_key:  "certs/server.key"
   # Реальный upstream для перехватываемых доменов
   upstream_host: "youtubei.googleapis.com:443"
+  # Разрешённые upstream-хосты для защиты от подмены Host header.
+  # Если входящий Host не в списке, прокси отправит запрос на upstream_host.
+  upstream_allowlist:
+    - "youtubei.googleapis.com"
+    - "www.youtube.com"
+    - "m.youtube.com"
+    - "youtube.googleapis.com"
   # IP-адреса сервера для IP SAN в серверном сертификате.
   # Добавьте WAN IP и VPN IP VPS2, чтобы прямые запросы по IP не давали ошибку TLS.
   server_ips:
