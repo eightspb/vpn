@@ -17,12 +17,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
 VPS1_IP=""
-VPS1_USER="root"
+VPS1_USER=""
 VPS1_KEY=""
 VPS1_PASS=""
 
 VPS2_IP=""
-VPS2_USER="root"
+VPS2_USER=""
 VPS2_KEY=""
 VPS2_PASS=""
 
@@ -121,6 +121,9 @@ while [[ $# -gt 0 ]]; do
         *) echo "Неизвестный параметр: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+VPS1_USER="${VPS1_USER:-root}"
+VPS2_USER="${VPS2_USER:-root}"
 
 [[ -z "$VPS1_IP" ]] && { echo "Укажите VPS1_IP в .env или --vps1-ip" >&2; exit 1; }
 [[ -z "$VPS2_IP" ]] && { echo "Укажите VPS2_IP в .env или --vps2-ip" >&2; exit 1; }

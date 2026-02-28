@@ -15,12 +15,12 @@ source "${SCRIPT_DIR}/../../lib/common.sh"
 cd "$SCRIPT_DIR"
 
 VPS1_IP=""
-VPS1_USER="root"
+VPS1_USER=""
 VPS1_KEY=""
 VPS1_PASS=""
 
 VPS2_IP=""
-VPS2_USER="root"
+VPS2_USER=""
 VPS2_KEY=""
 VPS2_PASS=""
 
@@ -745,6 +745,9 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+VPS1_USER="${VPS1_USER:-root}"
+VPS2_USER="${VPS2_USER:-root}"
 
 [[ -z "$VPS1_IP" ]] && { echo "Specify VPS1_IP in .env or --vps1-ip" >&2; exit 1; }
 [[ -z "$VPS2_IP" ]] && { echo "Specify VPS2_IP in .env or --vps2-ip" >&2; exit 1; }

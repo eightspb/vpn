@@ -44,8 +44,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
 # ── Параметры по умолчанию ─────────────────────────────────────────────────
-VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
-VPS2_IP=""; VPS2_USER="root"; VPS2_KEY=""; VPS2_PASS=""
+VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
+VPS2_IP=""; VPS2_USER=""; VPS2_KEY=""; VPS2_PASS=""
 CLIENT_VPN_IP="10.9.0.2"
 ADGUARD_PASS=""
 OUTPUT_DIR="./vpn-output"
@@ -86,6 +86,10 @@ while [[ $# -gt 0 ]]; do
         *) err "Неизвестный параметр: $1" ;;
     esac
 done
+
+# ── Фоллбэк: если USER не задан ни в .env, ни через CLI — используем root ──
+VPS1_USER="${VPS1_USER:-root}"
+VPS2_USER="${VPS2_USER:-root}"
 
 # ── Подготовка SSH-ключей ──────────────────────────────────────────────────
 VPS1_KEY="$(expand_tilde "$VPS1_KEY")"

@@ -184,6 +184,98 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+hdr "4b. Проверка: VPS*_USER не захардкожен как 'root' до load_defaults_from_files"
+# ---------------------------------------------------------------------------
+
+ALL_SCRIPTS=(
+    "scripts/deploy/deploy.sh"
+    "scripts/deploy/deploy-vps1.sh"
+    "scripts/deploy/deploy-vps2.sh"
+    "scripts/deploy/deploy-proxy.sh"
+    "scripts/monitor/monitor-realtime.sh"
+    "scripts/monitor/monitor-web.sh"
+    "scripts/tools/add_phone_peer.sh"
+    "scripts/tools/diagnose.sh"
+    "scripts/tools/generate-all-configs.sh"
+    "scripts/tools/manage-peers.sh"
+    "scripts/tools/load-test.sh"
+    "scripts/tools/benchmark.sh"
+    "scripts/tools/optimize-vpn.sh"
+    "manage.sh"
+)
+
+for script in "${ALL_SCRIPTS[@]}"; do
+    full_path="${PROJECT_ROOT}/${script}"
+    [[ ! -f "$full_path" ]] && continue
+    if grep -q 'VPS[12]_USER="root"' "$full_path"; then
+        fail "${script}: содержит VPS*_USER=\"root\" (должно быть VPS*_USER=\"\" + fallback)"
+    else
+        ok "${script}: VPS*_USER не захардкожен"
+    fi
+done
+
+# Проверяем наличие fallback-паттерна ${VPS*_USER:-root}
+for script in "${ALL_SCRIPTS[@]}"; do
+    full_path="${PROJECT_ROOT}/${script}"
+    [[ ! -f "$full_path" ]] && continue
+    # Проверяем что хотя бы один fallback есть
+    if grep -q 'VPS[12]_USER=.*:-root' "$full_path"; then
+        ok "${script}: имеет fallback \${VPS*_USER:-root}"
+    else
+        warn "${script}: нет fallback \${VPS*_USER:-root} (может быть не нужен)"
+    fi
+done
+
+# Функциональный тест: .env USER перезаписывает дефолт
+FUNC_RESULT=$(bash -c "
+    source '${COMMON}'
+    VPS1_USER=''
+    VPS2_USER=''
+    VPS1_IP='' VPS1_KEY='' VPS1_PASS=''
+    VPS2_IP='' VPS2_KEY='' VPS2_PASS=''
+    ADGUARD_PASS='' CLIENT_VPN_IP=''
+    load_defaults_from_files
+    VPS1_USER=\"\${VPS1_USER:-root}\"
+    VPS2_USER=\"\${VPS2_USER:-root}\"
+    echo \"VPS1_USER=\$VPS1_USER\"
+    echo \"VPS2_USER=\$VPS2_USER\"
+" 2>/dev/null) || true
+
+ACTUAL_VPS1_USER=$(echo "$FUNC_RESULT" | grep '^VPS1_USER=' | cut -d= -f2)
+ACTUAL_VPS2_USER=$(echo "$FUNC_RESULT" | grep '^VPS2_USER=' | cut -d= -f2)
+
+ENV_VPS1_USER=$(grep '^VPS1_USER=' "${PROJECT_ROOT}/.env" 2>/dev/null | cut -d= -f2 || echo "")
+ENV_VPS2_USER=$(grep '^VPS2_USER=' "${PROJECT_ROOT}/.env" 2>/dev/null | cut -d= -f2 || echo "")
+
+if [[ -n "$ENV_VPS1_USER" ]]; then
+    if [[ "$ACTUAL_VPS1_USER" == "$ENV_VPS1_USER" ]]; then
+        ok "VPS1_USER загружается из .env (=${ENV_VPS1_USER}), а не дефолт root"
+    else
+        fail "VPS1_USER=${ACTUAL_VPS1_USER}, ожидалось ${ENV_VPS1_USER} из .env"
+    fi
+else
+    if [[ "$ACTUAL_VPS1_USER" == "root" ]]; then
+        ok "VPS1_USER=root (дефолт, т.к. не задан в .env)"
+    else
+        fail "VPS1_USER=${ACTUAL_VPS1_USER}, ожидалось root (дефолт)"
+    fi
+fi
+
+if [[ -n "$ENV_VPS2_USER" ]]; then
+    if [[ "$ACTUAL_VPS2_USER" == "$ENV_VPS2_USER" ]]; then
+        ok "VPS2_USER загружается из .env (=${ENV_VPS2_USER}), а не дефолт root"
+    else
+        fail "VPS2_USER=${ACTUAL_VPS2_USER}, ожидалось ${ENV_VPS2_USER} из .env"
+    fi
+else
+    if [[ "$ACTUAL_VPS2_USER" == "root" ]]; then
+        ok "VPS2_USER=root (дефолт, т.к. не задан в .env)"
+    else
+        fail "VPS2_USER=${ACTUAL_VPS2_USER}, ожидалось root (дефолт)"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 hdr "5. Проверка: require_vars работает"
 # ---------------------------------------------------------------------------
 

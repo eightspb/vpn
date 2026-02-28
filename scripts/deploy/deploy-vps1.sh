@@ -24,7 +24,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
-VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
+VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
 VPS2_IP=""
 CLIENT_VPN_IP="10.9.0.2"
 OUTPUT_DIR="./vpn-output"
@@ -54,6 +54,8 @@ while [[ $# -gt 0 ]]; do
         *) err "Неизвестный параметр: $1" ;;
     esac
 done
+
+VPS1_USER="${VPS1_USER:-root}"
 
 VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
 VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"

@@ -24,7 +24,7 @@ REMOTE_DIR="/opt/youtube-proxy"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 VPS2_IP=""
-VPS2_USER="root"
+VPS2_USER=""
 VPS2_KEY=""
 VPS2_PASS=""
 ADGUARD_REMOVE=false
@@ -45,6 +45,8 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
+
+VPS2_USER="${VPS2_USER:-root}"
 
 VPS2_KEY="$(expand_tilde "$VPS2_KEY")"
 VPS2_KEY="$(auto_pick_key_if_missing "$VPS2_KEY")"

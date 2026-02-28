@@ -29,7 +29,7 @@ source "${SCRIPT_DIR}/../../lib/common.sh"
 cd "$SCRIPT_DIR"
 
 VPS1_IP=""
-VPS1_USER="root"
+VPS1_USER=""
 VPS1_KEY=""
 VPS1_PASS=""
 PEER_IP=""
@@ -101,6 +101,8 @@ while [[ $# -gt 0 ]]; do
         *) echo "Неизвестный параметр: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+VPS1_USER="${VPS1_USER:-root}"
 
 [[ -z "$VPS1_IP" ]] && { echo "Ошибка: укажите VPS1_IP в .env или --vps1-ip" >&2; exit 1; }
 [[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && { echo "Ошибка: укажите VPS1_KEY в .env или --vps1-key / --vps1-pass" >&2; exit 1; }

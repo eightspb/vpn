@@ -32,10 +32,13 @@ FIX=false
 # ---------------------------------------------------------------------------
 # Загрузка конфига из .env и keys.env
 # ---------------------------------------------------------------------------
-VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
-VPS2_IP=""; VPS2_USER="root"; VPS2_KEY=""; VPS2_PASS=""
+VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
+VPS2_IP=""; VPS2_USER=""; VPS2_KEY=""; VPS2_PASS=""
 
 load_defaults_from_files
+
+VPS1_USER="${VPS1_USER:-root}"
+VPS2_USER="${VPS2_USER:-root}"
 
 VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
 VPS2_KEY="$(expand_tilde "$VPS2_KEY")"

@@ -32,7 +32,7 @@ source "${PROJECT_ROOT}/lib/common.sh"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
-VPS1_IP="" VPS1_USER="root" VPS1_KEY="" VPS1_PASS=""
+VPS1_IP="" VPS1_USER="" VPS1_KEY="" VPS1_PASS=""
 TUN_NET="10.9.0"
 OUTPUT_DIR="./vpn-output"
 PEERS_DB="${OUTPUT_DIR}/peers.json"
@@ -983,6 +983,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$COMMAND" ]] && { usage_main; exit 0; }
+
+VPS1_USER="${VPS1_USER:-root}"
 
 trap cleanup_temp_keys EXIT
 

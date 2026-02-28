@@ -22,7 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
-VPS2_IP=""; VPS2_USER="root"; VPS2_KEY=""; VPS2_PASS=""
+VPS2_IP=""; VPS2_USER=""; VPS2_KEY=""; VPS2_PASS=""
 KEYS_FILE=""
 ADGUARD_PASS=""
 SECURITY_UPDATE_SCRIPT="${SCRIPT_DIR}/security-update.sh"
@@ -45,6 +45,8 @@ while [[ $# -gt 0 ]]; do
         *) err "Неизвестный параметр: $1" ;;
     esac
 done
+
+VPS2_USER="${VPS2_USER:-root}"
 
 # Если --keys-file не указан, пробуем дефолтный путь
 [[ -z "$KEYS_FILE" && -f "${PROJECT_ROOT}/vpn-output/keys.env" ]] && KEYS_FILE="${PROJECT_ROOT}/vpn-output/keys.env"

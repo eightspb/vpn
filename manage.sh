@@ -261,7 +261,7 @@ cmd_check() {
         usage_check; return 0
     fi
 
-    local VPS1_IP="" VPS1_USER="root" VPS1_KEY="" VPS1_PASS=""
+    local VPS1_IP="" VPS1_USER="" VPS1_KEY="" VPS1_PASS=""
     local SCRIPT_REMOTE_PATH="/tmp/check_ping.sh"
 
     load_defaults_from_files
@@ -276,6 +276,8 @@ cmd_check() {
             *) err "Неизвестный параметр: $1" ;;
         esac
     done
+
+    VPS1_USER="${VPS1_USER:-root}"
 
     [[ -z "$VPS1_IP" ]] && err "Укажите VPS1_IP в .env или --vps1-ip"
     [[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && err "Укажите --vps1-key или --vps1-pass"

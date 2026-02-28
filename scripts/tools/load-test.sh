@@ -27,8 +27,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
 # ── Параметры по умолчанию ────────────────────────────────────────────────────
-VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
-VPS2_IP=""; VPS2_USER="root"; VPS2_KEY=""; VPS2_PASS=""
+VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
+VPS2_IP=""; VPS2_USER=""; VPS2_KEY=""; VPS2_PASS=""
 
 VPS1_ONLY=false
 VPS2_ONLY=false
@@ -60,6 +60,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 load_defaults_from_files
+
+VPS1_USER="${VPS1_USER:-root}"
+VPS2_USER="${VPS2_USER:-root}"
 
 [[ -z "${VPS1_IP}" ]] && err "VPS1_IP не задан. Проверьте .env"
 

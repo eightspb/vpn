@@ -33,9 +33,11 @@ FIX_PHONE=false
 # ---------------------------------------------------------------------------
 # Load config from .env and keys.env
 # ---------------------------------------------------------------------------
-VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
+VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
 
 load_defaults_from_files
+
+VPS1_USER="${VPS1_USER:-root}"
 
 VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
 VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
