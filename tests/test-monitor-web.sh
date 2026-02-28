@@ -137,6 +137,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 4b. WSL→Windows Python: HTTP-сервер доступен из Windows-браузера
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 4b. WSL→Windows Python: HTTP-сервер запускается через Windows Python ---"
+
+if grep -q 'detect_http_python' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: функция detect_http_python() присутствует"
+else
+    fail "scripts/monitor/monitor-web.sh: функция detect_http_python() отсутствует"
+fi
+
+if grep -q 'microsoft.*proc/version' scripts/monitor/monitor-web.sh && \
+   grep -q 'python\.exe' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: при WSL использует Windows python.exe для HTTP"
+else
+    fail "scripts/monitor/monitor-web.sh: нет WSL→Windows Python fallback для HTTP-сервера"
+fi
+
+if grep -q 'wsl_to_win_path' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: конвертирует WSL-путь в Windows-путь для HTTP serve dir"
+else
+    fail "scripts/monitor/monitor-web.sh: нет конвертации WSL→Windows пути"
+fi
+
+# ---------------------------------------------------------------------------
 # 5. scripts/monitor/dashboard.html: правильный путь к data.json
 # ---------------------------------------------------------------------------
 echo ""
@@ -194,6 +219,22 @@ for var in VPS1_IP VPS2_IP VPS1_INTERNAL VPS2_INTERNAL INTERVAL HTTP_PORT SSH_TI
 done
 
 # ---------------------------------------------------------------------------
+# 7b. manage.sh monitor --web: копирование .env из корня в scripts/monitor
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 7b. manage.sh: при monitor --web копируется .env в scripts/monitor ---"
+
+if [[ -f "manage.sh" ]]; then
+    if grep -q 'scripts/monitor/.env' manage.sh && grep -qE 'cp.*\.env.*scripts/monitor' manage.sh; then
+        ok "manage.sh: при monitor --web копирует .env в scripts/monitor"
+    else
+        fail "manage.sh: при monitor --web должен копировать .env в scripts/monitor"
+    fi
+else
+    fail "manage.sh отсутствует"
+fi
+
+# ---------------------------------------------------------------------------
 # 8. scripts/monitor/monitor-web.sh: функции присутствуют
 # ---------------------------------------------------------------------------
 echo ""
@@ -213,10 +254,10 @@ done
 echo ""
 echo "--- 9. scripts/monitor/monitor-web.sh: пути к файлам ---"
 
-if grep -q 'JSON_FILE="../../vpn-output/data.json"' scripts/monitor/monitor-web.sh; then
-    ok "scripts/monitor/monitor-web.sh: JSON_FILE=./vpn-output/data.json"
+if grep -q 'JSON_FILE="./vpn-output/data.json"' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: JSON_FILE=./vpn-output/data.json (локальный для HTTP-сервера)"
 else
-    fail "scripts/monitor/monitor-web.sh: JSON_FILE не указывает на ./vpn-output/data.json"
+    fail "scripts/monitor/monitor-web.sh: JSON_FILE должен быть ./vpn-output/data.json (чтобы HTTP-сервер отдавал его)"
 fi
 
 # HTTP-сервер стартует из pwd (директория проекта), значит

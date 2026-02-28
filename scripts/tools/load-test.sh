@@ -157,15 +157,14 @@ test_bandwidth() {
 
     log "Тест скорости загрузки (Cloudflare 100MB, 4 потока)..."
     local dl_parallel
-    dl_parallel="$(ssh_exec "$ip" "$user" "$key" "$pass" '
+    dl_parallel="$(ssh_exec "$ip" "$user" "$key" "$pass" 'bash -c '"'"'
 total=0
 for i in 1 2 3 4; do
     speed=$(curl -o /dev/null -w "%{speed_download}" --max-time 20 "https://speed.cloudflare.com/__down?bytes=26214400" 2>/dev/null || echo 0)
-    total=$(awk "BEGIN{printf \"%.0f\", '"$total"'+'"$speed"'}")
-done &
-wait
+    total=$(awk "BEGIN{printf \"%.0f\", $total+$speed}")
+done
 echo "$total"
-' 60 2>/dev/null || echo '0')"
+'"'"'' 90 2>/dev/null || echo '0')"
     local dl_parallel_mb
     dl_parallel_mb="$(awk "BEGIN{printf \"%.2f\", ${dl_parallel:-0}/1048576}")"
 

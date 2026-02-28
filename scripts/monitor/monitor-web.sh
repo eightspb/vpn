@@ -32,7 +32,7 @@ VPS2_TUN_IP="10.8.0.2"
 INTERVAL=5
 HTTP_PORT=8080
 SSH_TIMEOUT=8
-JSON_FILE="../../vpn-output/data.json"
+JSON_FILE="./vpn-output/data.json"
 LOG_FILE="./vpn-output/monitor.log"
 LOG_LEVEL="INFO"
 PYTHON_CMD=()
@@ -635,11 +635,39 @@ PYEOF
 # Start HTTP server
 # ---------------------------------------------------------------------------
 
+wsl_to_win_path() {
+    local p="$1"
+    if [[ "$p" =~ ^/mnt/([a-z])/(.*) ]]; then
+        printf '%s:\\%s' "${BASH_REMATCH[1]^^}" "${BASH_REMATCH[2]//\//\\}"
+    else
+        printf '%s' "$p"
+    fi
+}
+
+detect_http_python() {
+    HTTP_PYTHON_CMD=()
+    HTTP_SERVE_DIR="$(pwd)"
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        local win_py
+        for win_py in python.exe py.exe; do
+            if command -v "$win_py" >/dev/null 2>&1; then
+                HTTP_PYTHON_CMD=("$win_py")
+                HTTP_SERVE_DIR="$(wsl_to_win_path "$(pwd)")"
+                log_line "INFO" "WSL detected — HTTP server will use Windows Python ($win_py) serving $HTTP_SERVE_DIR"
+                return
+            fi
+        done
+        log_line "WARN" "WSL detected but no Windows Python found — HTTP server will bind to WSL localhost (may not be reachable from Windows browser)"
+    fi
+    HTTP_PYTHON_CMD=("${PYTHON_CMD[@]}")
+}
+
 start_http_server() {
+    detect_http_python
     local srv_script
     srv_script="$(mktemp /tmp/monweb_srv_XXXXXX.py)" || {
         log_line "WARN" "mktemp failed, falling back to plain http.server (no /api/ping)"
-        "${PYTHON_CMD[@]}" -m http.server "$HTTP_PORT" --bind 127.0.0.1 2>/dev/null &
+        "${HTTP_PYTHON_CMD[@]}" -m http.server "$HTTP_PORT" --bind 127.0.0.1 2>/dev/null &
         HTTP_PID="$!"; sleep 0.3; return
     }
     cat > "$srv_script" << 'PYSERVER'
@@ -714,9 +742,18 @@ port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 ThreadingHTTPServer(('127.0.0.1', port), VPNHandler).serve_forever()
 PYSERVER
     TEMP_KEY_FILES+=("$srv_script")
-    "${PYTHON_CMD[@]}" "$srv_script" "$HTTP_PORT" "$(pwd)" 2>/dev/null &
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        local win_srv_dir win_srv_copy
+        win_srv_dir="$(cmd.exe /C "echo %TEMP%" 2>/dev/null | tr -d '\r')"
+        win_srv_copy="${win_srv_dir}\\monweb_srv_$$.py"
+        cp "$srv_script" "$(wslpath -u "$win_srv_dir")/monweb_srv_$$.py" 2>/dev/null
+        TEMP_KEY_FILES+=("$(wslpath -u "$win_srv_dir")/monweb_srv_$$.py")
+        "${HTTP_PYTHON_CMD[@]}" "$win_srv_copy" "$HTTP_PORT" "$HTTP_SERVE_DIR" &
+    else
+        "${HTTP_PYTHON_CMD[@]}" "$srv_script" "$HTTP_PORT" "$HTTP_SERVE_DIR" 2>/dev/null &
+    fi
     HTTP_PID="$!"
-    sleep 0.3
+    sleep 1
     if kill -0 "$HTTP_PID" 2>/dev/null; then
         log_line "INFO" "HTTP server started on port $HTTP_PORT with /api/ping (pid=$HTTP_PID)"
     else
