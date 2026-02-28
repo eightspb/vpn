@@ -25,6 +25,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 cd "$SCRIPT_DIR"
 
 VPS1_IP=""
@@ -36,63 +37,6 @@ PEER_NAME="phone"
 TUN_NET="10.9.0"
 OUTPUT_DIR="./vpn-output"
 SSH_TIMEOUT=15
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-clean_value() {
-    local v="$1"
-    v="${v//$'\r'/}"
-    v="${v#\"}"; v="${v%\"}"
-    v="${v#\'}"; v="${v%\'}"
-    v="${v#"${v%%[![:space:]]*}"}"
-    v="${v%"${v##*[![:space:]]}"}"
-    printf "%s" "$v"
-}
-
-read_kv() {
-    local file="$1" key="$2" raw
-    raw="$(awk -F= -v k="$key" '$1==k{sub(/^[^=]*=/,"",$0); print $0}' "$file" | tail -n 1)"
-    clean_value "$raw"
-}
-
-expand_tilde() {
-    local p drive rest
-    p="$(clean_value "$1")"
-    p="${p//\\//}"
-    if [[ "$p" =~ ^([A-Za-z]):/(.*)$ ]]; then
-        drive="${BASH_REMATCH[1],,}"
-        rest="${BASH_REMATCH[2]}"
-        p="/mnt/${drive}/${rest}"
-    fi
-    if [[ "$p" == "~/"* ]]; then
-        printf "%s" "${HOME}/${p#'~/'}"
-    else
-        printf "%s" "$p"
-    fi
-}
-
-load_defaults_from_files() {
-    if [[ -f "./vpn-output/keys.env" ]]; then
-        local k_vps1 k_tun
-        k_vps1="$(read_kv ./vpn-output/keys.env VPS1_IP)"
-        k_tun="$(read_kv ./vpn-output/keys.env TUN_NET)"
-        [[ -n "${k_vps1}" ]] && VPS1_IP="$k_vps1"
-        [[ -n "${k_tun}" ]] && TUN_NET="$k_tun"
-    fi
-    if [[ -f "./.env" ]]; then
-        local e_vps1_ip e_vps1_user e_vps1_key e_vps1_pass
-        e_vps1_ip="$(read_kv ./.env VPS1_IP)"
-        e_vps1_user="$(read_kv ./.env VPS1_USER)"
-        e_vps1_key="$(read_kv ./.env VPS1_KEY)"
-        e_vps1_pass="$(read_kv ./.env VPS1_PASS)"
-        [[ -n "${e_vps1_ip}" ]]   && VPS1_IP="$e_vps1_ip"
-        [[ -n "${e_vps1_user}" ]] && VPS1_USER="$e_vps1_user"
-        [[ -n "${e_vps1_key}" ]]  && VPS1_KEY="$e_vps1_key"
-        [[ -n "${e_vps1_pass}" ]] && VPS1_PASS="$e_vps1_pass"
-    fi
-}
 
 usage() {
     cat <<'EOF'

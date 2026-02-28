@@ -229,6 +229,47 @@ bash scripts/git-push-github.sh
 
 Скрипт добавляет `origin` → `https://github.com/eightspb/vpn.git` и выполняет `git push -u origin main`. Дальнейшие пуши: `git push`.
 
+## Конфигурация (.env)
+
+Все скрипты проекта автоматически загружают параметры из `.env` и `vpn-output/keys.env` через единую библиотеку `lib/common.sh`. CLI-аргументы имеют наивысший приоритет и перезаписывают значения из файлов.
+
+**Приоритет загрузки переменных:**
+1. CLI-аргументы (наивысший)
+2. `.env` (SSH-доступ, ADGUARD_PASS, CLIENT_IP)
+3. `vpn-output/keys.env` (ключи, сети, порты — создаётся при деплое)
+4. Встроенные дефолты скрипта
+
+**Настройка:**
+```bash
+cp .env.example .env
+# Заполните своими данными: IP серверов, SSH-ключи, пароли
+```
+
+**Содержимое `.env`:**
+```
+ADGUARD_PASS=your_password
+CLIENT_IP=10.9.0.2
+
+VPS1_IP=1.2.3.4
+VPS1_USER=root
+VPS1_KEY=~/.ssh/id_rsa
+VPS1_PASS=
+
+VPS2_IP=5.6.7.8
+VPS2_USER=root
+VPS2_KEY=~/.ssh/id_rsa
+VPS2_PASS=
+```
+
+После заполнения `.env` все скрипты можно запускать без аргументов:
+```bash
+bash manage.sh deploy              # параметры из .env
+bash manage.sh monitor             # параметры из .env
+bash manage.sh monitor --web       # параметры из .env
+bash manage.sh add-peer            # параметры из .env
+bash scripts/tools/diagnose.sh     # параметры из .env
+```
+
 ## Гигиена секретов
 
 - Скопируйте шаблон: `cp .env.example .env` и заполните своими данными.
@@ -270,13 +311,16 @@ bash manage.sh <команда> [опции]
 | `bash scripts/tools/load-test.sh` | Нагрузочное тестирование: соединения, bandwidth, CPU/RAM |
 
 ```bash
-# Полный деплой
+# Полный деплой (параметры из .env, достаточно указать только флаги)
+bash manage.sh deploy --with-proxy --remove-adguard
+
+# Или с явными параметрами (перезаписывают .env)
 bash manage.sh deploy \
   --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
   --vps2-ip 38.135.122.81 --vps2-key ~/.ssh/ssh-key-1772056840349 \
   --with-proxy --remove-adguard
 
-# Мониторинг (читает настройки из .env)
+# Мониторинг (параметры из .env)
 bash manage.sh monitor
 bash manage.sh monitor --web
 
@@ -298,10 +342,14 @@ bash manage.sh deploy --help
 
 ## Деплой (полный и по отдельности)
 
-Все деплой-скрипты автоматически запускают security-обновления (`security-update.sh`) и hardening (`security-harden.sh`).
+Все деплой-скрипты автоматически загружают параметры из `.env` и запускают security-обновления (`security-update.sh`) и hardening (`security-harden.sh`).
 
 **Полный деплой (VPN + YouTube Ad Proxy):**
 ```bash
+# Если .env заполнен — достаточно указать только флаги:
+bash manage.sh deploy --with-proxy --remove-adguard
+
+# Или с явными параметрами:
 bash manage.sh deploy \
   --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
   --vps2-ip 38.135.122.81 --vps2-user root  --vps2-key ~/.ssh/ssh-key-1772056840349 \
@@ -426,10 +474,8 @@ bash manage.sh monitor --web    # веб-дашборд http://localhost:8080/da
 bash scripts/monitor/monitor-realtime.sh
 bash scripts/monitor/monitor-web.sh
 
-# Параметры передаются через .env или CLI:
-#   VPS1_IP, VPS1_USER, VPS1_KEY, VPS2_IP, VPS2_USER, VPS2_KEY
-# При запуске через manage.sh monitor --web файл .env из корня репозитория
-# автоматически копируется в scripts/monitor/, чтобы monitor-web.sh видел конфиг.
+# Все параметры автоматически загружаются из .env через lib/common.sh.
+# CLI-аргументы перезаписывают значения из .env.
 ```
 
 > **Примечание:** `monitor-web.sh` запускает HTTP-сервер на `127.0.0.1:8080`. При запуске

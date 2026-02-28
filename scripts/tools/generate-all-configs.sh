@@ -19,34 +19,28 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 cd "$SCRIPT_DIR"
-
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
 fail() { echo -e "  ${RED}✗${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
-step() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
 
 OUTPUT_DIR="./vpn-output"
 FIX_PHONE=false
 [[ "${1:-}" == "--fix-phone-peer" ]] && FIX_PHONE=true
 
 # ---------------------------------------------------------------------------
-# Load .env
+# Load config from .env and keys.env
 # ---------------------------------------------------------------------------
-read_kv() {
-    local file="$1" key="$2"
-    awk -F= -v k="$key" '$1==k{sub(/^[^=]*=/,"",$0); gsub(/\r/,""); gsub(/^[ \t"'"'"']+|[ \t"'"'"']+$/,""); print; exit}' "$file" 2>/dev/null
-}
+VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
 
-VPS1_IP="$(read_kv .env VPS1_IP)"
-VPS1_USER="$(read_kv .env VPS1_USER)"; VPS1_USER="${VPS1_USER:-root}"
-VPS1_KEY="$(read_kv .env VPS1_KEY)"
-VPS1_KEY="${VPS1_KEY/#\~/$HOME}"
+load_defaults_from_files
 
-[[ -z "$VPS1_IP" ]] && { fail "VPS1_IP не задан в .env"; exit 1; }
+VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
+VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
+
+require_vars "generate-all-configs.sh" VPS1_IP
 [[ -z "$VPS1_KEY" || ! -f "$VPS1_KEY" ]] && { fail "SSH ключ не найден: $VPS1_KEY"; exit 1; }
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=15 -o LogLevel=ERROR"

@@ -21,20 +21,13 @@
 
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-
-log()  { echo -e "${CYAN}[$(date +%H:%M:%S)]${NC} $*"; }
-ok()   { echo -e "${GREEN}✓${NC} $*"; }
-err()  { echo -e "${RED}✗ ОШИБКА:${NC} $*" >&2; exit 1; }
-warn() { echo -e "${YELLOW}⚠${NC} $*"; }
-step() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 
 VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
 VPS2_IP=""
 CLIENT_VPN_IP="10.9.0.2"
 OUTPUT_DIR="./vpn-output"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECURITY_UPDATE_SCRIPT="${SCRIPT_DIR}/security-update.sh"
 SECURITY_HARDEN_SCRIPT="${SCRIPT_DIR}/security-harden.sh"
 
@@ -43,6 +36,8 @@ CLIENT_NET="10.9.0"
 VPS1_PORT_CLIENTS=51820
 VPS1_PORT_TUNNEL=51821
 VPS2_PORT=51820
+
+load_defaults_from_files
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -60,9 +55,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -z "$VPS1_IP" ]] && err "Укажите --vps1-ip"
-[[ -z "$VPS2_IP" ]] && err "Укажите --vps2-ip (для туннеля)"
-[[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && err "Укажите --vps1-key или --vps1-pass"
+VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
+VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
+
+require_vars "deploy-vps1.sh" VPS1_IP VPS2_IP
+[[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && err "Укажите --vps1-key или --vps1-pass (или VPS1_KEY в .env)"
 
 ssh_cmd() {
     local ip=$1; local user=$2; local key=$3; local pass=$4
@@ -91,17 +88,11 @@ run_script1() {
     run1 "sudo bash /tmp/_deploy_step.sh"
 }
 
-check_deps() {
-    local missing=()
-    command -v ssh  &>/dev/null || missing+=("ssh")
-    command -v scp  &>/dev/null || missing+=("scp")
-    command -v awk  &>/dev/null || missing+=("awk")
-    [[ -n "$VPS1_PASS" ]] && { command -v sshpass &>/dev/null || missing+=("sshpass"); }
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        err "Не хватает: ${missing[*]}"
-    fi
-    return 0
-}
+if [[ -n "$VPS1_PASS" ]]; then
+    check_deps --need-sshpass
+else
+    check_deps
+fi
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"

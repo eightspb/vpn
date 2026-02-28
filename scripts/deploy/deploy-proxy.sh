@@ -15,35 +15,58 @@ if [[ "$SCRIPT_DIR" =~ ^/[A-Za-z]/ ]]; then
     REST=$(echo "$SCRIPT_DIR" | cut -c3-)
     SCRIPT_DIR="/mnt/${DRIVE}${REST}"
 fi
+
+source "${SCRIPT_DIR}/../../lib/common.sh"
+
 PROXY_DIR="$SCRIPT_DIR/../../youtube-proxy"
 BINARY_NAME="youtube-proxy"
 REMOTE_DIR="/opt/youtube-proxy"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 VPS2_IP=""
+VPS2_USER="root"
 VPS2_KEY=""
+VPS2_PASS=""
 ADGUARD_REMOVE=false
+
+load_defaults_from_files
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --vps2-ip)    VPS2_IP="$2";    shift 2 ;;
+        --vps2-user)  VPS2_USER="$2";  shift 2 ;;
         --vps2-key)   VPS2_KEY="$2";   shift 2 ;;
+        --vps2-pass)  VPS2_PASS="$2";  shift 2 ;;
         --remove-adguard) ADGUARD_REMOVE=true; shift ;;
+        --help|-h)
+            echo "Usage: bash deploy-proxy.sh [--vps2-ip IP] [--vps2-key KEY] [--vps2-user USER] [--vps2-pass PASS] [--remove-adguard]"
+            echo "Parameters auto-loaded from .env if not specified."
+            exit 0 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
-if [[ -z "$VPS2_IP" || -z "$VPS2_KEY" ]]; then
-    echo "Usage: bash deploy-proxy.sh --vps2-ip <IP> --vps2-key <path-to-key> [--remove-adguard]"
-    exit 1
-fi
+VPS2_KEY="$(expand_tilde "$VPS2_KEY")"
+VPS2_KEY="$(auto_pick_key_if_missing "$VPS2_KEY")"
 
-SSH="ssh -i $VPS2_KEY -o StrictHostKeyChecking=accept-new root@$VPS2_IP"
-SCP="scp -i $VPS2_KEY -o StrictHostKeyChecking=accept-new"
+require_vars "deploy-proxy.sh" VPS2_IP
+[[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && err "Укажите --vps2-key или --vps2-pass (или VPS2_KEY в .env)"
+
+# Формируем SSH/SCP команды с учётом ключа или пароля
+if [[ -n "$VPS2_KEY" ]]; then
+    SSH="ssh -i $VPS2_KEY -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
+    SCP="scp -i $VPS2_KEY -o StrictHostKeyChecking=accept-new"
+elif [[ -n "$VPS2_PASS" ]]; then
+    SSH="sshpass -p '$VPS2_PASS' ssh -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
+    SCP="sshpass -p '$VPS2_PASS' scp -o StrictHostKeyChecking=accept-new"
+else
+    SSH="ssh -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
+    SCP="scp -o StrictHostKeyChecking=accept-new"
+fi
 
 echo ""
 echo "=== YouTube Proxy Deploy ==="
-echo "  Target: root@$VPS2_IP"
+echo "  Target: ${VPS2_USER}@$VPS2_IP"
 echo ""
 
 # ── Step 1: Build binary ──────────────────────────────────────────────────────
@@ -80,9 +103,9 @@ $SSH "mkdir -p $REMOTE_DIR/certs $REMOTE_DIR/blocklists"
 $SSH "systemctl stop youtube-proxy 2>/dev/null || true"
 sleep 1
 
-$SCP "$PROXY_DIR/$BINARY_NAME"       "root@$VPS2_IP:$REMOTE_DIR/"
-$SCP "$PROXY_DIR/config.yaml"        "root@$VPS2_IP:$REMOTE_DIR/"
-$SCP "$PROXY_DIR/blocklists/"*.txt   "root@$VPS2_IP:$REMOTE_DIR/blocklists/"
+$SCP "$PROXY_DIR/$BINARY_NAME"       "${VPS2_USER}@$VPS2_IP:$REMOTE_DIR/"
+$SCP "$PROXY_DIR/config.yaml"        "${VPS2_USER}@$VPS2_IP:$REMOTE_DIR/"
+$SCP "$PROXY_DIR/blocklists/"*.txt   "${VPS2_USER}@$VPS2_IP:$REMOTE_DIR/blocklists/"
 
 $SSH "chmod +x $REMOTE_DIR/$BINARY_NAME"
 

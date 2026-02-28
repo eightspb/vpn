@@ -14,10 +14,9 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 cd "$SCRIPT_DIR"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 BLUE='\033[0;34m'
 
 ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
@@ -31,51 +30,17 @@ FIX=false
 [[ "${1:-}" == "--fix" ]] && FIX=true
 
 # ---------------------------------------------------------------------------
-# Загрузка конфига из .env
+# Загрузка конфига из .env и keys.env
 # ---------------------------------------------------------------------------
 VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
 VPS2_IP=""; VPS2_USER="root"; VPS2_KEY=""; VPS2_PASS=""
 
-read_kv() {
-    local file="$1" key="$2"
-    awk -F= -v k="$key" '$1==k{sub(/^[^=]*=/,"",$0); gsub(/\r/,""); gsub(/^[ \t"'"'"']+|[ \t"'"'"']+$/,""); print; exit}' "$file" 2>/dev/null
-}
+load_defaults_from_files
 
-if [[ -f ".env" ]]; then
-    VPS1_IP="$(read_kv .env VPS1_IP)"
-    VPS1_USER="$(read_kv .env VPS1_USER)"; VPS1_USER="${VPS1_USER:-root}"
-    VPS1_KEY="$(read_kv .env VPS1_KEY)"
-    VPS1_PASS="$(read_kv .env VPS1_PASS)"
-    VPS2_IP="$(read_kv .env VPS2_IP)"
-    VPS2_USER="$(read_kv .env VPS2_USER)"; VPS2_USER="${VPS2_USER:-root}"
-    VPS2_KEY="$(read_kv .env VPS2_KEY)"
-    VPS2_PASS="$(read_kv .env VPS2_PASS)"
-fi
-
-# Expand ~ and Windows paths
-expand_path() {
-    local p="${1//\\/\/}"
-    if [[ "$p" =~ ^([A-Za-z]):/(.*)$ ]]; then
-        p="/mnt/${BASH_REMATCH[1],,}/${BASH_REMATCH[2]}"
-    fi
-    [[ "$p" == "~/"* ]] && p="${HOME}/${p#'~/'}"
-    echo "$p"
-}
-VPS1_KEY="$(expand_path "$VPS1_KEY")"
-VPS2_KEY="$(expand_path "$VPS2_KEY")"
-
-# Auto-detect key
-auto_key() {
-    local k="$1"
-    [[ -n "$k" && -f "$k" ]] && echo "$k" && return
-    for c in "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/id_rsa" \
-              "/mnt/c/Users/${USER}/.ssh/id_ed25519" "/mnt/c/Users/${USER}/.ssh/id_rsa"; do
-        [[ -f "$c" ]] && echo "$c" && return
-    done
-    echo "$k"
-}
-[[ -z "$VPS1_PASS" ]] && VPS1_KEY="$(auto_key "$VPS1_KEY")"
-[[ -z "$VPS2_PASS" ]] && VPS2_KEY="$(auto_key "$VPS2_KEY")"
+VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
+VPS2_KEY="$(expand_tilde "$VPS2_KEY")"
+[[ -z "$VPS1_PASS" ]] && VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
+[[ -z "$VPS2_PASS" ]] && VPS2_KEY="$(auto_pick_key_if_missing "$VPS2_KEY")"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=no -o LogLevel=ERROR"
 

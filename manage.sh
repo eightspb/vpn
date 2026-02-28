@@ -236,10 +236,6 @@ cmd_monitor() {
             bash "${SCRIPT_DIR}/scripts/monitor/monitor-realtime.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         web)
-            if [[ -f "${SCRIPT_DIR}/.env" ]]; then
-                cp "${SCRIPT_DIR}/.env" "${SCRIPT_DIR}/scripts/monitor/.env"
-                log "Скопирован .env в scripts/monitor для monitor-web.sh"
-            fi
             log "Запуск веб-дашборда (monitor-web.sh)..."
             log "Откройте: http://localhost:8080/dashboard.html"
             bash "${SCRIPT_DIR}/scripts/monitor/monitor-web.sh" "${extra_args[@]+"${extra_args[@]}"}"

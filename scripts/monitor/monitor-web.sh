@@ -11,6 +11,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 cd "$SCRIPT_DIR"
 
 VPS1_IP=""
@@ -24,8 +25,6 @@ VPS2_KEY=""
 VPS2_PASS=""
 
 VPS1_INTERNAL="10.9.0.1"
-# VPS2 SSH always uses public IP — the tunnel IP 10.8.0.2 is the VPS1↔VPS2
-# tunnel interface, not the client-facing VPN. SSH is not guaranteed to listen there.
 VPS2_INTERNAL=""
 
 VPS2_TUN_IP="10.8.0.2"
@@ -47,74 +46,6 @@ VPS1_PREV_TX=0
 VPS2_PREV_RX=0
 VPS2_PREV_TX=0
 PREV_TS=0
-
-# ---------------------------------------------------------------------------
-# Helper utilities
-# ---------------------------------------------------------------------------
-
-clean_value() {
-    local v="$1"
-    v="${v//$'\r'/}"
-    v="${v#\"}"; v="${v%\"}"
-    v="${v#\'}"; v="${v%\'}"
-    v="${v#"${v%%[![:space:]]*}"}"
-    v="${v%"${v##*[![:space:]]}"}"
-    printf "%s" "$v"
-}
-
-read_kv() {
-    local file="$1" key="$2" raw
-    raw="$(awk -F= -v k="$key" '$1==k{sub(/^[^=]*=/,"",$0); print $0}' "$file" | tail -n 1)"
-    clean_value "$raw"
-}
-
-load_defaults_from_files() {
-    if [[ -f "./vpn-output/keys.env" ]]; then
-        local k_vps1 k_tun
-        k_vps1="$(read_kv ./vpn-output/keys.env VPS1_IP)"
-        k_tun="$(read_kv ./vpn-output/keys.env TUN_NET)"
-        [[ -n "${k_vps1}" ]] && VPS1_IP="$k_vps1"
-        [[ -n "${k_tun}" ]] && VPS2_TUN_IP="${k_tun}.2"
-    fi
-    if [[ -f "./.env" ]]; then
-        local e_vps1_ip e_vps1_user e_vps1_key e_vps1_pass
-        local e_vps2_ip e_vps2_user e_vps2_key e_vps2_pass
-        e_vps1_ip="$(read_kv ./.env VPS1_IP)"
-        e_vps1_user="$(read_kv ./.env VPS1_USER)"
-        e_vps1_key="$(read_kv ./.env VPS1_KEY)"
-        e_vps1_pass="$(read_kv ./.env VPS1_PASS)"
-        e_vps2_ip="$(read_kv ./.env VPS2_IP)"
-        e_vps2_user="$(read_kv ./.env VPS2_USER)"
-        e_vps2_key="$(read_kv ./.env VPS2_KEY)"
-        e_vps2_pass="$(read_kv ./.env VPS2_PASS)"
-        [[ -n "${e_vps1_ip}" ]]   && VPS1_IP="$e_vps1_ip"
-        [[ -n "${e_vps1_user}" ]] && VPS1_USER="$e_vps1_user"
-        [[ -n "${e_vps1_key}" ]]  && VPS1_KEY="$e_vps1_key"
-        [[ -n "${e_vps1_pass}" ]] && VPS1_PASS="$e_vps1_pass"
-        [[ -n "${e_vps2_ip}" ]]   && VPS2_IP="$e_vps2_ip"
-        [[ -n "${e_vps2_user}" ]] && VPS2_USER="$e_vps2_user"
-        [[ -n "${e_vps2_key}" ]]  && VPS2_KEY="$e_vps2_key"
-        [[ -n "${e_vps2_pass}" ]] && VPS2_PASS="$e_vps2_pass"
-    fi
-}
-
-expand_tilde() {
-    local p drive rest
-    p="$(clean_value "$1")"
-    p="${p//\\//}"
-    if [[ "$p" =~ ^([A-Za-z]):/(.*)$ ]]; then
-        drive="${BASH_REMATCH[1],,}"
-        rest="${BASH_REMATCH[2]}"
-        p="/mnt/${drive}/${rest}"
-    fi
-    if [[ "$p" == "~/"* ]]; then
-        printf "%s" "${HOME}/${p#'~/'}"
-    elif [[ "$p" == "${HOME}/~/"* ]]; then
-        printf "%s" "${HOME}/${p#${HOME}/~/}"
-    else
-        printf "%s" "$p"
-    fi
-}
 
 LOG_MAX_BYTES=2097152  # 2 MB
 
@@ -138,40 +69,6 @@ log_line() {
 
 set_last_error() {
     if [[ "$1" == "VPS1" ]]; then LAST_ERR_VPS1="$2"; else LAST_ERR_VPS2="$2"; fi
-}
-
-auto_pick_key_if_missing() {
-    local current_key="$1" win_home candidate
-    win_home="${USERPROFILE:-}"; win_home="${win_home//\\//}"
-    if [[ -n "$current_key" && -f "$current_key" ]]; then printf "%s" "$current_key"; return; fi
-    for candidate in "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/id_rsa" \
-                     "${win_home}/.ssh/id_ed25519" "${win_home}/.ssh/id_rsa" \
-                     /c/Users/*/.ssh/id_ed25519 /c/Users/*/.ssh/id_rsa \
-                     /mnt/c/Users/*/.ssh/id_ed25519 /mnt/c/Users/*/.ssh/id_rsa; do
-        [[ -f "$candidate" ]] && { printf "%s" "$candidate"; return; }
-    done
-    printf "%s" "$current_key"
-}
-
-prepare_key_for_ssh() {
-    local key="$1" tmp_key
-    if [[ -z "$key" || ! -f "$key" ]]; then printf "%s" "$key"; return; fi
-    if [[ "$key" == /mnt/* ]]; then
-        tmp_key="$(mktemp /tmp/monweb_key_XXXXXX)" || { printf "%s" "$key"; return; }
-        cp "$key" "$tmp_key" 2>/dev/null || { rm -f "$tmp_key"; printf "%s" "$key"; return; }
-        chmod 600 "$tmp_key" 2>/dev/null || true
-        TEMP_KEY_FILES+=("$tmp_key")
-        printf "%s" "$tmp_key"
-        return
-    fi
-    printf "%s" "$key"
-}
-
-cleanup_temp_keys() {
-    local f
-    for f in "${TEMP_KEY_FILES[@]}"; do
-        [[ -n "$f" && -f "$f" ]] && rm -f "$f"
-    done
 }
 
 cleanup_all() {

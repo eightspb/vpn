@@ -19,21 +19,17 @@
 
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-
-log()  { echo -e "${CYAN}[$(date +%H:%M:%S)]${NC} $*"; }
-ok()   { echo -e "${GREEN}✓${NC} $*"; }
-err()  { echo -e "${RED}✗ ОШИБКА:${NC} $*" >&2; exit 1; }
-warn() { echo -e "${YELLOW}⚠${NC} $*"; }
-step() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 
 VPS2_IP=""; VPS2_USER="root"; VPS2_KEY=""; VPS2_PASS=""
 KEYS_FILE=""
 ADGUARD_PASS=""
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECURITY_UPDATE_SCRIPT="${SCRIPT_DIR}/security-update.sh"
 SECURITY_HARDEN_SCRIPT="${SCRIPT_DIR}/security-harden.sh"
+
+# Загружаем дефолты из .env (SSH-доступ, ADGUARD_PASS)
+load_defaults_from_files
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -50,12 +46,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -z "$VPS2_IP" ]] && err "Укажите --vps2-ip"
+# Если --keys-file не указан, пробуем дефолтный путь
+[[ -z "$KEYS_FILE" && -f "${PROJECT_ROOT}/vpn-output/keys.env" ]] && KEYS_FILE="${PROJECT_ROOT}/vpn-output/keys.env"
+
+VPS2_KEY="$(expand_tilde "$VPS2_KEY")"
+VPS2_KEY="$(auto_pick_key_if_missing "$VPS2_KEY")"
+
+require_vars "deploy-vps2.sh" VPS2_IP
 [[ -z "$KEYS_FILE" ]] && err "Укажите --keys-file (файл keys.env из deploy-vps1.sh)"
 [[ -f "$KEYS_FILE" ]] || err "Файл ключей не найден: $KEYS_FILE"
-[[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && err "Укажите --vps2-key или --vps2-pass"
+[[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && err "Укажите --vps2-key или --vps2-pass (или VPS2_KEY в .env)"
 
-# Загружаем ключи (игнорируем комментарии)
+# Загружаем ключи деплоя (игнорируем комментарии)
 set -a
 source <(grep -v '^#' "$KEYS_FILE" | grep '=' | tr -d '\r')
 set +a
@@ -93,17 +95,11 @@ run_script2() {
     run2 "sudo bash /tmp/_deploy_step.sh"
 }
 
-check_deps() {
-    local missing=()
-    command -v ssh  &>/dev/null || missing+=("ssh")
-    command -v scp  &>/dev/null || missing+=("scp")
-    command -v awk  &>/dev/null || missing+=("awk")
-    [[ -n "$VPS2_PASS" ]] && { command -v sshpass &>/dev/null || missing+=("sshpass"); }
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        err "Не хватает: ${missing[*]}"
-    fi
-    return 0
-}
+if [[ -n "$VPS2_PASS" ]]; then
+    check_deps --need-sshpass
+else
+    check_deps
+fi
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════════╗${NC}"

@@ -40,15 +40,8 @@
 
 set -euo pipefail
 
-# ── Цвета ──────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-
-log()  { echo -e "${CYAN}[$(date +%H:%M:%S)]${NC} $*"; }
-ok()   { echo -e "${GREEN}✓${NC} $*"; }
-err()  { echo -e "${RED}✗ ОШИБКА:${NC} $*" >&2; exit 1; }
-warn() { echo -e "${YELLOW}⚠${NC} $*"; }
-step() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 
 # ── Параметры по умолчанию ─────────────────────────────────────────────────
 VPS1_IP=""; VPS1_USER="root"; VPS1_KEY=""; VPS1_PASS=""
@@ -58,7 +51,6 @@ ADGUARD_PASS=""
 OUTPUT_DIR="./vpn-output"
 WITH_PROXY=false
 REMOVE_ADGUARD=false
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECURITY_UPDATE_SCRIPT="${SCRIPT_DIR}/security-update.sh"
 SECURITY_HARDEN_SCRIPT="${SCRIPT_DIR}/security-harden.sh"
 
@@ -68,6 +60,9 @@ CLIENT_NET="10.9.0"    # VPS1=10.9.0.1, клиент=10.9.0.2
 VPS1_PORT_CLIENTS=51820  # порт для клиентов (с Junk)
 VPS1_PORT_TUNNEL=51821   # порт туннеля VPS1→VPS2
 VPS2_PORT=51820          # порт на VPS2
+
+# Загружаем дефолты из .env и keys.env (CLI-аргументы ниже перезапишут)
+load_defaults_from_files
 
 # ── Парсинг аргументов ─────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -92,11 +87,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ── Подготовка SSH-ключей ──────────────────────────────────────────────────
+VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
+VPS2_KEY="$(expand_tilde "$VPS2_KEY")"
+VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
+VPS2_KEY="$(auto_pick_key_if_missing "$VPS2_KEY")"
+
 # ── Проверка обязательных параметров ───────────────────────────────────────
-[[ -z "$VPS1_IP" ]] && err "Укажите --vps1-ip"
-[[ -z "$VPS2_IP" ]] && err "Укажите --vps2-ip"
-[[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && err "Укажите --vps1-key или --vps1-pass"
-[[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && err "Укажите --vps2-key или --vps2-pass"
+require_vars "deploy.sh" VPS1_IP VPS2_IP
+[[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && err "Укажите --vps1-key или --vps1-pass (или VPS1_KEY в .env)"
+[[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && err "Укажите --vps2-key или --vps2-pass (или VPS2_KEY в .env)"
 
 # ── SSH хелперы ────────────────────────────────────────────────────────────
 ssh_cmd() {
@@ -139,16 +139,11 @@ run_script2() { local script=$1; local tmp=$(mktemp /tmp/deploy_XXXX.sh)
 }
 
 # ── Проверка зависимостей ──────────────────────────────────────────────────
-check_deps() {
-    local missing=()
-    command -v ssh  &>/dev/null || missing+=("ssh")
-    command -v scp  &>/dev/null || missing+=("scp")
-    command -v awk  &>/dev/null || missing+=("awk")
-    if [[ -n "$VPS1_PASS" || -n "$VPS2_PASS" ]]; then
-        command -v sshpass &>/dev/null || missing+=("sshpass (apt install sshpass)")
-    fi
-    [[ ${#missing[@]} -gt 0 ]] && err "Не хватает: ${missing[*]}"
-}
+if [[ -n "$VPS1_PASS" || -n "$VPS2_PASS" ]]; then
+    check_deps --need-sshpass
+else
+    check_deps
+fi
 
 # ── Генерация ключей ───────────────────────────────────────────────────────
 gen_key_pair() {

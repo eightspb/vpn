@@ -10,12 +10,19 @@
 #   - Цвета и функции вывода (log, ok, err, warn, step)
 #   - Парсинг конфигов (clean_value, read_kv, parse_kv)
 #   - Загрузка дефолтов из .env / keys.env (load_defaults_from_files)
+#   - Валидация обязательных переменных (require_vars)
 #   - Работа с путями Windows/Linux (expand_tilde)
 #   - SSH-хелперы (ssh_exec, ssh_upload, ssh_run_script)
 #   - Авто-поиск SSH-ключа (auto_pick_key_if_missing)
 #   - Копирование ключа из /mnt/ во временный файл (prepare_key_for_ssh)
 #   - Очистка временных ключей (cleanup_temp_keys)
 #   - Проверка зависимостей (check_deps)
+#
+# Переменные загружаются по приоритету:
+#   1) CLI-аргументы (задаются в вызывающем скрипте до/после load_defaults_from_files)
+#   2) .env (SSH-доступ, ADGUARD_PASS, CLIENT_IP)
+#   3) vpn-output/keys.env (ключи, сети, порты после деплоя)
+#   4) Встроенные дефолты
 # =============================================================================
 
 # ── Цвета ────────────────────────────────────────────────────────────────────
@@ -60,45 +67,105 @@ parse_kv() {
         'BEGIN{n=length(k)} substr($0,1,n+1)==k"=" {print substr($0,n+2); exit}'
 }
 
+# ── Определение корня проекта ─────────────────────────────────────────────────
+
+# Находит корень проекта (директорию с .env и lib/common.sh)
+_find_project_root() {
+    local dir="${COMMON_SH_DIR:-}"
+    if [[ -z "$dir" ]]; then
+        dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    fi
+    # lib/common.sh лежит в <root>/lib/ — поднимаемся на уровень выше
+    local root="${dir%/lib}"
+    [[ "$root" == "$dir" ]] && root="$dir"
+    printf "%s" "$root"
+}
+
+COMMON_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(_find_project_root)"
+
 # ── Загрузка дефолтов из файлов ───────────────────────────────────────────────
-# Заполняет переменные VPS1_*/VPS2_* из ./vpn-output/keys.env и ./.env
-# Переменные должны быть объявлены в вызывающем скрипте до вызова этой функции.
+# Заполняет переменные из .env и vpn-output/keys.env.
+# Не перезаписывает переменные, которые уже имеют непустое значение
+# (позволяет CLI-аргументам иметь приоритет).
+#
+# Загружает: VPS1_IP, VPS1_USER, VPS1_KEY, VPS1_PASS,
+#            VPS2_IP, VPS2_USER, VPS2_KEY, VPS2_PASS,
+#            ADGUARD_PASS, CLIENT_IP/CLIENT_VPN_IP,
+#            TUN_NET, CLIENT_NET, VPS2_TUN_IP, VPS1_PORT_CLIENTS, VPS2_PORT
 load_defaults_from_files() {
-    if [[ -f "./vpn-output/keys.env" ]]; then
-        local k_vps1 k_tun
-        k_vps1="$(read_kv ./vpn-output/keys.env VPS1_IP)"
-        k_tun="$(read_kv ./vpn-output/keys.env TUN_NET)"
-        [[ -n "${k_vps1}" && -z "${VPS1_IP:-}" ]] && VPS1_IP="$k_vps1"
-        if [[ -n "${k_tun}" ]]; then
-            # Если в вызывающем скрипте есть VPS2_TUN_IP — обновляем его
-            [[ -v VPS2_TUN_IP ]] && VPS2_TUN_IP="${k_tun}.2"
-            # Если есть TUN_NET — обновляем
-            [[ -v TUN_NET && -z "${TUN_NET:-}" ]] && TUN_NET="$k_tun"
+    local root="${PROJECT_ROOT:-.}"
+    local env_file="${root}/.env"
+    local keys_file="${root}/vpn-output/keys.env"
+
+    # --- keys.env (ключи, сети, порты после деплоя) ---
+    if [[ -f "$keys_file" ]]; then
+        local k_val
+        k_val="$(read_kv "$keys_file" VPS1_IP)"
+        [[ -n "$k_val" && -z "${VPS1_IP:-}" ]] && VPS1_IP="$k_val"
+
+        k_val="$(read_kv "$keys_file" TUN_NET)"
+        if [[ -n "$k_val" ]]; then
+            [[ -z "${TUN_NET:-}" ]]     && TUN_NET="$k_val"
+            [[ -z "${VPS2_TUN_IP:-}" ]] && VPS2_TUN_IP="${k_val}.2"
         fi
+
+        k_val="$(read_kv "$keys_file" CLIENT_NET)"
+        [[ -n "$k_val" && -z "${CLIENT_NET:-}" ]] && CLIENT_NET="$k_val"
+
+        k_val="$(read_kv "$keys_file" VPS1_PORT_CLIENTS)"
+        [[ -n "$k_val" && -z "${VPS1_PORT_CLIENTS:-}" ]] && VPS1_PORT_CLIENTS="$k_val"
+
+        k_val="$(read_kv "$keys_file" VPS2_PORT)"
+        [[ -n "$k_val" && -z "${VPS2_PORT:-}" ]] && VPS2_PORT="$k_val"
+
+        k_val="$(read_kv "$keys_file" CLIENT_VPN_IP)"
+        [[ -n "$k_val" && -z "${CLIENT_VPN_IP:-}" ]] && CLIENT_VPN_IP="$k_val"
     fi
 
-    if [[ -f "./.env" ]]; then
-        local e_vps1_ip e_vps1_user e_vps1_key e_vps1_pass
-        local e_vps2_ip e_vps2_user e_vps2_key e_vps2_pass
-        e_vps1_ip="$(read_kv ./.env VPS1_IP)"
-        e_vps1_user="$(read_kv ./.env VPS1_USER)"
-        e_vps1_key="$(read_kv ./.env VPS1_KEY)"
-        e_vps1_pass="$(read_kv ./.env VPS1_PASS)"
-        e_vps2_ip="$(read_kv ./.env VPS2_IP)"
-        e_vps2_user="$(read_kv ./.env VPS2_USER)"
-        e_vps2_key="$(read_kv ./.env VPS2_KEY)"
-        e_vps2_pass="$(read_kv ./.env VPS2_PASS)"
+    # --- .env (SSH-доступ и дополнительные параметры) ---
+    if [[ -f "$env_file" ]]; then
+        local e_val
 
-        [[ -n "${e_vps1_ip}" ]]   && VPS1_IP="$e_vps1_ip"
-        [[ -n "${e_vps1_user}" ]] && VPS1_USER="$e_vps1_user"
-        [[ -n "${e_vps1_key}" ]]  && VPS1_KEY="$e_vps1_key"
-        [[ -n "${e_vps1_pass}" ]] && VPS1_PASS="$e_vps1_pass"
-        [[ -v VPS2_IP   && -n "${e_vps2_ip}" ]]   && VPS2_IP="$e_vps2_ip"
-        [[ -v VPS2_USER && -n "${e_vps2_user}" ]] && VPS2_USER="$e_vps2_user"
-        [[ -v VPS2_KEY  && -n "${e_vps2_key}" ]]  && VPS2_KEY="$e_vps2_key"
-        [[ -v VPS2_PASS && -n "${e_vps2_pass}" ]] && VPS2_PASS="$e_vps2_pass"
+        e_val="$(read_kv "$env_file" VPS1_IP)"
+        [[ -n "$e_val" && -z "${VPS1_IP:-}" ]]   && VPS1_IP="$e_val"
+        e_val="$(read_kv "$env_file" VPS1_USER)"
+        [[ -n "$e_val" && -z "${VPS1_USER:-}" ]]  && VPS1_USER="$e_val"
+        e_val="$(read_kv "$env_file" VPS1_KEY)"
+        [[ -n "$e_val" && -z "${VPS1_KEY:-}" ]]   && VPS1_KEY="$e_val"
+        e_val="$(read_kv "$env_file" VPS1_PASS)"
+        [[ -n "$e_val" && -z "${VPS1_PASS:-}" ]]  && VPS1_PASS="$e_val"
+
+        e_val="$(read_kv "$env_file" VPS2_IP)"
+        [[ -n "$e_val" && -z "${VPS2_IP:-}" ]]    && VPS2_IP="$e_val"
+        e_val="$(read_kv "$env_file" VPS2_USER)"
+        [[ -n "$e_val" && -z "${VPS2_USER:-}" ]]   && VPS2_USER="$e_val"
+        e_val="$(read_kv "$env_file" VPS2_KEY)"
+        [[ -n "$e_val" && -z "${VPS2_KEY:-}" ]]    && VPS2_KEY="$e_val"
+        e_val="$(read_kv "$env_file" VPS2_PASS)"
+        [[ -n "$e_val" && -z "${VPS2_PASS:-}" ]]   && VPS2_PASS="$e_val"
+
+        e_val="$(read_kv "$env_file" ADGUARD_PASS)"
+        [[ -n "$e_val" && -z "${ADGUARD_PASS:-}" ]] && ADGUARD_PASS="$e_val"
+        e_val="$(read_kv "$env_file" CLIENT_IP)"
+        [[ -n "$e_val" && -z "${CLIENT_VPN_IP:-}" ]] && CLIENT_VPN_IP="$e_val"
     fi
     return 0
+}
+
+# ── Валидация обязательных переменных ─────────────────────────────────────────
+# Использование: require_vars "описание" VAR1 VAR2 ...
+# Проверяет что все перечисленные переменные не пусты, иначе — err с подсказкой.
+require_vars() {
+    local context="$1"; shift
+    local missing=()
+    for var_name in "$@"; do
+        local val="${!var_name:-}"
+        [[ -z "$val" ]] && missing+=("$var_name")
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        err "${context}: не заданы обязательные переменные: ${missing[*]}. Проверьте .env или передайте через CLI."
+    fi
 }
 
 # ── Работа с путями ───────────────────────────────────────────────────────────
