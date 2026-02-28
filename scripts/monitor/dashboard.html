@@ -574,7 +574,7 @@ body {
 'use strict';
 
 const DATA_URL   = 'vpn-output/data.json';
-const POLL_MS    = 5000;
+const POLL_MS    = 2000;
 const HIST_MAX   = 60;
 const LS_KEY     = 'vpn_dash4';
 
@@ -958,6 +958,18 @@ function renderConns(v1, v2){
 // ---- Main poll ----
 let nextAt = 0;
 
+function mergeVps(prev, cur) {
+  if (!prev || !cur) return cur;
+  const merged = Object.assign({}, cur);
+  const keep = ['rx_total','tx_total','mem_total_mb','mem_used_mb','mem_avail_mb',
+    'mem_free_mb','mem_buffers_mb','mem_cached_mb','disk_pct','disk_used','disk_total',
+    'tcp_est','udp_conn','proc_count','open_files','cpus','cpu_mhz','uptime_s'];
+  for (const k of keep) {
+    if ((!merged[k] && merged[k] !== 0) && prev[k]) merged[k] = prev[k];
+  }
+  return merged;
+}
+
 async function poll(){
   nextAt = Date.now() + POLL_MS;
   let data = null;
@@ -966,7 +978,11 @@ async function poll(){
     if(r.ok) data = await r.json();
   } catch(_){}
 
-  if(data){
+  if(data && data.ts){
+    if (lastData) {
+      if (data.vps1) data.vps1 = mergeVps(lastData.vps1, data.vps1);
+      if (data.vps2) data.vps2 = mergeVps(lastData.vps2, data.vps2);
+    }
     lastData = data;
     renderHdrVpnCount(data);
     renderHdrTraffic(data);

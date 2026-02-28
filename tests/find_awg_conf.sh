@@ -1,5 +1,5 @@
 #!/bin/bash
-KEY=~/.ssh/ssh-key-1772056840349
+KEY=.ssh/ssh-key-1772056840349
 VPS1=slava@130.193.41.13
 
 echo "=== Поиск awg конфигов ==="

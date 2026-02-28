@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy-proxy.sh — deploys youtube-proxy to VPS2
 # Called from deploy.sh with --with-proxy flag, or standalone:
-#   bash deploy-proxy.sh --vps2-ip 38.135.122.81 --vps2-key ~/.ssh/id_rsa
+#   bash deploy-proxy.sh --vps2-ip 38.135.122.81 --vps2-key .ssh/id_rsa
 #
 # Prerequisites: Go installed locally (https://go.dev/dl/)
 # The script cross-compiles the binary for Linux amd64 and uploads it.

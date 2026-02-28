@@ -30,8 +30,8 @@
 #
 # Примеры:
 #   # С SSH ключом:
-#   bash deploy.sh --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
-#                  --vps2-ip 38.135.122.81  --vps2-key ~/.ssh/id_rsa
+#   bash deploy.sh --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
+#                  --vps2-ip 38.135.122.81  --vps2-key .ssh/id_rsa
 #
 #   # С паролем (нужен sshpass):
 #   bash deploy.sh --vps1-ip 1.2.3.4 --vps1-user root --vps1-pass "mypass" \

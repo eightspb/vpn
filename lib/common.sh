@@ -193,8 +193,11 @@ expand_tilde() {
     else
         local p_no_home_tilde="${p#${HOME}/\~/}"
         if [[ "$p_no_home_tilde" != "$p" ]]; then
-            # Артефакт двойного разворачивания — убираем лишний ~/
             printf "%s" "${HOME}/${p_no_home_tilde}"
+        elif [[ "$p" == .ssh/* || "$p" == ./.ssh/* ]]; then
+            local proj_root
+            proj_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
+            printf "%s" "${proj_root}/${p}"
         else
             printf "%s" "$p"
         fi
@@ -209,6 +212,14 @@ auto_pick_key_if_missing() {
     win_home="${USERPROFILE:-}"; win_home="${win_home//\\//}"
     if [[ -n "$current_key" && -f "$current_key" ]]; then
         printf "%s" "$current_key"; return
+    fi
+    # Ищем ключи в .ssh/ папке проекта
+    local project_ssh_dir
+    project_ssh_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/.ssh"
+    if [[ -d "$project_ssh_dir" ]]; then
+        for candidate in "$project_ssh_dir"/id_ed25519 "$project_ssh_dir"/id_rsa "$project_ssh_dir"/*; do
+            [[ -f "$candidate" && ! "$candidate" =~ \.pub$ ]] && { printf "%s" "$candidate"; return; }
+        done
     fi
     for candidate in "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/id_rsa" \
                      "${win_home}/.ssh/id_ed25519" "${win_home}/.ssh/id_rsa" \

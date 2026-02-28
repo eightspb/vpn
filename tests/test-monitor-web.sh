@@ -387,6 +387,51 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 9e. Anti-flickering: dashboard merges previous data, server sends no-cache
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 9e. Anti-flickering и Cache-Control ---"
+
+if grep -q 'mergeVps' scripts/monitor/dashboard.html; then
+    ok "scripts/monitor/dashboard.html: mergeVps() предотвращает мерцание нулевых значений"
+else
+    fail "scripts/monitor/dashboard.html: mergeVps() отсутствует — total-значения могут мерцать"
+fi
+
+if grep -q 'no-store.*no-cache\|no-cache.*no-store' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: HTTP-сервер отправляет Cache-Control: no-store для data.json"
+else
+    fail "scripts/monitor/monitor-web.sh: HTTP-сервер не отправляет Cache-Control для data.json"
+fi
+
+if grep -q "data\.json" scripts/monitor/monitor-web.sh | head -1 && \
+   grep -q '_no_cache' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: no-cache применяется только к data.json"
+else
+    fail "scripts/monitor/monitor-web.sh: нет выборочного no-cache для data.json"
+fi
+
+# ---------------------------------------------------------------------------
+# 9f. Интервал обновления: backend <= 3s, frontend <= 3s
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 9f. Интервал обновления ---"
+
+backend_interval=$(grep -m1 '^INTERVAL=' scripts/monitor/monitor-web.sh | head -1 | sed 's/INTERVAL=//')
+if [[ -n "$backend_interval" && "$backend_interval" -le 3 ]]; then
+    ok "scripts/monitor/monitor-web.sh: INTERVAL=${backend_interval}s (<= 3s)"
+else
+    fail "scripts/monitor/monitor-web.sh: INTERVAL=${backend_interval:-?}s (должен быть <= 3s для быстрого обновления)"
+fi
+
+frontend_poll=$(grep -m1 'POLL_MS' scripts/monitor/dashboard.html | head -1 | grep -oE '[0-9]+')
+if [[ -n "$frontend_poll" && "$frontend_poll" -le 3000 ]]; then
+    ok "scripts/monitor/dashboard.html: POLL_MS=${frontend_poll}ms (<= 3000ms)"
+else
+    fail "scripts/monitor/dashboard.html: POLL_MS=${frontend_poll:-?}ms (должен быть <= 3000ms)"
+fi
+
+# ---------------------------------------------------------------------------
 # 10. scripts/windows/install-ca.ps1 присутствует и корректен
 # ---------------------------------------------------------------------------
 echo ""

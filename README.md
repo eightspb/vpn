@@ -21,7 +21,7 @@
 |----------|--------|-----------|
 | IP-адрес VPS1 | `130.193.41.13` | Панель хостинга |
 | IP-адрес VPS2 | `38.135.122.81` | Панель хостинга |
-| SSH-ключ | `~/.ssh/id_rsa` | Ваш локальный ключ |
+| SSH-ключ | `.ssh/id_rsa` | Ваш локальный ключ |
 | SSH-пользователь | `root` | По умолчанию root |
 
 Всё остальное (ключи WireGuard, сети, конфиги клиентов) генерируется автоматически.
@@ -39,14 +39,17 @@
 # 1. Клонировать репозиторий
 git clone https://github.com/eightspb/vpn.git && cd vpn
 
-# 2. Создать конфиг — вписать IP серверов и путь к SSH-ключу
+# 2. Скопировать SSH-ключ в проект
+cp ~/.ssh/id_rsa .ssh/
+
+# 3. Создать конфиг — вписать IP серверов
 cp .env.example .env
 nano .env   # или любой редактор
 
-# 3. Развернуть VPN на обоих серверах (одна команда)
+# 4. Развернуть VPN на обоих серверах (одна команда)
 bash manage.sh deploy
 
-# 4. (Опционально) Развернуть с блокировкой рекламы YouTube
+# 5. (Опционально) Развернуть с блокировкой рекламы YouTube
 bash manage.sh deploy --with-proxy --remove-adguard
 ```
 
@@ -57,11 +60,11 @@ bash manage.sh deploy --with-proxy --remove-adguard
 ```
 VPS1_IP=1.2.3.4
 VPS1_USER=root
-VPS1_KEY=~/.ssh/id_rsa
+VPS1_KEY=.ssh/id_rsa
 
 VPS2_IP=5.6.7.8
 VPS2_USER=root
-VPS2_KEY=~/.ssh/id_rsa
+VPS2_KEY=.ssh/id_rsa
 ```
 
 ### Что произойдёт при деплое
@@ -223,7 +226,7 @@ cat vpn-output/peer_myphone_10_9_0_3.conf | qr
 
 ```bash
 # Список пиров и их последний handshake (на VPS1)
-ssh -i ~/.ssh/ssh-key-1772056840349 slava@130.193.41.13 "sudo awg show awg1"
+ssh -i .ssh/ssh-key-1772056840349 slava@130.193.41.13 "sudo awg show awg1"
 ```
 
 Вывод покажет каждый пир: публичный ключ, IP, время последнего соединения и трафик.
@@ -280,10 +283,10 @@ systemctl restart youtube-proxy
 
 ```bash
 # VPS1 (Яндекс Москва)
-ssh -i ~/.ssh/ssh-key-1772056840349 slava@130.193.41.13
+ssh -i .ssh/ssh-key-1772056840349 slava@130.193.41.13
 
 # VPS2 (foxcloud США, Бруклин)
-ssh -i ~/.ssh/<your_key> <user>@38.135.122.81
+ssh -i .ssh/<your_key> <user>@38.135.122.81
 ```
 
 ## Конфиги на серверах
@@ -333,12 +336,12 @@ CLIENT_IP=10.9.0.2
 
 VPS1_IP=1.2.3.4
 VPS1_USER=root
-VPS1_KEY=~/.ssh/id_rsa
+VPS1_KEY=.ssh/id_rsa
 VPS1_PASS=
 
 VPS2_IP=5.6.7.8
 VPS2_USER=root
-VPS2_KEY=~/.ssh/id_rsa
+VPS2_KEY=.ssh/id_rsa
 VPS2_PASS=
 ```
 
@@ -354,7 +357,8 @@ bash scripts/tools/diagnose.sh     # параметры из .env
 ## Гигиена секретов
 
 - Скопируйте шаблон: `cp .env.example .env` и заполните своими данными.
-- Не коммитьте `.env` и `vpn-output/*` (это уже добавлено в `.gitignore`).
+- SSH-ключи хранятся в `.ssh/` в корне проекта (не в `~/.ssh/`). Скопируйте свой ключ: `cp ~/.ssh/id_rsa .ssh/`
+- Не коммитьте `.env`, `.ssh/` и `vpn-output/*` (это уже добавлено в `.gitignore`).
 - Если секреты раньше были в `README.md`, считайте их скомпрометированными и ротируйте.
 
 ## Управление через manage.sh (Фаза 5)
@@ -397,8 +401,8 @@ bash manage.sh deploy --with-proxy --remove-adguard
 
 # Или с явными параметрами (перезаписывают .env)
 bash manage.sh deploy \
-  --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
-  --vps2-ip 38.135.122.81 --vps2-key ~/.ssh/ssh-key-1772056840349 \
+  --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
+  --vps2-ip 38.135.122.81 --vps2-key .ssh/ssh-key-1772056840349 \
   --with-proxy --remove-adguard
 
 # Мониторинг (параметры из .env)
@@ -432,8 +436,8 @@ bash manage.sh deploy --with-proxy --remove-adguard
 
 # Или с явными параметрами:
 bash manage.sh deploy \
-  --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
-  --vps2-ip 38.135.122.81 --vps2-user root  --vps2-key ~/.ssh/ssh-key-1772056840349 \
+  --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
+  --vps2-ip 38.135.122.81 --vps2-user root  --vps2-key .ssh/ssh-key-1772056840349 \
   --with-proxy --remove-adguard
 ```
 
@@ -444,7 +448,7 @@ bash manage.sh deploy \
 **Только YouTube Ad Proxy (без переустановки VPN):**
 ```bash
 bash manage.sh deploy --proxy \
-  --vps2-ip 38.135.122.81 --vps2-key ~/.ssh/ssh-key-1772056840349 \
+  --vps2-ip 38.135.122.81 --vps2-key .ssh/ssh-key-1772056840349 \
   --remove-adguard
 ```
 
@@ -568,7 +572,7 @@ bash scripts/monitor/monitor-web.sh
 > Индикатор `Active VPN` в веб-дашборде считает только активные peer'ы `awg1` с
 > `latest handshake <= 180s` (а не общее число всех peer'ов в конфиге).
 > Для запуска мониторинга нужен Python рантайм: подходит `python3`, `python` или `py -3`.
-> Данные обновляются каждые 5 секунд через SSH-подключение к серверам.
+> Данные обновляются каждые 2 секунды через SSH-подключение к серверам.
 
 ## Тесты
 

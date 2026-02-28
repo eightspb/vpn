@@ -14,11 +14,11 @@
 #   help        Показать эту справку
 #
 # Примеры:
-#   bash manage.sh deploy --vps1-ip 1.2.3.4 --vps1-key ~/.ssh/id_rsa \
-#                         --vps2-ip 5.6.7.8 --vps2-key ~/.ssh/id_rsa
-#   bash manage.sh deploy --vps1 --vps1-ip 1.2.3.4 --vps1-key ~/.ssh/id_rsa --vps2-ip 5.6.7.8
-#   bash manage.sh deploy --vps2 --vps2-ip 5.6.7.8 --vps2-key ~/.ssh/id_rsa
-#   bash manage.sh deploy --proxy --vps2-ip 5.6.7.8 --vps2-key ~/.ssh/id_rsa
+#   bash manage.sh deploy --vps1-ip 1.2.3.4 --vps1-key .ssh/id_rsa \
+#                         --vps2-ip 5.6.7.8 --vps2-key .ssh/id_rsa
+#   bash manage.sh deploy --vps1 --vps1-ip 1.2.3.4 --vps1-key .ssh/id_rsa --vps2-ip 5.6.7.8
+#   bash manage.sh deploy --vps2 --vps2-ip 5.6.7.8 --vps2-key .ssh/id_rsa
+#   bash manage.sh deploy --proxy --vps2-ip 5.6.7.8 --vps2-key .ssh/id_rsa
 #   bash manage.sh monitor
 #   bash manage.sh monitor --web
 #   bash manage.sh add-peer
@@ -94,15 +94,15 @@ manage.sh deploy — деплой VPN
 
 Примеры:
   bash manage.sh deploy \
-    --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 \
-    --vps2-ip 38.135.122.81 --vps2-key ~/.ssh/ssh-key-1772056840349 \
+    --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
+    --vps2-ip 38.135.122.81 --vps2-key .ssh/ssh-key-1772056840349 \
     --with-proxy --remove-adguard
 
   bash manage.sh deploy --vps1 \
-    --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349 --vps2-ip 38.135.122.81
+    --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 --vps2-ip 38.135.122.81
 
   bash manage.sh deploy --proxy \
-    --vps2-ip 38.135.122.81 --vps2-key ~/.ssh/id_rsa --remove-adguard
+    --vps2-ip 38.135.122.81 --vps2-key .ssh/id_rsa --remove-adguard
 EOF
 }
 
@@ -128,8 +128,8 @@ manage.sh monitor — мониторинг серверов
 Примеры:
   bash manage.sh monitor
   bash manage.sh monitor --web
-  bash manage.sh monitor --vps1-ip 1.2.3.4 --vps1-key ~/.ssh/id_rsa \
-                         --vps2-ip 5.6.7.8 --vps2-key ~/.ssh/id_rsa
+  bash manage.sh monitor --vps1-ip 1.2.3.4 --vps1-key .ssh/id_rsa \
+                         --vps2-ip 5.6.7.8 --vps2-key .ssh/id_rsa
 EOF
 }
 
@@ -150,7 +150,7 @@ manage.sh add-peer — добавить новый WireGuard-пир на VPS1
 Примеры:
   bash manage.sh add-peer
   bash manage.sh add-peer --peer-name tablet --peer-ip 10.9.0.5
-  bash manage.sh add-peer --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349
+  bash manage.sh add-peer --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349
 EOF
 }
 
@@ -169,7 +169,7 @@ manage.sh check — проверить связность VPN-цепочки
 
 Примеры:
   bash manage.sh check
-  bash manage.sh check --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349
+  bash manage.sh check --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349
 EOF
 }
 

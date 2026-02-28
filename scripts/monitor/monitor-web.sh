@@ -28,7 +28,7 @@ VPS1_INTERNAL="10.9.0.1"
 VPS2_INTERNAL=""
 
 VPS2_TUN_IP="10.8.0.2"
-INTERVAL=5
+INTERVAL=2
 HTTP_PORT=8080
 SSH_TIMEOUT=8
 JSON_FILE="./vpn-output/data.json"
@@ -633,8 +633,15 @@ IS_WIN = platform.system() == 'Windows'
 class VPNHandler(SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
 
+    def end_headers(self):
+        if hasattr(self, '_no_cache') and self._no_cache:
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+        super().end_headers()
+
     def do_GET(self):
         p = urlparse(self.path)
+        self._no_cache = p.path.endswith('/data.json') or p.path == '/data.json'
         if p.path == '/api/ping':
             self._handle_ping(parse_qs(p.query))
         else:

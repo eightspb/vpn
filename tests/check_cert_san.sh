@@ -1,6 +1,6 @@
 #!/bin/bash
 # Проверяет IP SAN в серверном сертификате youtube-proxy на VPS2
-KEY=~/.ssh/ssh-key-1772056840349
+KEY=.ssh/ssh-key-1772056840349
 VPS2=root@38.135.122.81
 
 echo "=== Проверка SAN в server.crt ==="

@@ -57,7 +57,7 @@ add_phone_peer.sh — добавляет нового WireGuard-пира на VP
   --help                Показать эту справку
 
 Примеры:
-  bash add_phone_peer.sh --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key ~/.ssh/ssh-key-1772056840349
+  bash add_phone_peer.sh --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349
   bash add_phone_peer.sh --peer-name tablet --peer-ip 10.9.0.5
   # Если .env заполнен — достаточно:
   bash add_phone_peer.sh
