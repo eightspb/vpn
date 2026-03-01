@@ -132,6 +132,8 @@ vpn-output/
 
 **Для первого устройства** — файл `vpn-output/client.conf` уже готов после `bash manage.sh deploy`.
 
+Во все новые `.conf` автоматически добавляется строка `# Name = <server> - <device>`, чтобы в AmneziaWG профиль отображался с названием сервера.
+
 **Для каждого следующего устройства** — генерируется отдельный конфиг:
 ```bash
 bash manage.sh add-peer --peer-name myphone
@@ -377,6 +379,7 @@ bash manage.sh <команда> [опции]
 | Команда | Описание |
 |---------|----------|
 | `deploy` | Полный деплой VPN (оба сервера) |
+| `deploy --regen-configs` | Полный ре-деплой + перегенерация `client.conf` и `phone.conf` |
 | `deploy --vps1` | Только VPS1 |
 | `deploy --vps2` | Только VPS2 |
 | `deploy --proxy` | Только YouTube Ad Proxy |
@@ -410,6 +413,9 @@ bash manage.sh <команда> [опции]
 ```bash
 # Полный деплой (параметры из .env, достаточно указать только флаги)
 bash manage.sh deploy --with-proxy --remove-adguard
+
+# Полный ре-деплой с автоматической перегенерацией client/phone конфигов
+bash manage.sh deploy --regen-configs
 
 # Или с явными параметрами (перезаписывают .env)
 bash manage.sh deploy \
@@ -485,11 +491,12 @@ bash manage.sh deploy --vps2 --vps2-ip ... --vps2-key ... --keys-file ./vpn-outp
 | Что запускаем | Что перевыпускается автоматически | Что нужно сделать вручную после |
 |---|---|---|
 | `bash manage.sh deploy` (полный деплой) | Полная пересоздача WG-ключей (туннель + сервер + базовый клиент), новый `vpn-output/keys.env`, новый `vpn-output/client.conf` | Переимпортировать актуальные `.conf` на устройства (старые конфиги могут перестать работать) |
+| `bash manage.sh deploy --regen-configs` | Полный деплой + дополнительная пересборка `client.conf` и `phone.conf` через `scripts/tools/generate-all-configs.sh` | Переимпортировать оба пересобранных конфига (`client.conf`, `phone.conf`) |
 | `bash manage.sh deploy --vps1` / `bash scripts/deploy/deploy-vps1.sh` | Генерируются новые ключи для связки VPS1↔VPS2 и клиента, пересобираются `keys.env` и `client.conf` | Обязательно выполнить деплой VPS2 с этим же `keys.env`; затем переимпортировать клиентские конфиги |
 | `bash manage.sh deploy --vps2` / `bash scripts/deploy/deploy-vps2.sh --keys-file ...` | Новые ключи не генерируются (используется переданный `keys.env`) | Обычно ничего перевыпускать на клиентах не нужно, если `keys.env` не меняли |
 | `bash manage.sh deploy --proxy` / `bash scripts/deploy/deploy-proxy.sh` | Перегенерируется только TLS server cert для `youtube-proxy` (CA сохраняется) | VPN-конфиги и WG-ключи не трогаются; Root CA на устройствах переустанавливать не нужно |
 | `bash manage.sh peers add ...` / `peers batch` | Создаётся новый peer-ключ и новый `peer_*.conf` только для добавляемых устройств | Импортировать только новые `peer_*.conf`; существующие устройства не трогать |
-| `bash scripts/tools/generate-all-configs.sh` | Пересборка `client.conf`, `phone.conf`, split-конфигов; обновление `keys.env`; ключ телефона может быть пересоздан, если утерян/невалиден | Переимпортировать пересобранные конфиги; если был пересоздан ключ телефона, старый телефонный конфиг нужно заменить |
+| `bash scripts/tools/generate-all-configs.sh` | Пересборка `client.conf`, `phone.conf`; обновление `keys.env`; ключ телефона может быть пересоздан, если утерян/невалиден | Переимпортировать пересобранные конфиги; если был пересоздан ключ телефона, старый телефонный конфиг нужно заменить |
 | `powershell -File scripts/windows/repair-local-configs.ps1` | Пересобирает локальные `client.conf`/`phone.conf` под текущие серверные параметры без ротации приватных ключей | Если файл изменился (Endpoint/PublicKey/Junk), переимпортировать конфиг на устройстве |
 | `bash scripts/tools/repair-vps1.sh` | Восстанавливает `awg1.conf` на VPS1 без пересоздания ключей | Перевыпуск конфигов обычно не нужен |
 
@@ -513,11 +520,8 @@ bash manage.sh peers add --name laptop --type pc --qr
 # Добавить роутер с конкретным IP (MTU=1400)
 bash manage.sh peers add --name router-home --type router --ip 10.9.0.100
 
-# Добавить с split tunnel (RU напрямую)
-bash manage.sh peers add --name work-pc --type pc --mode split
-
-# Создать оба конфига (full + split)
-bash manage.sh peers add --name ipad --type tablet --mode both --qr-png
+# Добавить планшет и сразу сохранить QR в PNG
+bash manage.sh peers add --name ipad --type tablet --qr-png
 ```
 
 ### Массовое создание пиров
@@ -535,10 +539,10 @@ bash manage.sh peers batch --file devices.csv
 
 Формат CSV:
 ```
-name,type,mode,ip
-laptop-anna,pc,full,
-phone-boris,phone,split,
-router-office,router,full,10.9.0.100
+name,type,ip
+laptop-anna,pc,
+phone-boris,phone,
+router-office,router,10.9.0.100
 ```
 
 ### Просмотр и управление
@@ -559,7 +563,7 @@ bash manage.sh peers remove --ip 10.9.0.5 --force
 
 # Экспортировать конфиг / QR
 bash manage.sh peers export --name myphone --qr
-bash manage.sh peers export --name myphone --mode split --qr-png
+bash manage.sh peers export --name myphone --qr-png
 ```
 
 ### Типы устройств
@@ -612,7 +616,7 @@ bash scripts/monitor/monitor-web.sh
 
 ## Админ-панель (REST API)
 
-Flask-бэкенд для управления VPN через веб-интерфейс. Хранит данные в SQLite, синхронизирует пиры с `vpn-output/peers.json`. **Все конфиги** хранятся в одной папке `vpn-output/` — оттуда они подгружаются для управления; вкладка **Peers** показывает все выданные пиры (из БД и из папки конфигов) с указанием статуса (active/disabled/from_config) и подключения (online/offline). Авторизация в UI работает только через HTTP-only сессию (`admin_sid`, cookie + `credentials: include`) — токен в `localStorage` больше не используется.
+Flask-бэкенд для управления VPN через веб-интерфейс. Хранит данные в SQLite, синхронизирует пиры с `vpn-output/peers.json`. **Все конфиги** хранятся в одной папке `vpn-output/` — оттуда они подгружаются для управления; вкладка **Peers** показывает все выданные пиры (из БД и из папки конфигов) с указанием статуса (active/disabled/from_config) и подключения (online/offline). Для каждого пира отображается состояние конфигурации: версия, число скачиваний, индикатор скачивания последней версии, а также runtime-статус конфига (`live`/`inactive`) по факту наличия пира на VPN-сервере. Это помогает сразу видеть неактивные (нерабочие) конфиги. Пиры, найденные только в папке конфигов, можно импортировать в БД прямо из UI и редактировать как обычные. Авторизация в UI работает только через HTTP-only сессию (`admin_sid`, cookie + `credentials: include`) — токен в `localStorage` больше не используется.
 
 **Адрес входа:** после запуска откройте в браузере **http://localhost:8081/** (или http://localhost:8081/admin.html).  
 Порт **8081** выбран специально, чтобы не конфликтовать с веб-дашбордом мониторинга (**monitor --web**), который занимает порт **8080**.
@@ -654,10 +658,11 @@ python scripts/admin/admin-server.py --prod --cert cert.pem --key key.pem
 | GET | `/api/peers` | Список всех пиров: БД + папка vpn-output (фильтры: `?status=`, `?type=`, `?search=`), live-метрики (handshake/traffic) и `connection_threshold_sec` |
 | POST | `/api/peers` | Создать пира (генерация ключей, IP, регистрация на VPS1) |
 | POST | `/api/peers/batch` | Массовое создание (prefix+count или CSV) |
-| GET/PUT/DELETE | `/api/peers/:id` | CRUD пира; через `PUT` можно редактировать имя, type/mode/status, группу, expiry/traffic, а также `public_key` / `private_key` / `preshared_key` / `config_file` |
+| GET/PUT/DELETE | `/api/peers/:id` | CRUD пира; через `PUT` можно редактировать имя, type/status, группу, expiry/traffic, а также `public_key` / `private_key` / `preshared_key` / `config_file` |
+| POST | `/api/peers/by-ip/:ip/import` | Импорт пира из `vpn-output/*.conf` в БД (для дальнейшего редактирования в UI) |
 | POST | `/api/peers/:id/disable` | Отключить пира на сервере |
 | POST | `/api/peers/:id/enable` | Включить пира обратно |
-| GET | `/api/peers/:id/config` | Скачать .conf (для пиров из БД) |
+| GET | `/api/peers/:id/config` | Скачать .conf (для пиров из БД); увеличивает счётчик скачиваний и помечает текущую версию как скачанную |
 | GET | `/api/peers/by-ip/:ip/config` | Скачать .conf по IP (для пиров только из папки) |
 | GET | `/api/peers/:id/qr` | QR-код (base64 PNG) |
 | GET | `/api/peers/stats` | Статистика подсети |
@@ -865,33 +870,9 @@ bash scripts/tools/load-test.sh --quick --output report.txt
 - **WireGuard throughput** — RX/TX трафик по каждому пиру
 - **Метрики до/после** — сравнение состояния серверов до и после нагрузочного теста
 
-### Split tunneling (раздельное туннелирование)
+### Текущая схема маршрутизации
 
-**Режим "Россия напрямую, остальное через VPN"** — российские IP-адреса идут без VPN, весь остальной интернет через туннель:
-
-```
-vpn-output/client-split.conf   ← первое устройство
-vpn-output/phone-split.conf    ← телефон
-```
-
-Конфиги содержат ~21 000 CIDR-блоков в `AllowedIPs` — это весь публичный IPv4-интернет за вычетом 8 569 российских диапазонов (данные RIPE NCC) и RFC1918-сетей.
-
-**Обновить список российских IP** (рекомендуется раз в несколько месяцев):
-
-```bash
-# Скачать актуальный список и пересоздать split-конфиги
-python3 scripts/tools/generate-split-config.py
-
-# Или использовать уже скачанный файл ru-ips.txt
-python3 scripts/tools/generate-split-config.py --ru-list ru-ips.txt
-
-# Только вывести AllowedIPs без записи файлов
-python3 scripts/tools/generate-split-config.py --print-only
-```
-
-Источник IP-диапазонов: [ipv4.fetus.jp/ru.txt](https://ipv4.fetus.jp/ru.txt) (обновляется ежедневно из RIPE NCC).
-
-> Файл `ru-ips.txt` добавлен в `.gitignore` — он автоматически скачивается скриптом.
+Проект использует только `full tunnel`: весь клиентский трафик идет через VPN.
 
 ### Применённые оптимизации
 

@@ -92,6 +92,7 @@ manage.sh deploy — деплой VPN
   --output-dir DIR      Куда сохранить конфиги (default: ./vpn-output)
   --with-proxy          Задеплоить YouTube Proxy на VPS2
   --remove-adguard      Удалить AdGuard Home (только с --with-proxy)
+  --regen-configs       После полного деплоя пересобрать все клиентские конфиги (client/phone)
 
 Для --vps1: те же опции без vps2-* (кроме --vps2-ip для туннеля)
 Для --vps2: --vps2-ip, --vps2-key/--vps2-pass, --keys-file
@@ -102,6 +103,9 @@ manage.sh deploy — деплой VPN
     --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
     --vps2-ip 38.135.122.81 --vps2-key .ssh/ssh-key-1772056840349 \
     --with-proxy --remove-adguard
+
+  # Полный ре-деплой + перегенерация client/phone конфигов
+  bash manage.sh deploy --regen-configs
 
   bash manage.sh deploy --vps1 \
     --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 --vps2-ip 38.135.122.81
@@ -199,6 +203,7 @@ EOF
 cmd_deploy() {
     local mode="full"
     local extra_args=()
+    local regen_configs=false
 
     # Разбираем первый аргумент — режим
     if [[ "${1:-}" == "--vps1" ]]; then
@@ -213,22 +218,45 @@ cmd_deploy() {
         usage_deploy; return 0
     fi
 
-    extra_args=("$@")
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --regen-configs)
+                regen_configs=true
+                shift
+                ;;
+            *)
+                extra_args+=("$1")
+                shift
+                ;;
+        esac
+    done
 
     case "$mode" in
         full)
             log "Запуск полного деплоя (deploy.sh)..."
             bash "${SCRIPT_DIR}/scripts/deploy/deploy.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            if [[ "$regen_configs" == "true" ]]; then
+                local regen_script="${SCRIPT_DIR}/scripts/tools/generate-all-configs.sh"
+                [[ -f "$regen_script" ]] || err "Не найден скрипт перегенерации конфигов: $regen_script"
+                log "Перегенерация клиентских конфигов (generate-all-configs.sh)..."
+                bash "$regen_script"
+                [[ -f "${SCRIPT_DIR}/vpn-output/client.conf" ]] || err "Перегенерация не завершена: отсутствует vpn-output/client.conf"
+                [[ -f "${SCRIPT_DIR}/vpn-output/phone.conf" ]] || err "Перегенерация не завершена: отсутствует vpn-output/phone.conf"
+                ok "Клиентские конфиги пересобраны: vpn-output/client.conf, vpn-output/phone.conf"
+            fi
             ;;
         vps1)
+            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя (без --vps1/--vps2/--proxy)"
             log "Запуск деплоя VPS1 (deploy-vps1.sh)..."
             bash "${SCRIPT_DIR}/scripts/deploy/deploy-vps1.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         vps2)
+            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя (без --vps1/--vps2/--proxy)"
             log "Запуск деплоя VPS2 (deploy-vps2.sh)..."
             bash "${SCRIPT_DIR}/scripts/deploy/deploy-vps2.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         proxy)
+            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя (без --vps1/--vps2/--proxy)"
             log "Запуск деплоя YouTube Proxy (deploy-proxy.sh)..."
             bash "${SCRIPT_DIR}/scripts/deploy/deploy-proxy.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;

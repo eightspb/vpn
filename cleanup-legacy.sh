@@ -6,8 +6,7 @@
 #   1. Удаляет phase4-cleanup.sh (одноразовый скрипт, уже выполнен, в .gitignore)
 #   2. Удаляет vpn-dashboard-nginx.conf (устаревший конфиг, в .gitignore)
 #   3. Удаляет ru-ips.txt (автогенерируемый файл, в .gitignore)
-#   4. Обновляет README.md: пути python3 generate-split-config.py -> scripts/tools/
-#   5. Обновляет .gitignore: убирает запись phase4-cleanup.sh (файл удалён)
+#   4. Обновляет .gitignore: убирает запись phase4-cleanup.sh (файл удалён)
 #
 # Использование:
 #   bash cleanup-legacy.sh [--dry-run]
@@ -63,18 +62,9 @@ remove_file "vpn-dashboard-nginx.conf"
 remove_file "ru-ips.txt"
 
 # =============================================================================
-# 2. Обновление README.md: пути к generate-split-config.py
+# 2. Обновление .gitignore: убираем запись phase4-cleanup.sh
 # =============================================================================
-log "=== 2. Обновление README.md ==="
-
-apply_sed "README.md" \
-    's|python3 generate-split-config\.py|python3 scripts/tools/generate-split-config.py|g'
-log "  README.md: пути generate-split-config.py обновлены"
-
-# =============================================================================
-# 3. Обновление .gitignore: убираем запись phase4-cleanup.sh
-# =============================================================================
-log "=== 3. Обновление .gitignore ==="
+log "=== 2. Обновление .gitignore ==="
 
 apply_sed ".gitignore" \
     '/^# one-time cleanup script\r\?$/d'

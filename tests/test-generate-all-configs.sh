@@ -3,10 +3,10 @@
 # test-scripts/tools/generate-all-configs.sh — Тесты для scripts/tools/generate-all-configs.sh
 #
 # Проверяет что сгенерированные конфиги корректны:
-#   1. Все 4 файла существуют
+#   1. Основные файлы существуют
 #   2. Формат конфигов валиден (секции [Interface] и [Peer])
 #   3. Ключи и параметры присутствуют
-#   4. Split-конфиги содержат больше AllowedIPs чем full
+#   4. Конфиги создаются в full-tunnel режиме
 #   5. Junk-параметры присутствуют во всех конфигах
 #   6. Endpoint указывает на правильный IP
 #   7. keys.env и keys.txt обновлены
@@ -51,17 +51,16 @@ echo ""
 echo "--- 1. Проверка наличия файлов ---"
 assert_file_exists "$OUTPUT/client.conf" "client.conf"
 assert_file_exists "$OUTPUT/phone.conf" "phone.conf"
-assert_file_exists "$OUTPUT/client-split.conf" "client-split.conf"
-assert_file_exists "$OUTPUT/phone-split.conf" "phone-split.conf"
 assert_file_exists "$OUTPUT/keys.env" "keys.env"
 assert_file_exists "$OUTPUT/keys.txt" "keys.txt"
 
 # --- Test 2: Config format ---
 echo ""
 echo "--- 2. Формат конфигов ---"
-for conf in client.conf phone.conf client-split.conf phone-split.conf; do
+for conf in client.conf phone.conf; do
     f="$OUTPUT/$conf"
     [[ ! -f "$f" ]] && continue
+    assert_contains "$f" "^# Name =" "$conf: имя профиля для AmneziaWG"
     assert_contains "$f" "\\[Interface\\]" "$conf: секция [Interface]"
     assert_contains "$f" "\\[Peer\\]" "$conf: секция [Peer]"
     assert_contains "$f" "PrivateKey" "$conf: PrivateKey"
@@ -77,7 +76,7 @@ done
 # --- Test 3: Junk parameters ---
 echo ""
 echo "--- 3. Junk-параметры ---"
-for conf in client.conf phone.conf client-split.conf phone-split.conf; do
+for conf in client.conf phone.conf; do
     f="$OUTPUT/$conf"
     [[ ! -f "$f" ]] && continue
     assert_contains "$f" "^Jc" "$conf: Jc"
@@ -103,24 +102,20 @@ read_kv() {
     awk -F= -v k="$2" '$1==k{sub(/^[^=]*=/,"",$0); gsub(/\r/,""); gsub(/^[ \t"'"'"']+|[ \t"'"'"']+$/,""); print; exit}' "$1" 2>/dev/null
 }
 VPS1_IP="$(read_kv .env VPS1_IP)"
-for conf in client.conf phone.conf client-split.conf phone-split.conf; do
+for conf in client.conf phone.conf; do
     f="$OUTPUT/$conf"
     [[ ! -f "$f" ]] && continue
     assert_contains "$f" "${VPS1_IP}:51820" "$conf: Endpoint=${VPS1_IP}:51820"
 done
 
-# --- Test 6: Split configs have more AllowedIPs ---
+# --- Test 6: Full tunnel AllowedIPs ---
 echo ""
-echo "--- 6. Split vs Full AllowedIPs ---"
-if [[ -f "$OUTPUT/client.conf" && -f "$OUTPUT/client-split.conf" ]]; then
-    FULL_LEN=$(grep "AllowedIPs" "$OUTPUT/client.conf" | wc -c)
-    SPLIT_LEN=$(grep "AllowedIPs" "$OUTPUT/client-split.conf" | wc -c)
-    if [[ $SPLIT_LEN -gt $FULL_LEN ]]; then
-        pass "client-split AllowedIPs длиннее full ($SPLIT_LEN > $FULL_LEN chars)"
-    else
-        fail "client-split AllowedIPs НЕ длиннее full"
-    fi
-fi
+echo "--- 6. Full tunnel AllowedIPs ---"
+for conf in client.conf phone.conf; do
+    f="$OUTPUT/$conf"
+    [[ ! -f "$f" ]] && continue
+    assert_contains "$f" "^AllowedIPs.*0\\.0\\.0\\.0/0" "$conf: full tunnel (AllowedIPs=0.0.0.0/0)"
+done
 
 # --- Test 7: Different private keys ---
 echo ""
@@ -139,7 +134,7 @@ fi
 echo ""
 echo "--- 8. Одинаковый серверный ключ ---"
 PUBS=()
-for conf in client.conf phone.conf client-split.conf phone-split.conf; do
+for conf in client.conf phone.conf; do
     f="$OUTPUT/$conf"
     [[ ! -f "$f" ]] && continue
     PUB=$(awk '/^\[Peer\]/,0' "$f" | grep "PublicKey" | awk '{print $NF}')

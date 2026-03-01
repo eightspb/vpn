@@ -1,7 +1,7 @@
-name,type,mode,ip
-laptop-anna,pc,full,
-phone-anna,phone,full,
-ipad-boris,tablet,split,
-phone-boris,phone,full,
-router-office,router,full,10.9.0.100
-desktop-work,pc,both,
+name,type,ip
+laptop-anna,pc,
+phone-anna,phone,
+ipad-boris,tablet,
+phone-boris,phone,
+router-office,router,10.9.0.100
+desktop-work,pc,

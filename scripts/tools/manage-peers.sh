@@ -6,13 +6,13 @@
 #   add       Добавить одного или нескольких пиров
 #   list      Показать все пиры на сервере
 #   remove    Удалить пира по имени или IP
-#   export    Экспортировать конфиг пира (full/split) + QR
+#   export    Экспортировать конфиг пира + QR
 #   batch     Массовое создание пиров из CSV/списка
 #   info      Показать лимиты и статистику подсети
 #
 # Использование:
 #   bash manage-peers.sh add --name laptop
-#   bash manage-peers.sh add --name laptop --type pc --mode split
+#   bash manage-peers.sh add --name laptop --type pc
 #   bash manage-peers.sh batch --file devices.csv
 #   bash manage-peers.sh batch --prefix dev --count 50
 #   bash manage-peers.sh list
@@ -61,6 +61,8 @@ _fetch_server_data() {
     _SERVER_DATA=$(_ssh '
 echo "=PUB="
 sudo awg show awg1 public-key
+echo "=NAME="
+hostname -f 2>/dev/null || hostname
 echo "=PORT="
 sudo awg show awg1 listen-port
 echo "=JUNK="
@@ -175,17 +177,22 @@ _count_used_ips() {
 # ── Config generation ────────────────────────────────────────────────────────
 
 _write_config() {
-    local file="$1" priv="$2" addr="$3" mtu="$4" allowed="$5"
-    local server_pub server_port junk_block dns endpoint
+    local file="$1" priv="$2" addr="$3" mtu="$4" allowed="$5" profile_name="${6:-}"
+    local server_pub server_port junk_block dns endpoint server_name
 
     _fetch_server_data
     server_pub="$(_get_field PUB)"
+    server_name="$(_get_field NAME)"
     server_port="$(_get_field PORT)"
     junk_block="$(_get_field JUNK)"
     dns="10.8.0.2"
     endpoint="${VPS1_IP}:${server_port}"
+    server_name="${server_name:-$VPS1_IP}"
+    profile_name="${profile_name:-${server_name}}"
 
     {
+        echo "# Name = ${profile_name}"
+        echo ""
         echo "[Interface]"
         echo "Address    = ${addr}"
         echo "PrivateKey = ${priv}"
@@ -202,15 +209,6 @@ _write_config() {
         echo "AllowedIPs          = ${allowed}"
         echo "PersistentKeepalive = 25"
     } > "$file"
-}
-
-_get_split_allowed() {
-    local split_py="${SCRIPT_DIR}/generate-split-config.py"
-    if [[ -f "$split_py" ]]; then
-        python3 "$split_py" --print-only 2>/dev/null
-    else
-        echo ""
-    fi
 }
 
 # ── QR code generation ───────────────────────────────────────────────────────
@@ -266,14 +264,14 @@ except ImportError:
 # ── Command: add ─────────────────────────────────────────────────────────────
 
 cmd_add() {
-    local name="" ip="" type="phone" mode="full" show_qr=false save_qr=false
+    local name="" ip="" type="phone" show_qr=false save_qr=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --name|-n)   name="$2";  shift 2 ;;
             --ip)        ip="$2";    shift 2 ;;
             --type|-t)   type="$2";  shift 2 ;;
-            --mode|-m)   mode="$2";  shift 2 ;;
+            --mode|-m)   warn "--mode больше не поддерживается, используется только full tunnel"; shift 2 ;;
             --qr)        show_qr=true; shift ;;
             --qr-png)    save_qr=true; shift ;;
             --help|-h)   usage_add; return 0 ;;
@@ -335,28 +333,13 @@ printf 'PRIV=%s\nPUB=%s\n' \"\$PRIV\" \"\$PUB\"
     local safe_ip="${ip//./_}"
     local conf_file="${OUTPUT_DIR}/peer_${safe_name}_${safe_ip}.conf"
 
-    local allowed="0.0.0.0/0"
-    if [[ "$mode" == "split" ]]; then
-        info "Генерация split-tunnel AllowedIPs (может занять 30-60 сек)..."
-        allowed="$(_get_split_allowed)"
-        [[ -z "$allowed" ]] && { warn "Не удалось сгенерировать split AllowedIPs, используем full tunnel"; allowed="0.0.0.0/0"; }
-    fi
+    local server_name profile_name
+    server_name="$(_get_field NAME)"
+    server_name="${server_name:-$VPS1_IP}"
+    profile_name="${server_name} - ${name}"
 
-    _write_config "$conf_file" "$priv" "${ip}/24" "$mtu" "$allowed"
+    _write_config "$conf_file" "$priv" "${ip}/24" "$mtu" "0.0.0.0/0" "$profile_name"
     ok "Конфиг: $conf_file"
-
-    if [[ "$mode" == "both" ]]; then
-        local split_file="${OUTPUT_DIR}/peer_${safe_name}_${safe_ip}_split.conf"
-        info "Генерация split-tunnel конфига..."
-        local split_allowed
-        split_allowed="$(_get_split_allowed)"
-        if [[ -n "$split_allowed" ]]; then
-            _write_config "$split_file" "$priv" "${ip}/24" "$mtu" "$split_allowed"
-            ok "Split конфиг: $split_file"
-        else
-            warn "Не удалось сгенерировать split конфиг"
-        fi
-    fi
 
     _db_add "$name" "$ip" "$type" "$pub" "$priv" "$(date +%Y-%m-%d_%H:%M:%S)" "$conf_file"
     ok "Пир добавлен в базу"
@@ -376,7 +359,7 @@ printf 'PRIV=%s\nPUB=%s\n' \"\$PRIV\" \"\$PUB\"
     ok "Пир $name добавлен успешно"
     echo "  IP:     $ip"
     echo "  Тип:    $type (MTU=$mtu)"
-    echo "  Режим:  $mode"
+    echo "  Режим:  full"
     echo "  Конфиг: $conf_file"
     echo ""
 }
@@ -384,7 +367,7 @@ printf 'PRIV=%s\nPUB=%s\n' \"\$PRIV\" \"\$PUB\"
 # ── Command: batch ───────────────────────────────────────────────────────────
 
 cmd_batch() {
-    local file="" prefix="" count=0 type="phone" mode="full" save_qr=false
+    local file="" prefix="" count=0 type="phone" save_qr=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -392,7 +375,7 @@ cmd_batch() {
             --prefix|-p)  prefix="$2";  shift 2 ;;
             --count|-c)   count="$2";   shift 2 ;;
             --type|-t)    type="$2";    shift 2 ;;
-            --mode|-m)    mode="$2";    shift 2 ;;
+            --mode|-m)    warn "--mode больше не поддерживается, используется только full tunnel"; shift 2 ;;
             --qr-png)     save_qr=true; shift ;;
             --help|-h)    usage_batch; return 0 ;;
             *) err "Неизвестный параметр для batch: $1" ;;
@@ -407,19 +390,29 @@ cmd_batch() {
     if [[ -n "$file" ]]; then
         [[ -f "$file" ]] || err "Файл не найден: $file"
         info "Чтение устройств из $file..."
-        while IFS=',' read -r dname dtype dmode dip; do
+        while IFS=',' read -r dname dtype col3 col4; do
             dname="$(echo "$dname" | tr -d '[:space:]')"
             dtype="$(echo "${dtype:-$type}" | tr -d '[:space:]')"
-            dmode="$(echo "${dmode:-$mode}" | tr -d '[:space:]')"
-            dip="$(echo "${dip:-}" | tr -d '[:space:]')"
+            col3="$(echo "${col3:-}" | tr -d '[:space:]')"
+            col4="$(echo "${col4:-}" | tr -d '[:space:]')"
+            # CSV compatibility:
+            # - new format: name,type,ip
+            # - legacy format: name,type,mode,ip
+            if [[ -n "$col4" ]]; then
+                dip="$col4"
+            elif [[ "$col3" =~ ^${TUN_NET//./\\.}\.[0-9]+$ ]]; then
+                dip="$col3"
+            else
+                dip=""
+            fi
             [[ -z "$dname" || "$dname" == "name" ]] && continue
-            devices+=("${dname}|${dtype}|${dmode}|${dip}")
+            devices+=("${dname}|${dtype}|${dip}")
         done < "$file"
     else
         [[ "$count" -gt 0 ]] || err "Укажите --count <N> (количество пиров)"
         info "Генерация $count пиров с префиксом '$prefix'..."
         for i in $(seq 1 "$count"); do
-            devices+=("${prefix}-$(printf '%03d' "$i")|${type}|${mode}|")
+            devices+=("${prefix}-$(printf '%03d' "$i")|${type}|")
         done
     fi
 
@@ -454,24 +447,24 @@ cmd_batch() {
         echo "# Date: $(date)"
         echo "# Total: $total"
         echo "#"
-        echo "# name,ip,type,mode,config_file,status"
+        echo "# name,ip,type,config_file,status"
     } > "$batch_report"
 
     for entry in "${devices[@]}"; do
-        IFS='|' read -r dname dtype dmode dip <<< "$entry"
+        IFS='|' read -r dname dtype dip <<< "$entry"
 
-        local add_args=(--name "$dname" --type "$dtype" --mode "$dmode")
+        local add_args=(--name "$dname" --type "$dtype")
         [[ -n "$dip" ]] && add_args+=(--ip "$dip")
         [[ "$save_qr" == true ]] && add_args+=(--qr-png)
 
-        echo -e "${CYAN}[$((success + failed + 1))/$total]${NC} Создаю пир: $dname ($dtype, $dmode)..."
+        echo -e "${CYAN}[$((success + failed + 1))/$total]${NC} Создаю пир: $dname ($dtype, full)..."
 
         if cmd_add "${add_args[@]}" 2>&1; then
             ((success++))
-            echo "$dname,$dip,$dtype,$dmode,,OK" >> "$batch_report"
+            echo "$dname,$dip,$dtype,full,,OK" >> "$batch_report"
         else
             ((failed++))
-            echo "$dname,$dip,$dtype,$dmode,,FAILED" >> "$batch_report"
+            echo "$dname,$dip,$dtype,full,,FAILED" >> "$batch_report"
             warn "Не удалось создать пир: $dname"
         fi
 
@@ -673,13 +666,13 @@ open('/etc/amnezia/amneziawg/awg1.conf','w').write('\\n'.join(new_lines))
 # ── Command: export ──────────────────────────────────────────────────────────
 
 cmd_export() {
-    local name="" ip="" mode="full" show_qr=false save_qr=false
+    local name="" ip="" show_qr=false save_qr=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --name|-n)  name="$2";  shift 2 ;;
             --ip)       ip="$2";    shift 2 ;;
-            --mode|-m)  mode="$2";  shift 2 ;;
+            --mode|-m)  warn "--mode больше не поддерживается, экспортируется full tunnel"; shift 2 ;;
             --qr)       show_qr=true; shift ;;
             --qr-png)   save_qr=true; shift ;;
             --help|-h)  usage_export; return 0 ;;
@@ -719,18 +712,13 @@ cmd_export() {
     local safe_name="${name//[^a-zA-Z0-9_-]/_}"
     local safe_ip="${peer_ip//./_}"
 
-    if [[ "$mode" == "split" ]]; then
-        local split_file="${OUTPUT_DIR}/peer_${safe_name}_${safe_ip}_split.conf"
-        info "Генерация split-tunnel конфига для $name..."
-        local split_allowed
-        split_allowed="$(_get_split_allowed)"
-        [[ -z "$split_allowed" ]] && err "Не удалось сгенерировать split AllowedIPs"
-        _write_config "$split_file" "$priv" "${peer_ip}/24" "$mtu" "$split_allowed"
-        conf_file="$split_file"
-        ok "Split конфиг: $split_file"
-    elif [[ ! -f "$conf_file" ]]; then
+    if [[ ! -f "$conf_file" ]]; then
         info "Пересоздание конфига для $name..."
-        _write_config "$conf_file" "$priv" "${peer_ip}/24" "$mtu" "0.0.0.0/0"
+        local server_name profile_name
+        server_name="$(_get_field NAME)"
+        server_name="${server_name:-$VPS1_IP}"
+        profile_name="${server_name} - ${name}"
+        _write_config "$conf_file" "$priv" "${peer_ip}/24" "$mtu" "0.0.0.0/0" "$profile_name"
         ok "Конфиг пересоздан: $conf_file"
     else
         ok "Конфиг: $conf_file"
@@ -852,15 +840,12 @@ manage-peers.sh add — добавить нового пира
                         pc, desktop, laptop, computer  (MTU=1360)
                         phone, mobile, tablet, ios, android  (MTU=1280)
                         router, mikrotik, openwrt  (MTU=1400)
-  --mode, -m MODE     Режим туннеля:
-                        full   — весь трафик через VPN (default)
-                        split  — RU напрямую, остальное через VPN
-                        both   — создать оба конфига
+  --mode, -m MODE     Устарело (игнорируется, всегда full tunnel)
   --qr                Показать QR-код в терминале
   --qr-png            Сохранить QR-код как PNG
 
 Примеры:
-  bash manage-peers.sh add --name laptop --type pc --mode both
+  bash manage-peers.sh add --name laptop --type pc
   bash manage-peers.sh add --name iphone --type phone --qr
   bash manage-peers.sh add --name router-home --type router --ip 10.9.0.100
 EOF
@@ -871,8 +856,8 @@ usage_batch() {
 manage-peers.sh batch — массовое создание пиров
 
 Режим 1: Из CSV-файла
-  --file, -f FILE     CSV-файл (name,type,mode,ip)
-                      type, mode, ip — опциональны
+  --file, -f FILE     CSV-файл (name,type,ip)
+                      type, ip — опциональны
 
 Режим 2: По шаблону
   --prefix, -p NAME   Префикс имени (например: user → user-001, user-002, ...)
@@ -880,19 +865,19 @@ manage-peers.sh batch — массовое создание пиров
 
 Общие опции:
   --type, -t TYPE     Тип по умолчанию (default: phone)
-  --mode, -m MODE     Режим по умолчанию (default: full)
+  --mode, -m MODE     Устарело (игнорируется)
   --qr-png            Сохранить QR-коды как PNG
 
 Формат CSV:
-  name,type,mode,ip
-  laptop,pc,full,
-  phone-anna,phone,split,
-  router-office,router,full,10.9.0.100
+  name,type,ip
+  laptop,pc,
+  phone-anna,phone,
+  router-office,router,10.9.0.100
 
 Примеры:
   bash manage-peers.sh batch --prefix employee --count 50 --type phone
   bash manage-peers.sh batch --file devices.csv --qr-png
-  bash manage-peers.sh batch --prefix dev --count 10 --type pc --mode both
+  bash manage-peers.sh batch --prefix dev --count 10 --type pc
 EOF
 }
 
@@ -931,13 +916,13 @@ manage-peers.sh export — экспортировать конфиг / QR-код
 Опции:
   --name, -n NAME    Имя пира
   --ip IP            IP пира
-  --mode, -m MODE    full (default) или split
+  --mode, -m MODE    Устарело (игнорируется)
   --qr               Показать QR в терминале
   --qr-png           Сохранить QR как PNG
 
 Примеры:
   bash manage-peers.sh export --name laptop --qr
-  bash manage-peers.sh export --name phone --mode split --qr-png
+  bash manage-peers.sh export --name phone --qr-png
 EOF
 }
 

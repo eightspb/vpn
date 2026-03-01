@@ -24,7 +24,7 @@ youtube-proxy/youtube-proxy
 vpn-dashboard-nginx.conf
 
 
-# Auto-generated Russian IP list (re-download with generate-split-config.py)
+# Auto-generated local IP artifacts
 ru-ips.txt
 
 # SSH keys (private, do not commit)

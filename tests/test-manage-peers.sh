@@ -133,6 +133,12 @@ else
     fail "Шаблон не содержит [Peer]"
 fi
 
+if grep -q '# Name =' "$MANAGE_PEERS"; then
+    pass "Шаблон содержит имя профиля для AmneziaWG"
+else
+    fail "Шаблон не содержит имя профиля для AmneziaWG"
+fi
+
 if grep -q 'PrivateKey' "$MANAGE_PEERS"; then
     pass "Шаблон содержит PrivateKey"
 else
@@ -242,8 +248,8 @@ else
     fail "CSV парсинг не найден"
 fi
 
-if grep -q 'name.*type.*mode' "$MANAGE_PEERS" || grep -q 'dname.*dtype.*dmode' "$MANAGE_PEERS"; then
-    pass "CSV поля: name, type, mode"
+if grep -q 'name.*type.*ip' "$MANAGE_PEERS" || grep -q 'dname.*dtype.*dip' "$MANAGE_PEERS"; then
+    pass "CSV поля: name, type, ip"
 else
     fail "CSV поля не найдены"
 fi
@@ -251,14 +257,14 @@ fi
 # Test CSV parsing logic
 TMP_CSV=$(mktemp)
 cat > "$TMP_CSV" <<'CSVEOF'
-name,type,mode,ip
-laptop-1,pc,full,
-phone-anna,phone,split,
-router-office,router,full,10.9.0.100
+name,type,ip
+laptop-1,pc,
+phone-anna,phone,
+router-office,router,10.9.0.100
 CSVEOF
 
 line_count=0
-while IFS=',' read -r dname dtype dmode dip; do
+while IFS=',' read -r dname dtype dip; do
     dname="$(echo "$dname" | tr -d '[:space:]')"
     [[ -z "$dname" || "$dname" == "name" ]] && continue
     line_count=$((line_count + 1))
@@ -375,11 +381,11 @@ for dtype in pc desktop laptop phone mobile tablet router mikrotik openwrt; do
     fi
 done
 
-# Split tunnel support
+# Split tunnel removed
 if grep -q 'split' "$MANAGE_PEERS"; then
-    pass "Поддержка split tunnel"
+    fail "В manage-peers.sh всё ещё есть split tunnel"
 else
-    fail "Split tunnel не поддерживается"
+    pass "Split tunnel удалён из manage-peers.sh"
 fi
 
 # QR code support

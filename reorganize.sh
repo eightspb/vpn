@@ -90,7 +90,6 @@ move_file "benchmark.sh"             "scripts/tools/benchmark.sh"
 move_file "check_ping.sh"            "scripts/tools/check_ping.sh"
 move_file "diagnose.sh"              "scripts/tools/diagnose.sh"
 move_file "generate-all-configs.sh"  "scripts/tools/generate-all-configs.sh"
-move_file "generate-split-config.py" "scripts/tools/generate-split-config.py"
 move_file "load-test.sh"             "scripts/tools/load-test.sh"
 move_file "optimize-vpn.sh"          "scripts/tools/optimize-vpn.sh"
 move_file "repair-vps1.sh"           "scripts/tools/repair-vps1.sh"
@@ -196,11 +195,6 @@ if [[ -f "scripts/tools/optimize-vpn.sh" ]] || $DRY_RUN; then
         's|source "${SCRIPT_DIR}/lib/common\.sh"|source "${SCRIPT_DIR}/../../lib/common.sh"|g'
     log "  scripts/tools/optimize-vpn.sh: source путь обновлён"
 fi
-
-# --- scripts/tools/generate-all-configs.sh ---
-# python3 generate-split-config.py -> python3 "${SCRIPT_DIR}/generate-split-config.py"
-# (скрипт делает cd "$SCRIPT_DIR", так что относительный путь сохраняется — ничего менять не нужно)
-log "  scripts/tools/generate-all-configs.sh: generate-split-config.py в той же папке — без изменений"
 
 # --- scripts/monitor/monitor-web.sh ---
 # cd "$SCRIPT_DIR" — теперь SCRIPT_DIR = scripts/monitor/

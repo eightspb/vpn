@@ -216,7 +216,11 @@ CREATE TABLE IF NOT EXISTS peers (
     expiry_date     TEXT,
     group_name      TEXT,
     traffic_limit_mb INTEGER,
-    config_file     TEXT
+    config_file     TEXT,
+    config_version  INTEGER NOT NULL DEFAULT 1,
+    config_download_count INTEGER NOT NULL DEFAULT 0,
+    last_config_downloaded_at TEXT,
+    last_downloaded_config_version INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -260,6 +264,30 @@ def init_db() -> None:
     conn.commit()
     conn.close()
     log.info("Database initialised: %s", DB_PATH)
+
+
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r[1] == column for r in rows)
+
+
+def _ensure_db_migrations() -> None:
+    """Apply lightweight schema migrations for existing databases."""
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    try:
+        if not _column_exists(conn, "peers", "config_version"):
+            conn.execute("ALTER TABLE peers ADD COLUMN config_version INTEGER NOT NULL DEFAULT 1")
+        if not _column_exists(conn, "peers", "config_download_count"):
+            conn.execute("ALTER TABLE peers ADD COLUMN config_download_count INTEGER NOT NULL DEFAULT 0")
+        if not _column_exists(conn, "peers", "last_config_downloaded_at"):
+            conn.execute("ALTER TABLE peers ADD COLUMN last_config_downloaded_at TEXT")
+        if not _column_exists(conn, "peers", "last_downloaded_config_version"):
+            conn.execute("ALTER TABLE peers ADD COLUMN last_downloaded_config_version INTEGER")
+        conn.execute("UPDATE peers SET config_version = 1 WHERE config_version IS NULL")
+        conn.execute("UPDATE peers SET config_download_count = 0 WHERE config_download_count IS NULL")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # =============================================================================
@@ -564,7 +592,8 @@ def _create_token(user_id: int, username: str) -> tuple[str, str]:
     """Return (token, expires_at_iso). Token as str for JSON."""
     ttl = app.config["JWT_TTL_HOURS"]
     exp = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=ttl)
-    payload = {"sub": user_id, "usr": username, "exp": exp}
+    # PyJWT validates `sub` as a string in newer versions.
+    payload = {"sub": str(user_id), "usr": username, "exp": exp}
     raw = jwt.encode(payload, app.config["SECRET_KEY"], algorithm="HS256")
     token = raw if isinstance(raw, str) else raw.decode("utf-8")
     return token, exp.isoformat()
@@ -636,7 +665,11 @@ def auth_required(fn):
         payload = _decode_token(token)
         if payload is None:
             return jsonify({"error": "Invalid or expired token"}), 401
-        g.user_id = payload["sub"]
+        sub = payload.get("sub")
+        try:
+            g.user_id = int(sub)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid token subject"}), 401
         g.username = payload["usr"]
         g.token = token
         return fn(*args, **kwargs)
@@ -971,6 +1004,42 @@ def _peer_to_dict(row: sqlite3.Row) -> dict:
     return dict(row)
 
 
+def _enrich_peer_config_state(peer: dict) -> dict:
+    """Add config download state fields used by admin UI."""
+    try:
+        config_version = int(peer.get("config_version") or 1)
+    except (TypeError, ValueError):
+        config_version = 1
+    try:
+        download_count = int(peer.get("config_download_count") or 0)
+    except (TypeError, ValueError):
+        download_count = 0
+    ldv_raw = peer.get("last_downloaded_config_version")
+    try:
+        downloaded_version = int(ldv_raw) if ldv_raw is not None else None
+    except (TypeError, ValueError):
+        downloaded_version = None
+    downloaded_latest = downloaded_version is not None and downloaded_version >= config_version
+    peer["config_version"] = config_version
+    peer["config_download_count"] = download_count
+    peer["last_downloaded_config_version"] = downloaded_version
+    peer["config_downloaded_latest"] = downloaded_latest
+    peer["config_download_required"] = not downloaded_latest
+    return peer
+
+
+def _mark_config_downloaded(db: sqlite3.Connection, peer_id: int) -> None:
+    db.execute(
+        """UPDATE peers
+           SET config_download_count = COALESCE(config_download_count, 0) + 1,
+               last_config_downloaded_at = datetime('now'),
+               last_downloaded_config_version = COALESCE(config_version, 1)
+           WHERE id = ?""",
+        (peer_id,),
+    )
+    db.commit()
+
+
 def _split_wg_dump_line(line: str) -> list[str]:
     """Split `wg/awg show ... dump` line (tab or space separated)."""
     return [p for p in re.split(r"\s+", line.strip()) if p]
@@ -984,9 +1053,16 @@ def _extract_peer_ip(allowed_ips: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _get_monitoring_by_ip() -> dict[str, dict]:
-    """Fetch monitoring peers from VPS1, return dict ip -> {handshake_age_sec, rx_bytes, tx_bytes}."""
-    result: dict[str, dict] = {}
+def _get_monitoring_indexes() -> tuple[dict[str, dict], dict[str, dict]]:
+    """
+    Fetch runtime peer snapshot from VPS1.
+
+    Returns two indexes:
+      - by_ip:  ip -> peer metrics
+      - by_pub: public_key -> peer metrics
+    """
+    by_ip: dict[str, dict] = {}
+    by_pub: dict[str, dict] = {}
     dump_cmd = (
         "sudo -n awg show awg1 dump 2>/dev/null || "
         "sudo -n wg show awg1 dump 2>/dev/null || "
@@ -997,16 +1073,15 @@ def _get_monitoring_by_ip() -> dict[str, dict]:
         dump = _vps1_ssh(dump_cmd)
     except Exception as exc:
         log.debug("Monitoring by IP (SSH): %s", exc)
-        return result
+        return by_ip, by_pub
     now = int(time.time())
     for line in dump.strip().splitlines():
         parts = _split_wg_dump_line(line)
         if len(parts) < 7:
             continue
+        public_key = parts[0]
         allowed_ips = parts[3] if len(parts) > 3 else ""
         peer_ip = _extract_peer_ip(allowed_ips)
-        if not peer_ip:
-            continue
         try:
             latest_handshake = int(parts[4]) if len(parts) > 4 and parts[4] and parts[4] != "0" else 0
         except (ValueError, TypeError):
@@ -1020,13 +1095,18 @@ def _get_monitoring_by_ip() -> dict[str, dict]:
         except (ValueError, TypeError):
             tx_bytes = 0
         handshake_age = now - latest_handshake if latest_handshake > 0 else None
-        result[peer_ip] = {
+        peer_data = {
+            "public_key": public_key,
             "handshake_age_sec": handshake_age,
             "rx_bytes": rx_bytes,
             "tx_bytes": tx_bytes,
             "latest_handshake": latest_handshake,
         }
-    return result
+        if public_key:
+            by_pub[public_key] = peer_data
+        if peer_ip:
+            by_ip[peer_ip] = peer_data
+    return by_ip, by_pub
 
 
 @app.route("/api/peers", methods=["GET"])
@@ -1059,7 +1139,7 @@ def peers_list():
 
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     rows = db.execute(f"SELECT * FROM peers{where} ORDER BY id", params).fetchall()
-    db_peers = [_peer_to_dict(r) for r in rows]
+    db_peers = [_enrich_peer_config_state(_peer_to_dict(r)) for r in rows]
     db_config_files = set()
     for p in db_peers:
         cf = p.get("config_file")
@@ -1094,17 +1174,38 @@ def peers_list():
                 "traffic_limit_mb": None,
                 "config_file": cp["config_file"],
                 "source": "config_file",
+                "config_version": 1,
+                "config_download_count": 0,
+                "last_config_downloaded_at": None,
+                "last_downloaded_config_version": None,
+                "config_downloaded_latest": False,
+                "config_download_required": True,
             })
 
     try:
-        mon_by_ip = _get_monitoring_by_ip()
+        mon_by_ip, mon_by_pub = _get_monitoring_indexes()
     except Exception as exc:
         log.debug("peers_list: monitoring fetch failed: %s", exc)
-        mon_by_ip = {}
+        mon_by_ip, mon_by_pub = {}, {}
     CONNECTED_HS_SEC = max(15, PEER_ONLINE_HANDSHAKE_SEC)
     for p in db_peers:
         ip = p.get("ip")
+        pub = p.get("public_key")
         mon = mon_by_ip.get(ip) if ip else None
+        if mon is None and pub:
+            mon = mon_by_pub.get(pub)
+        config_runtime_active = mon is not None
+        if config_runtime_active:
+            config_runtime_reason = "ok"
+        elif p.get("status") in {"disabled", "revoked"}:
+            config_runtime_reason = "peer_disabled"
+        elif p.get("status") == "from_config":
+            config_runtime_reason = "config_not_loaded_on_server"
+        else:
+            config_runtime_reason = "peer_missing_on_server"
+        p["config_runtime_active"] = config_runtime_active
+        p["config_runtime_status"] = "active" if config_runtime_active else "inactive"
+        p["config_runtime_reason"] = config_runtime_reason
         p["connection_status"] = "online" if mon and mon.get("handshake_age_sec") is not None and mon["handshake_age_sec"] < CONNECTED_HS_SEC else "offline"
         p["handshake_age_sec"] = mon.get("handshake_age_sec") if mon else None
         p["rx_bytes"] = mon.get("rx_bytes") if mon else None
@@ -1121,15 +1222,16 @@ def peers_create():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "").strip()
     device_type = data.get("type", "phone").strip().lower()
-    mode = data.get("mode", "full").strip().lower()
+    mode = "full"
     group_name = data.get("group_name")
     expiry_date = data.get("expiry_date")
     traffic_limit_mb = data.get("traffic_limit_mb")
 
     if not name:
         return jsonify({"error": "name is required"}), 400
-    if mode not in {"full", "split"}:
-        return jsonify({"error": "mode must be one of: full, split"}), 400
+    req_mode = str(data.get("mode", "full")).strip().lower()
+    if req_mode and req_mode != "full":
+        return jsonify({"error": "mode 'split' is no longer supported; use full"}), 400
 
     group_name = str(group_name).strip() if group_name is not None else None
     if group_name == "":
@@ -1220,7 +1322,7 @@ def peers_create():
     db.commit()
 
     sync_peers_to_json()
-    audit("peer_created", name, {"ip": ip, "type": device_type, "mode": mode})
+    audit("peer_created", name, {"ip": ip, "type": device_type, "mode": "full"})
 
     peer = db.execute("SELECT * FROM peers WHERE ip = ?", (ip,)).fetchone()
     return jsonify(_peer_to_dict(peer)), 201
@@ -1243,13 +1345,23 @@ def peers_batch_create():
                 continue
             name = parts[0] if len(parts) > 0 else ""
             ptype = parts[1] if len(parts) > 1 else "phone"
-            pmode = parts[2] if len(parts) > 2 else "full"
+            col3 = parts[2] if len(parts) > 2 else ""
+            pmode = str(col3).strip().lower()
+            # CSV compatibility: support old "name,type,mode,ip" and new "name,type[,ip]"
+            if pmode in {"", "full"}:
+                pass
+            elif pmode == "split":
+                errors.append({"name": name or "(unknown)", "error": "mode 'split' is no longer supported"})
+                continue
+            else:
+                # Third column is not a mode (likely an IP from "name,type,ip"), ignore.
+                pmode = "full"
             if not name:
                 continue
             with app.test_request_context(
                 "/api/peers",
                 method="POST",
-                json={"name": name, "type": ptype, "mode": pmode},
+                json={"name": name, "type": ptype},
                 headers={"Authorization": request.headers.get("Authorization", "")},
             ):
                 g.user_id = getattr(g, "user_id", None)
@@ -1266,7 +1378,9 @@ def peers_batch_create():
         prefix = data.get("prefix", "peer")
         count = int(data.get("count", 0))
         ptype = data.get("type", "phone")
-        pmode = data.get("mode", "full")
+        pmode = str(data.get("mode", "full")).strip().lower()
+        if pmode and pmode != "full":
+            return jsonify({"error": "mode 'split' is no longer supported; use full"}), 400
 
         if count <= 0:
             return jsonify({"error": "count must be > 0"}), 400
@@ -1278,7 +1392,7 @@ def peers_batch_create():
             with app.test_request_context(
                 "/api/peers",
                 method="POST",
-                json={"name": name, "type": ptype, "mode": pmode},
+                json={"name": name, "type": ptype},
                 headers={"Authorization": request.headers.get("Authorization", "")},
             ):
                 g.user_id = getattr(g, "user_id", None)
@@ -1304,13 +1418,13 @@ def peers_get(peer_id: int):
     peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
     if peer is None:
         return jsonify({"error": "Peer not found"}), 404
-    return jsonify(_peer_to_dict(peer))
+    return jsonify(_enrich_peer_config_state(_peer_to_dict(peer)))
 
 
 @app.route("/api/peers/<int:peer_id>", methods=["PUT"])
 @auth_required
 def peers_update(peer_id: int):
-    """Update peer metadata (name, type, mode, group, status, expiry, traffic limit)."""
+    """Update peer metadata (name, type, group, status, expiry, traffic limit)."""
     db = get_db()
     peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
     if peer is None:
@@ -1320,7 +1434,6 @@ def peers_update(peer_id: int):
     allowed_fields = {
         "name",
         "type",
-        "mode",
         "group_name",
         "status",
         "expiry_date",
@@ -1331,10 +1444,17 @@ def peers_update(peer_id: int):
         "config_file",
     }
     allowed_statuses = {"active", "disabled", "revoked"}
-    allowed_modes = {"full", "split"}
     updates: list[str] = []
     params: list[Any] = []
     changes: dict[str, Any] = {}
+    config_sensitive_fields = {
+        "name",
+        "type",
+        "private_key",
+        "preshared_key",
+        "config_file",
+    }
+    config_sensitive_changed = False
 
     for field in allowed_fields:
         if field in data:
@@ -1354,10 +1474,6 @@ def peers_update(peer_id: int):
                 value = str(value or "").strip().lower()
                 if not value:
                     return jsonify({"error": "type cannot be empty"}), 400
-            elif field == "mode":
-                value = str(value or "").strip().lower()
-                if value not in allowed_modes:
-                    return jsonify({"error": f"mode must be one of: {', '.join(sorted(allowed_modes))}"}), 400
             elif field == "status":
                 value = str(value or "").strip().lower()
                 if value not in allowed_statuses:
@@ -1391,10 +1507,15 @@ def peers_update(peer_id: int):
             updates.append(f"{field} = ?")
             params.append(value)
             changes[field] = value
+            if field in config_sensitive_fields and value != peer[field]:
+                config_sensitive_changed = True
 
     if not updates:
         return jsonify({"error": "No valid fields to update"}), 400
 
+    if config_sensitive_changed:
+        updates.append("config_version = COALESCE(config_version, 1) + 1")
+        changes["config_version_bumped"] = True
     updates.append("updated_at = datetime('now')")
     params.append(peer_id)
 
@@ -1413,7 +1534,50 @@ def peers_update(peer_id: int):
     audit("peer_updated", peer["name"], changes)
 
     updated = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
-    return jsonify(_peer_to_dict(updated))
+    return jsonify(_enrich_peer_config_state(_peer_to_dict(updated)))
+
+
+@app.route("/api/peers/by-ip/<path:peer_ip>/import", methods=["POST"])
+@auth_required
+def peers_import_by_ip(peer_ip: str):
+    """Import peer from config folder into DB by IP so it can be managed in UI."""
+    ip = peer_ip.replace("_", ".")
+    db = get_db()
+    existing = db.execute("SELECT * FROM peers WHERE ip = ?", (ip,)).fetchone()
+    if existing is not None:
+        return jsonify(_enrich_peer_config_state(_peer_to_dict(existing)))
+
+    config_peer = None
+    for cp in _scan_peers_from_configs_dir():
+        if cp.get("ip") == ip:
+            config_peer = cp
+            break
+    if config_peer is None:
+        return jsonify({"error": "Peer config not found"}), 404
+
+    base_name = (config_peer.get("name") or f"peer-{ip.replace('.', '-')}").strip()
+    if not base_name:
+        base_name = f"peer-{ip.replace('.', '-')}"
+    name = base_name
+    suffix = 1
+    while db.execute("SELECT id FROM peers WHERE name = ?", (name,)).fetchone():
+        suffix += 1
+        name = f"{base_name}-{suffix}"
+
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    db.execute(
+        """INSERT INTO peers
+           (name, ip, type, mode, created_at, updated_at, status, config_file,
+            config_version, config_download_count)
+           VALUES (?, ?, 'phone', 'full', ?, ?, 'active', ?, 1, 0)""",
+        (name, ip, now, now, config_peer.get("config_file")),
+    )
+    db.commit()
+
+    sync_peers_to_json()
+    created = db.execute("SELECT * FROM peers WHERE ip = ?", (ip,)).fetchone()
+    audit("peer_imported_from_config", name, {"ip": ip, "config_file": config_peer.get("config_file")})
+    return jsonify(_enrich_peer_config_state(_peer_to_dict(created))), 201
 
 
 @app.route("/api/peers/<int:peer_id>", methods=["DELETE"])
@@ -1533,7 +1697,9 @@ def peers_config(peer_id: int):
     else:
         return jsonify({"error": "Config not available"}), 404
 
+    _mark_config_downloaded(db, peer_id)
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", peer["name"])
+    audit("peer_config_downloaded", peer["name"], {"ip": peer["ip"], "peer_id": peer_id})
     return Response(
         content,
         mimetype="text/plain",
@@ -1546,6 +1712,8 @@ def peers_config(peer_id: int):
 def peers_config_by_ip(peer_ip: str):
     """Download .conf file for a peer by IP (для пиров из папки config)."""
     peer_ip = peer_ip.replace("_", ".")
+    db = get_db()
+    db_peer = db.execute("SELECT id, name, ip FROM peers WHERE ip = ?", (peer_ip,)).fetchone()
     for cp in _scan_peers_from_configs_dir():
         if cp["ip"] == peer_ip:
             config_path = Path(cp["config_file"])
@@ -1554,6 +1722,13 @@ def peers_config_by_ip(peer_ip: str):
             if config_path.is_file():
                 content = config_path.read_text(encoding="utf-8")
                 safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", cp["name"])
+                if db_peer is not None:
+                    _mark_config_downloaded(db, int(db_peer["id"]))
+                    audit(
+                        "peer_config_downloaded",
+                        db_peer["name"],
+                        {"ip": db_peer["ip"], "peer_id": int(db_peer["id"]), "source": "by_ip"},
+                    )
                 return Response(
                     content,
                     mimetype="text/plain",
@@ -1878,6 +2053,7 @@ def main() -> None:
     app.config["SECRET_KEY"] = secret or app.config["SECRET_KEY"]
 
     init_db()
+    _ensure_db_migrations()
     _ensure_default_admin()
     _load_default_settings()
     _import_peers_from_json()

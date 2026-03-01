@@ -70,10 +70,13 @@ function New-ConfigText {
         [string]$Dns,
         [string]$ServerPubKey,
         [string]$Endpoint,
+        [string]$ProfileName,
         [string[]]$JunkLines
     )
 
     $parts = @()
+    $parts += "# Name = $ProfileName"
+    $parts += ""
     $parts += "[Interface]"
     $parts += "Address    = $Address"
     $parts += "PrivateKey = $PrivateKey"
@@ -133,6 +136,9 @@ if ([string]::IsNullOrWhiteSpace($phonePriv))  { throw "PrivateKey not found in 
 
 Write-Host "[1/6] Read server parameters..." -ForegroundColor Yellow
 $serverPub = Invoke-Ssh -ServerIp $Vps1Ip -User $Vps1User -KeyPath $Vps1Key -Command "sudo awg show awg1 public-key"
+$serverName = Invoke-Ssh -ServerIp $Vps1Ip -User $Vps1User -KeyPath $Vps1Key -Command "hostname -f 2>/dev/null || hostname"
+$serverName = $serverName.Trim()
+if ([string]::IsNullOrWhiteSpace($serverName)) { $serverName = $Vps1Ip }
 $junkRaw = Invoke-Ssh -ServerIp $Vps1Ip -User $Vps1User -KeyPath $Vps1Key -Command "sudo awk '/^\[Interface\]/{f=1;next} f && /^\[/{exit} f && /^(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4)[[:space:]]*=/{print}' /etc/amnezia/amneziawg/awg1.conf"
 $junkLines = @()
 if (-not [string]::IsNullOrWhiteSpace($junkRaw)) {
@@ -180,8 +186,8 @@ Write-Host "[4/6] Rebuild local config files..." -ForegroundColor Yellow
 $endpoint = "$Vps1Ip`:51820"
 $dns = "10.8.0.2"
 
-$clientOut = New-ConfigText -PrivateKey $clientPriv -Address "10.9.0.2/24" -Dns $dns -ServerPubKey $serverPub -Endpoint $endpoint -JunkLines $junkLines
-$phoneOut  = New-ConfigText -PrivateKey $phonePriv  -Address "10.9.0.3/24" -Dns $dns -ServerPubKey $serverPub -Endpoint $endpoint -JunkLines $junkLines
+$clientOut = New-ConfigText -PrivateKey $clientPriv -Address "10.9.0.2/24" -Dns $dns -ServerPubKey $serverPub -Endpoint $endpoint -ProfileName "$serverName - client" -JunkLines $junkLines
+$phoneOut  = New-ConfigText -PrivateKey $phonePriv  -Address "10.9.0.3/24" -Dns $dns -ServerPubKey $serverPub -Endpoint $endpoint -ProfileName "$serverName - phone" -JunkLines $junkLines
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Resolve-Path -LiteralPath $ClientConfPath), $clientOut, $utf8NoBom)

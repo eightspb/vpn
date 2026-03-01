@@ -186,6 +186,7 @@ a:hover { color: var(--accent-hover); }
 .topbar-title { font-size: 16px; font-weight: 700; flex: 1; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 .page-content { flex: 1; padding: 24px; max-width: 1400px; width: 100%; margin: 0 auto; }
+.page-content.page-content-wide { max-width: none; margin: 0; }
 
 /* ====== Buttons ====== */
 .btn {
@@ -529,6 +530,7 @@ td.mono { font-family: monospace; font-size: 12px; }
 .badge-active { background: rgba(0,212,170,0.12); border-color: rgba(0,212,170,0.25); color: var(--success); }
 .badge-disabled { background: rgba(240,160,48,0.12); border-color: rgba(240,160,48,0.25); color: var(--warning); }
 .badge-expired { background: rgba(232,64,87,0.12); border-color: rgba(232,64,87,0.25); color: var(--danger); }
+.badge-inactive { background: rgba(232,64,87,0.12); border-color: rgba(232,64,87,0.25); color: var(--danger); }
 .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .type-icon { font-size: 15px; }
 
@@ -1079,6 +1081,7 @@ const state = {
   peersSort: { col: 'name', dir: 'asc' },
   peersPage: 1,
   groups: [],
+  peersRenderLockUntil: 0,
 };
 
 const PEERS_PER_PAGE = 50;
@@ -1086,6 +1089,14 @@ let refreshTimer = null;
 const SPEED_HIST_MAX = 60;
 const PEER_SPEED_HIST_MAX = 40;
 const PEER_ONLINE_HS_SEC = 55;
+function lockPeersRender(ms = 1200) {
+  state.peersRenderLockUntil = Date.now() + Math.max(0, Number(ms) || 0);
+}
+
+function isPeersRenderLocked() {
+  return Date.now() < (state.peersRenderLockUntil || 0);
+}
+
 const speedHist = {
   v1_rx: [], v1_tx: [], v2_rx: [], v2_tx: [],
   combined_rx: [], combined_tx: [],
@@ -1320,7 +1331,7 @@ async function loadPeers() {
       updatePeerLiveStats(p, mp);
     });
 
-    if (state.currentPage === 'peers') renderPeersContent();
+    if (state.currentPage === 'peers' && !isPeersRenderLocked()) renderPeersContent();
   } catch (e) { /* silent */ }
 }
 
@@ -1555,7 +1566,7 @@ function renderAppLayout() {
           </div>
         </div>
       </div>
-      <div class="page-content" id="page-content">
+      <div class="page-content ${state.currentPage === 'peers' ? 'page-content-wide' : ''}" id="page-content">
         <div class="loading-overlay"><span class="spinner"></span> Loading...</div>
       </div>
     </main>
@@ -2001,7 +2012,7 @@ function renderPeersContent() {
 
   let rows = '';
   if (paginated.length === 0) {
-    rows = `<tr><td colspan="11">
+    rows = `<tr><td colspan="12">
       <div class="empty-state">
         <div class="empty-state-icon">⊞</div>
         <div class="empty-state-title">No peers yet</div>
@@ -2026,7 +2037,7 @@ function renderPeersContent() {
       const connBadge = connectionBadge(isOnline ? 'online' : 'offline', hsAge);
       const actions = hasId
         ? `<div class="btn-group">
-            <button class="btn-icon" onclick="openEditPeerModal(${p.id})" title="Edit">✏️</button>
+            <button class="btn-icon" onclick="lockPeersRender(1200);openEditPeerModal(${p.id})" title="Edit">✏️</button>
             <button class="btn-icon" onclick="downloadConfig(${p.id})" title="Download config">📥</button>
             <button class="btn-icon" onclick="showQR(${p.id})" title="QR Code">📷</button>
             ${p.status === 'active'
@@ -2035,9 +2046,27 @@ function renderPeersContent() {
             <button class="btn-icon danger" onclick="confirmDeletePeer(${p.id},'${esc(p.name).replace(/'/g, "\\'")}')" title="Delete">🗑️</button>
           </div>`
         : `<div class="btn-group">
+            <button class="btn-icon" onclick="lockPeersRender(1200);importAndEditPeerByIp('${esc(p.ip).replace(/'/g, "\\'")}')" title="Import to DB and edit">✏️</button>
             <button class="btn-icon" onclick="downloadConfigByIp('${esc(p.ip).replace(/'/g, "\\'")}')" title="Download config">📥</button>
             <span class="badge badge-disabled" style="font-size:10px" title="From config folder">file</span>
           </div>`;
+      const cfgCount = Number(p.config_download_count || 0);
+      const cfgStatus = p.config_downloaded_latest
+        ? `<span class="badge badge-active" style="font-size:10px">ok</span>`
+        : `<span class="badge badge-expired" style="font-size:10px">new</span>`;
+      const cfgRuntimeActive = p.config_runtime_active === true || p.config_runtime_status === 'active';
+      const cfgRuntimeReason = p.config_runtime_reason || '';
+      const cfgRuntimeHint = cfgRuntimeActive
+        ? 'Config is active on VPN server'
+        : (cfgRuntimeReason === 'peer_disabled'
+            ? 'Peer disabled in admin (not active on server)'
+            : cfgRuntimeReason === 'config_not_loaded_on_server'
+              ? 'Config file exists locally but peer is not loaded on VPN server'
+              : 'Peer missing on VPN server (config is inactive)');
+      const cfgRuntimeBadge = cfgRuntimeActive
+        ? `<span class="badge badge-active" style="font-size:10px" title="${esc(cfgRuntimeHint)}">live</span>`
+        : `<span class="badge badge-inactive" style="font-size:10px" title="${esc(cfgRuntimeHint)}">inactive</span>`;
+      const cfgMeta = `${cfgRuntimeBadge}${cfgStatus}<span style="margin-left:6px;color:var(--text-secondary)">v${esc(p.config_version ?? 1)} / ↓${cfgCount}</span>`;
       return `<tr>
         <td><strong>${esc(p.name)}</strong></td>
         <td class="mono">${esc(p.ip)}</td>
@@ -2051,6 +2080,7 @@ function renderPeersContent() {
         <td class="mono peer-speed-cell" data-peer-key="${esc(speedKey)}" data-peer-title="${esc(speedTitle)}">
           <span class="peer-speed-main"><span class="${speedDotCls}"></span><span style="color:var(--success)">↓${fmtBytesSpeed(live?.rxBps || 0)}</span> <span style="color:var(--info)">↑${fmtBytesSpeed(live?.txBps || 0)}</span></span>
         </td>
+        <td style="white-space:nowrap;font-size:12px">${cfgMeta}</td>
         <td>${actions}</td>
       </tr>`;
     }).join('');
@@ -2111,6 +2141,7 @@ function renderPeersContent() {
             <th>Handshake</th>
             <th>Traffic</th>
             <th>Speed</th>
+            <th>Config</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -2178,6 +2209,7 @@ async function downloadConfig(id) {
     a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
     toast('Config downloaded');
+    await loadPeers();
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2197,7 +2229,19 @@ async function downloadConfigByIp(ip) {
     a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
     toast('Config downloaded');
+    await loadPeers();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+async function importAndEditPeerByIp(ip) {
+  try {
+    const pathIp = ip.replace(/\./g, '_');
+    const peer = await api('POST', `/api/peers/by-ip/${pathIp}/import`, {});
+    await loadPeers();
+    await openEditPeerModal(peer.id);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 async function showQR(id) {
@@ -2266,23 +2310,14 @@ function openAddPeerModal() {
         <label class="form-label">Name *</label>
         <input class="form-input" id="add-name" type="text" placeholder="e.g. john-phone" required>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Type</label>
-          <select class="form-select" id="add-type">
-            <option value="phone">Phone</option>
-            <option value="pc">PC</option>
-            <option value="tablet">Tablet</option>
-            <option value="router">Router</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Mode</label>
-          <select class="form-select" id="add-mode">
-            <option value="full">Full Tunnel</option>
-            <option value="split">Split Tunnel</option>
-          </select>
-        </div>
+      <div class="form-group">
+        <label class="form-label">Type</label>
+        <select class="form-select" id="add-type">
+          <option value="phone">Phone</option>
+          <option value="pc">PC</option>
+          <option value="tablet">Tablet</option>
+          <option value="router">Router</option>
+        </select>
       </div>
       <div class="form-group">
         <label class="form-label">Group</label>
@@ -2320,7 +2355,6 @@ async function handleAddPeer() {
     const body = {
       name,
       type: document.getElementById('add-type').value,
-      mode: document.getElementById('add-mode').value,
     };
     const group = document.getElementById('add-group').value.trim();
     if (group) body.group_name = group;
@@ -2375,20 +2409,11 @@ async function openEditPeerModal(id) {
           <label class="form-label">Name</label>
           <input class="form-input" id="edit-name" type="text" value="${esc(peer.name)}">
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Type</label>
-            <select class="form-select" id="edit-type">
-              ${['phone','pc','tablet','router'].map(t => `<option value="${t}" ${peer.type===t?'selected':''}>${t}</option>`).join('')}
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Mode</label>
-            <select class="form-select" id="edit-mode">
-              <option value="full" ${peer.mode==='full'?'selected':''}>Full Tunnel</option>
-              <option value="split" ${peer.mode==='split'?'selected':''}>Split Tunnel</option>
-            </select>
-          </div>
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select class="form-select" id="edit-type">
+            ${['phone','pc','tablet','router'].map(t => `<option value="${t}" ${peer.type===t?'selected':''}>${t}</option>`).join('')}
+          </select>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -2434,6 +2459,7 @@ async function openEditPeerModal(id) {
           <div>IP: <strong style="color:var(--text-primary)">${esc(peer.ip)}</strong></div>
           <div>Created: ${fmtDate(peer.created_at)}</div>
           <div>Updated: ${fmtDate(peer.updated_at)}</div>
+          <div>Config: v${esc(peer.config_version ?? 1)} · downloads ${esc(peer.config_download_count ?? 0)} · ${peer.config_downloaded_latest ? 'latest downloaded' : 'new config not downloaded'}</div>
         </div>
       </div>
       <div class="modal-footer">
@@ -2463,7 +2489,6 @@ async function handleEditPeer(id) {
     const body = {
       name,
       type: document.getElementById('edit-type').value,
-      mode: document.getElementById('edit-mode').value,
       status: document.getElementById('edit-status').value,
       group_name: document.getElementById('edit-group').value.trim() || null,
       expiry_date: document.getElementById('edit-expiry').value || null,
@@ -2507,32 +2532,23 @@ function openBatchModal() {
             <input class="form-input" id="batch-count" type="number" min="1" max="252" value="5">
           </div>
         </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Type</label>
-            <select class="form-select" id="batch-type">
-              <option value="phone">Phone</option>
-              <option value="pc">PC</option>
-              <option value="tablet">Tablet</option>
-              <option value="router">Router</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Mode</label>
-            <select class="form-select" id="batch-mode">
-              <option value="full">Full Tunnel</option>
-              <option value="split">Split Tunnel</option>
-            </select>
-          </div>
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select class="form-select" id="batch-type">
+            <option value="phone">Phone</option>
+            <option value="pc">PC</option>
+            <option value="tablet">Tablet</option>
+            <option value="router">Router</option>
+          </select>
         </div>
         <div class="form-hint">Will create: peer-001, peer-002, peer-003, ...</div>
       </div>
       <div class="tab-pane" id="batch-csv">
         <div class="form-group">
           <label class="form-label">CSV Data</label>
-          <textarea class="form-textarea" id="batch-csv-data" rows="8" placeholder="name,type,mode&#10;john-phone,phone,full&#10;jane-pc,pc,split"></textarea>
+          <textarea class="form-textarea" id="batch-csv-data" rows="8" placeholder="name,type&#10;john-phone,phone&#10;jane-pc,pc"></textarea>
         </div>
-        <div class="form-hint">Format: name,type,mode (one per line). Header row is optional.</div>
+        <div class="form-hint">Format: name,type (one per line). Header row is optional.</div>
       </div>
       <div id="batch-progress" style="display:none">
         <div class="progress-bar"><div class="progress-fill" id="batch-progress-fill" style="width:0%"></div></div>
@@ -2571,7 +2587,6 @@ async function handleBatchAdd() {
         prefix: document.getElementById('batch-prefix').value || 'peer',
         count: parseInt(document.getElementById('batch-count').value) || 1,
         type: document.getElementById('batch-type').value,
-        mode: document.getElementById('batch-mode').value,
       };
     }
 

@@ -1,4 +1,4 @@
-# tests/test-optimize.ps1 — проверки скриптов оптимизации и split tunneling
+# tests/test-optimize.ps1 — проверки скриптов оптимизации и full-tunnel конфигов
 # Запуск: powershell -File tests\test-optimize.ps1
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +19,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 Write-Host ""
-Write-Host "=== Тесты оптимизации VPN (scripts/tools/optimize-vpn.sh, scripts/tools/benchmark.sh, split tunneling) ===" -ForegroundColor Cyan
+Write-Host "=== Тесты оптимизации VPN (scripts/tools/optimize-vpn.sh, scripts/tools/benchmark.sh, full tunnel) ===" -ForegroundColor Cyan
 Write-Host ""
 
 # ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ foreach ($f in @("scripts/tools/optimize-vpn.sh", "scripts/tools/benchmark.sh"))
     if (Test-Path $f) { ok "$f существует" } else { fail "$f отсутствует" }
 }
 
-foreach ($f in @("vpn-output/client-split.conf", "vpn-output/phone-split.conf")) {
+foreach ($f in @("vpn-output/client.conf", "vpn-output/phone.conf")) {
     if (Test-Path $f) { ok "$f существует" } else { fail "$f отсутствует" }
 }
 
@@ -175,12 +175,12 @@ if (Test-Path "scripts/tools/optimize-vpn.sh") {
 }
 
 # ---------------------------------------------------------------------------
-# 9. Split tunneling конфиги: AllowedIPs не содержат 0.0.0.0/0
+# 9. Full tunnel конфиги: AllowedIPs = 0.0.0.0/0
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 9. Split tunneling конфиги: AllowedIPs ---"
+Write-Host "--- 9. Full tunnel конфиги: AllowedIPs ---"
 
-foreach ($f in @("vpn-output/client-split.conf", "vpn-output/phone-split.conf")) {
+foreach ($f in @("vpn-output/client.conf", "vpn-output/phone.conf")) {
     if (-not (Test-Path $f)) { fail "$f отсутствует"; continue }
     $content = Get-Content $f -Raw
 
@@ -190,32 +190,26 @@ foreach ($f in @("vpn-output/client-split.conf", "vpn-output/phone-split.conf"))
         fail "${f}: AllowedIPs не найден"
     }
 
-    if ($content -notmatch '(?m)^AllowedIPs\s*=\s*0\.0\.0\.0/0\s*$') {
-        ok "${f}: AllowedIPs не равен 0.0.0.0/0 (split tunneling активен)"
+    if ($content -match '(?m)^AllowedIPs\s*=\s*0\.0\.0\.0/0\s*$') {
+        ok "${f}: AllowedIPs = 0.0.0.0/0 (full tunnel)"
     } else {
-        fail "${f}: AllowedIPs = 0.0.0.0/0 (split tunneling не настроен)"
-    }
-
-    if ($content -match '0\.0\.0\.0/1') {
-        ok "${f}: содержит 0.0.0.0/1 (публичный трафик через VPN)"
-    } else {
-        fail "${f}: не содержит 0.0.0.0/1"
+        fail "${f}: AllowedIPs не равен 0.0.0.0/0"
     }
 }
 
 # ---------------------------------------------------------------------------
-# 10. Оригинальные конфиги содержат комментарий о split tunneling
+# 10. Оригинальные конфиги не содержат split-схему
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 10. Оригинальные конфиги: комментарий о split tunneling ---"
+Write-Host "--- 10. Оригинальные конфиги: без split ---"
 
 foreach ($f in @("vpn-output/client.conf", "vpn-output/phone.conf")) {
     if (-not (Test-Path $f)) { fail "$f отсутствует"; continue }
     $content = Get-Content $f -Raw
     if ($content -match 'split') {
-        ok "${f}: комментарий о split tunneling найден"
+        fail "${f}: найдено упоминание split (неожиданно)"
     } else {
-        fail "${f}: комментарий о split tunneling не найден"
+        ok "${f}: упоминаний split нет"
     }
 }
 

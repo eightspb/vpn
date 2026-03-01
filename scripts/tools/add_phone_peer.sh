@@ -177,6 +177,9 @@ echo "[3/4] Получаю параметры сервера..."
 
 SERVER_PUB="$(ssh_exec "sudo awg show awg1 public-key 2>/dev/null || sudo cat /etc/amnezia/amneziawg/awg1.conf | awk '/^PrivateKey/{print \$3}' | sudo awg pubkey")"
 SERVER_PUB="$(clean_value "$SERVER_PUB")"
+SERVER_NAME="$(ssh_exec "hostname -f 2>/dev/null || hostname")"
+SERVER_NAME="$(clean_value "$SERVER_NAME")"
+SERVER_NAME="${SERVER_NAME:-$VPS1_IP}"
 
 # Получаем junk-параметры из конфига сервера для AmneziaWG
 JUNK_PARAMS="$(ssh_exec "sudo awk '/^\[Interface\]/{found=1} found && /^(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4)=/{print}' /etc/amnezia/amneziawg/awg1.conf 2>/dev/null || true")"
@@ -190,6 +193,8 @@ echo "[4/4] Генерирую клиентский конфиг..."
 CLIENT_CONF_FILE="${OUTPUT_DIR}/peer_${PEER_NAME}_${PEER_IP//./_}.conf"
 
 {
+    echo "# Name = ${SERVER_NAME} - ${PEER_NAME}"
+    echo ""
     echo "[Interface]"
     echo "PrivateKey = ${PHONE_PRIV}"
     echo "Address    = ${PEER_IP}/24"

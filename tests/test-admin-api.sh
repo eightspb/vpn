@@ -292,7 +292,7 @@ else
 fi
 
 # Mutating endpoints must require auth
-RESP="$(curl -s -w "\n%{http_code}" -X POST -H "Content-Type: application/json" -d '{"name":"noauth-peer","type":"phone","mode":"full"}' "${BASE_URL}/api/peers" 2>/dev/null)"
+RESP="$(curl -s -w "\n%{http_code}" -X POST -H "Content-Type: application/json" -d '{"name":"noauth-peer","type":"phone"}' "${BASE_URL}/api/peers" 2>/dev/null)"
 CODE="$(echo "$RESP" | tail -1)"
 if [[ "$CODE" == "401" ]]; then
     pass "POST /api/peers without auth → 401"
@@ -393,13 +393,19 @@ if [[ "$AUTH_WORKS" == "1" ]]; then
             pass "Peers list is empty"
         else
             pass "Peers list has $LEN items"
+            HAS_CFG_RUNTIME="$("$PYTHON" -c "import json,sys; d=json.loads(sys.stdin.read() or '[]'); ok=all(('config_runtime_status' in x and 'config_runtime_active' in x) for x in d if isinstance(x,dict)); print('yes' if ok else 'no')" <<< "$BODY" 2>/dev/null || echo no)"
+            if [[ "$HAS_CFG_RUNTIME" == "yes" ]]; then
+                pass "Peers payload includes config runtime status fields"
+            else
+                fail "Peers payload missing config runtime status fields"
+            fi
         fi
     else
         fail "GET /api/peers → $CODE (expected: 200)"
     fi
 
     # Create peer (may fail due to no SSH; fallback: seed peer directly in test DB)
-    RESP="$(http_post "/api/peers" '{"name":"test-phone","type":"phone","mode":"full"}')"
+    RESP="$(http_post "/api/peers" '{"name":"test-phone","type":"phone"}')"
     CODE="$(echo "$RESP" | tail -1)"
     BODY="$(echo "$RESP" | sed '$d')"
     if [[ "$CODE" == "201" ]]; then
@@ -433,8 +439,16 @@ if [[ "$AUTH_WORKS" == "1" && -n "${PEER_ID:-}" && "$PEER_ID" != "None" && "$PEE
         # Get peer
         RESP="$(http_get "/api/peers/$PEER_ID")"
         CODE="$(echo "$RESP" | tail -1)"
+        BODY="$(echo "$RESP" | sed '$d')"
         if [[ "$CODE" == "200" ]]; then
             pass "GET /api/peers/$PEER_ID → 200"
+            CVER="$(json_val "$BODY" "config_version")"
+            CDOWN="$(json_val "$BODY" "config_download_count")"
+            if [[ "${CVER:-}" == "1" && "${CDOWN:-}" == "0" ]]; then
+                pass "Initial config meta: version=1, downloads=0"
+            else
+                skip "Initial config meta differs (version=${CVER:-?}, downloads=${CDOWN:-?})"
+            fi
         else
             fail "GET /api/peers/$PEER_ID → $CODE (expected: 200)"
         fi
@@ -496,6 +510,27 @@ if [[ "$AUTH_WORKS" == "1" && -n "${PEER_ID:-}" && "$PEER_ID" != "None" && "$PEE
         skip "GET /api/peers/$PEER_ID/config → $CODE (config may not be available)"
     fi
 
+    # Config download counters
+    RESP="$(http_get "/api/peers/$PEER_ID")"
+    CODE="$(echo "$RESP" | tail -1)"
+    BODY="$(echo "$RESP" | sed '$d')"
+    if [[ "$CODE" == "200" ]]; then
+        CDOWN="$(json_val "$BODY" "config_download_count")"
+        CLATEST="$(json_val "$BODY" "config_downloaded_latest")"
+        if [[ "${CDOWN:-0}" -ge 1 ]]; then
+            pass "Config download counter incremented (>=1)"
+        else
+            fail "Config download counter not incremented (got: ${CDOWN:-0})"
+        fi
+        if [[ "$CLATEST" == "True" || "$CLATEST" == "true" || "$CLATEST" == "1" ]]; then
+            pass "Config marked as latest downloaded"
+        else
+            fail "Config latest flag not set after download"
+        fi
+    else
+        skip "Cannot verify config counters (GET peer → $CODE)"
+    fi
+
     # Get QR
     RESP="$(http_get "/api/peers/$PEER_ID/qr")"
     CODE="$(echo "$RESP" | tail -1)"
@@ -518,6 +553,27 @@ if [[ "$AUTH_WORKS" == "1" && -n "${PEER_ID:-}" && "$PEER_ID" != "None" && "$PEE
         pass "POST /api/peers/$PEER_ID/disable → 200"
     else
         skip "POST /api/peers/$PEER_ID/disable → $CODE"
+    fi
+
+    # Update peer should bump config version and require re-download
+    RESP="$(http_put "/api/peers/$PEER_ID" '{"type":"pc"}')"
+    CODE="$(echo "$RESP" | tail -1)"
+    BODY="$(echo "$RESP" | sed '$d')"
+    if [[ "$CODE" == "200" ]]; then
+        CVER="$(json_val "$BODY" "config_version")"
+        CREQ="$(json_val "$BODY" "config_download_required")"
+        if [[ "${CVER:-0}" -ge 2 ]]; then
+            pass "Config version bumped after update"
+        else
+            fail "Config version not bumped after update (got: ${CVER:-0})"
+        fi
+        if [[ "$CREQ" == "True" || "$CREQ" == "true" || "$CREQ" == "1" ]]; then
+            pass "Config marked as requiring download after update"
+        else
+            fail "Config download_required flag not set after update"
+        fi
+    else
+        skip "Config version bump check skipped (PUT type -> $CODE)"
     fi
 
     # Enable peer

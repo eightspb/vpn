@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-optimize.sh — проверки скриптов оптимизации и split tunneling
+# tests/test-optimize.sh — проверки скриптов оптимизации и full-tunnel конфигов
 # Запуск: bash tests/test-optimize.sh
 
 set -u
@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
 echo ""
-echo "=== Тесты оптимизации VPN (scripts/tools/optimize-vpn.sh, scripts/tools/benchmark.sh, split tunneling) ==="
+echo "=== Тесты оптимизации VPN (scripts/tools/optimize-vpn.sh, scripts/tools/benchmark.sh, full tunnel) ==="
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ for f in scripts/tools/optimize-vpn.sh scripts/tools/benchmark.sh; do
     fi
 done
 
-for f in vpn-output/client-split.conf vpn-output/phone-split.conf; do
+for f in vpn-output/client.conf vpn-output/phone.conf; do
     if [[ -f "$f" ]]; then
         ok "$f существует"
     else
@@ -176,12 +176,12 @@ for param in "Jc   = 2" "Jmin = 20" "Jmax = 200" "S1   = 15" "S2   = 20"; do
 done
 
 # ---------------------------------------------------------------------------
-# 10. Split tunneling конфиги: AllowedIPs не содержат 0.0.0.0/0
+# 10. Full tunnel конфиги: AllowedIPs = 0.0.0.0/0
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 10. Split tunneling конфиги: AllowedIPs ---"
+echo "--- 10. Full tunnel конфиги: AllowedIPs ---"
 
-for f in vpn-output/client-split.conf vpn-output/phone-split.conf; do
+for f in vpn-output/client.conf vpn-output/phone.conf; do
     if [[ ! -f "$f" ]]; then
         fail "$f: файл отсутствует"
         continue
@@ -193,24 +193,18 @@ for f in vpn-output/client-split.conf vpn-output/phone-split.conf; do
         fail "$f: AllowedIPs не найден"
     fi
 
-    if ! grep -E '^AllowedIPs\s*=\s*0\.0\.0\.0/0\s*$' "$f" 2>/dev/null | grep -q .; then
-        ok "$f: AllowedIPs не равен 0.0.0.0/0 (split tunneling активен)"
+    if grep -E '^AllowedIPs\s*=\s*0\.0\.0\.0/0\s*$' "$f" 2>/dev/null | grep -q .; then
+        ok "$f: AllowedIPs = 0.0.0.0/0 (full tunnel)"
     else
-        fail "$f: AllowedIPs = 0.0.0.0/0 (split tunneling не настроен)"
-    fi
-
-    if grep -q '0\.0\.0\.0/1' "$f" 2>/dev/null; then
-        ok "$f: содержит 0.0.0.0/1 (публичный трафик через VPN)"
-    else
-        fail "$f: не содержит 0.0.0.0/1"
+        fail "$f: AllowedIPs не равен 0.0.0.0/0"
     fi
 done
 
 # ---------------------------------------------------------------------------
-# 11. Оригинальные конфиги содержат комментарий о split tunneling
+# 11. Оригинальные конфиги не содержат split-схему
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 11. Оригинальные конфиги: комментарий о split tunneling ---"
+echo "--- 11. Оригинальные конфиги: без split ---"
 
 for f in vpn-output/client.conf vpn-output/phone.conf; do
     if [[ ! -f "$f" ]]; then
@@ -218,9 +212,9 @@ for f in vpn-output/client.conf vpn-output/phone.conf; do
         continue
     fi
     if grep -q 'split' "$f" 2>/dev/null; then
-        ok "$f: комментарий о split tunneling найден"
+        fail "$f: найдено упоминание split (неожиданно)"
     else
-        fail "$f: комментарий о split tunneling не найден"
+        ok "$f: упоминаний split нет"
     fi
 done
 
