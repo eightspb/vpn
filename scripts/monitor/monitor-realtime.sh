@@ -42,6 +42,14 @@ PREV_TS=0
 VPS1_FAIL_STREAK=0
 VPS2_FAIL_STREAK=0
 BACKOFF_MAX_INTERVAL=30
+ALERT_LOAD_WARN_PCT=120
+ALERT_LOAD_CRIT_PCT=180
+ALERT_MEM_WARN_PCT=80
+ALERT_MEM_CRIT_PCT=90
+ALERT_SWAP_WARN_MB=64
+ALERT_SWAP_CRIT_MB=256
+ALERT_CONNTRACK_WARN_PCT=70
+ALERT_CONNTRACK_CRIT_PCT=85
 
 usage() {
     cat <<'EOF'
@@ -96,6 +104,21 @@ set_last_error() {
     fi
 }
 
+load_alert_thresholds() {
+    local env_file="${PROJECT_ROOT}/.env"
+    local val=""
+    [[ ! -f "$env_file" ]] && return 0
+
+    val="$(read_kv "$env_file" ALERT_LOAD_WARN_PCT)"; [[ -n "$val" ]] && ALERT_LOAD_WARN_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_LOAD_CRIT_PCT)"; [[ -n "$val" ]] && ALERT_LOAD_CRIT_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_MEM_WARN_PCT)"; [[ -n "$val" ]] && ALERT_MEM_WARN_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_MEM_CRIT_PCT)"; [[ -n "$val" ]] && ALERT_MEM_CRIT_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_SWAP_WARN_MB)"; [[ -n "$val" ]] && ALERT_SWAP_WARN_MB="$val"
+    val="$(read_kv "$env_file" ALERT_SWAP_CRIT_MB)"; [[ -n "$val" ]] && ALERT_SWAP_CRIT_MB="$val"
+    val="$(read_kv "$env_file" ALERT_CONNTRACK_WARN_PCT)"; [[ -n "$val" ]] && ALERT_CONNTRACK_WARN_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_CONNTRACK_CRIT_PCT)"; [[ -n "$val" ]] && ALERT_CONNTRACK_CRIT_PCT="$val"
+}
+
 restore_terminal() {
     printf "\033[?25h"
     tput cnorm 2>/dev/null || true
@@ -105,6 +128,7 @@ restore_terminal() {
 trap restore_terminal EXIT
 
 load_defaults_from_files
+load_alert_thresholds
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -359,6 +383,10 @@ RX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]
 TX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
 TCP_EST=\$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=\$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
+CT_COUNT=\$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+CT_MAX=\$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
+CPUS=\$(nproc 2>/dev/null || echo 1)
+SWAP=\$(free -m 2>/dev/null | awk '/Swap:/ {print \$3"/"\$2"MB"}')
 AWG0=\$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
 AWG1=\$(sudo systemctl is-active awg-quick@awg1 2>/dev/null || echo unknown)
 HS0=\$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0) print systime()-\$2; else print -1}')
@@ -375,6 +403,10 @@ echo "RX=\${RX:-0}"
 echo "TX=\${TX:-0}"
 echo "TCP_EST=\${TCP_EST:-0}"
 echo "UDP_CONN=\${UDP_CONN:-0}"
+echo "CT_COUNT=\${CT_COUNT:-0}"
+echo "CT_MAX=\${CT_MAX:-0}"
+echo "CPUS=\${CPUS:-1}"
+echo "SWAP=\${SWAP:-0/0MB}"
 echo "AWG0=\$AWG0"
 echo "AWG1=\$AWG1"
 echo "HS0=\$HS0"
@@ -398,6 +430,10 @@ RX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i
 TX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
 TCP_EST=$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
+CT_COUNT=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+CT_MAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
+CPUS=$(nproc 2>/dev/null || echo 1)
+SWAP=$(free -m 2>/dev/null | awk '/Swap:/ {print $3"/"$2"MB"}')
 AWG0=$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
 HS0=$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if ($2>0) print systime()-$2; else print -1}')
 [[ -z "$HS0" ]] && HS0=-1
@@ -421,6 +457,10 @@ echo "RX=${RX:-0}"
 echo "TX=${TX:-0}"
 echo "TCP_EST=${TCP_EST:-0}"
 echo "UDP_CONN=${UDP_CONN:-0}"
+echo "CT_COUNT=${CT_COUNT:-0}"
+echo "CT_MAX=${CT_MAX:-0}"
+echo "CPUS=${CPUS:-1}"
+echo "SWAP=${SWAP:-0/0MB}"
 echo "AWG0=$AWG0"
 echo "HS0=$HS0"
 echo "P0=$P0"
@@ -525,6 +565,58 @@ compute_effective_interval() {
     printf "%s" "$effective"
 }
 
+log_metric_alert() {
+    local level="$1" server="$2" metric="$3" value="$4" threshold="$5"
+    log_line "$level" "ALERT $server $metric value=$value threshold=$threshold"
+}
+
+evaluate_server_alerts() {
+    local server="$1" data="$2"
+    [[ -z "$data" ]] && return 0
+
+    local cpus load_raw load1 mem_raw mem_used mem_total mem_pct swap_raw swap_used
+    local ct_count ct_max ct_pct load_pct
+    cpus="$(parse_kv "$data" CPUS)"; cpus="${cpus:-1}"
+    load_raw="$(parse_kv "$data" LOAD)"; load1="${load_raw%%,*}"; load1="${load1:-0}"
+    mem_raw="$(parse_kv "$data" MEM)"
+    mem_used="${mem_raw%%/*}"; mem_used="${mem_used:-0}"
+    mem_total="${mem_raw#*/}"; mem_total="${mem_total%%[^0-9]*}"; mem_total="${mem_total:-0}"
+    swap_raw="$(parse_kv "$data" SWAP)"
+    swap_used="${swap_raw%%/*}"; swap_used="${swap_used:-0}"
+    ct_count="$(parse_kv "$data" CT_COUNT)"; ct_count="${ct_count:-0}"
+    ct_max="$(parse_kv "$data" CT_MAX)"; ct_max="${ct_max:-0}"
+
+    load_pct="$(awk "BEGIN{if (${cpus:-1}<=0) {print 0} else {printf \"%.0f\", ((${load1:-0}/${cpus:-1})*100)}}")"
+    mem_pct="$(awk "BEGIN{if (${mem_total:-0}<=0) {print 0} else {printf \"%.0f\", ((${mem_used:-0}/${mem_total:-1})*100)}}")"
+    ct_pct="$(awk "BEGIN{if (${ct_max:-0}<=0) {print 0} else {printf \"%.0f\", ((${ct_count:-0}/${ct_max:-1})*100)}}")"
+
+    if (( load_pct >= ALERT_LOAD_CRIT_PCT )); then
+        log_metric_alert "ERROR" "$server" "cpu_load_pct" "$load_pct" "$ALERT_LOAD_CRIT_PCT"
+    elif (( load_pct >= ALERT_LOAD_WARN_PCT )); then
+        log_metric_alert "WARN" "$server" "cpu_load_pct" "$load_pct" "$ALERT_LOAD_WARN_PCT"
+    fi
+
+    if (( mem_pct >= ALERT_MEM_CRIT_PCT )); then
+        log_metric_alert "ERROR" "$server" "mem_used_pct" "$mem_pct" "$ALERT_MEM_CRIT_PCT"
+    elif (( mem_pct >= ALERT_MEM_WARN_PCT )); then
+        log_metric_alert "WARN" "$server" "mem_used_pct" "$mem_pct" "$ALERT_MEM_WARN_PCT"
+    fi
+
+    if (( swap_used >= ALERT_SWAP_CRIT_MB )); then
+        log_metric_alert "ERROR" "$server" "swap_used_mb" "$swap_used" "$ALERT_SWAP_CRIT_MB"
+    elif (( swap_used >= ALERT_SWAP_WARN_MB )); then
+        log_metric_alert "WARN" "$server" "swap_used_mb" "$swap_used" "$ALERT_SWAP_WARN_MB"
+    fi
+
+    if (( ct_max > 0 )); then
+        if (( ct_pct >= ALERT_CONNTRACK_CRIT_PCT )); then
+            log_metric_alert "ERROR" "$server" "conntrack_pct" "$ct_pct" "$ALERT_CONNTRACK_CRIT_PCT"
+        elif (( ct_pct >= ALERT_CONNTRACK_WARN_PCT )); then
+            log_metric_alert "WARN" "$server" "conntrack_pct" "$ct_pct" "$ALERT_CONNTRACK_WARN_PCT"
+        fi
+    fi
+}
+
 printf "\033[?25l"
 tput civis 2>/dev/null || true
 while true; do
@@ -542,6 +634,8 @@ while true; do
     VPS2_DATA="$(collect_vps2)"
     if [[ -n "$VPS1_DATA" ]]; then VPS1_FAIL_STREAK=0; else VPS1_FAIL_STREAK=$((VPS1_FAIL_STREAK + 1)); fi
     if [[ -n "$VPS2_DATA" ]]; then VPS2_FAIL_STREAK=0; else VPS2_FAIL_STREAK=$((VPS2_FAIL_STREAK + 1)); fi
+    evaluate_server_alerts "VPS1" "$VPS1_DATA"
+    evaluate_server_alerts "VPS2" "$VPS2_DATA"
 
     print_block_vps1 "$VPS1_DATA"
     echo ""

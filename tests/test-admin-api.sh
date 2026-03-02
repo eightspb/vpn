@@ -37,6 +37,7 @@ COOKIE_JAR=""
 BASE_URL=""
 TOKEN=""
 AUTH_WORKS=0
+DEFAULT_ADMIN_PASSWORD="My-secure-admin-password"
 
 pass() { PASS=$((PASS + 1)); echo -e "\033[0;32m  ✓ $*\033[0m"; }
 fail() { FAIL=$((FAIL + 1)); echo -e "\033[0;31m  ✗ $*\033[0m"; }
@@ -242,20 +243,20 @@ COOKIE_JAR="/tmp/admin_cookie_${TEST_PORT}.txt"
 RESP="$(curl -s -w "\n%{http_code}" -X POST \
     -H "Content-Type: application/json" \
     -c "$COOKIE_JAR" \
-    -d '{"username":"admin","password":"admin"}' \
+    -d "{\"username\":\"admin\",\"password\":\"${DEFAULT_ADMIN_PASSWORD}\"}" \
     "${BASE_URL}/api/auth/login" 2>/dev/null)"
 CODE="$(echo "$RESP" | tail -1)"
 BODY="$(echo "$RESP" | sed '$d')"
 
 if [[ "$CODE" == "200" ]]; then
-    pass "Login admin/admin → 200"
+    pass "Login admin/default-password → 200"
     if [[ -f "$COOKIE_JAR" ]] && grep -q "admin_sid" "$COOKIE_JAR" 2>/dev/null; then
         pass "Session cookie admin_sid set"
     else
         fail "Session cookie admin_sid not found"
     fi
 else
-    fail "Login admin/admin → $CODE (expected: 200)"
+    fail "Login admin/default-password → $CODE (expected: 200)"
     echo "Body: $BODY"
 fi
 
@@ -322,7 +323,7 @@ fi
 
 # Change password
 if [[ "$AUTH_WORKS" == "1" ]]; then
-    RESP="$(http_post "/api/auth/change-password" '{"old_password":"admin","new_password":"newpass123"}')"
+    RESP="$(http_post "/api/auth/change-password" "{\"old_password\":\"${DEFAULT_ADMIN_PASSWORD}\",\"new_password\":\"newpass123\"}")"
     CODE="$(echo "$RESP" | tail -1)"
     if [[ "$CODE" == "200" ]]; then
         pass "Change password → 200"

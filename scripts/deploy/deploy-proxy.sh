@@ -125,6 +125,8 @@ $SSH "cat > /etc/systemd/system/youtube-proxy.service" << 'EOF'
 Description=YouTube Ad Proxy (DNS + HTTPS filter)
 After=network.target
 Wants=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -138,8 +140,17 @@ ExecStart=/opt/youtube-proxy/youtube-proxy --config /opt/youtube-proxy/config.ya
 ExecStopPost=+/bin/sh -c '/sbin/iptables -D INPUT -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || true'
 Restart=on-failure
 RestartSec=5
+OOMPolicy=restart
 StandardOutput=journal
 StandardError=journal
+LimitNOFILE=262144
+TasksMax=4096
+MemoryAccounting=true
+CPUAccounting=true
+# Keep Go heap under control on small VPS and force bounded RSS.
+Environment=GOMEMLIMIT=384MiB
+MemoryHigh=384M
+MemoryMax=448M
 # Allow binding to ports 53 and 443
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN

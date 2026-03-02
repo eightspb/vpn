@@ -647,9 +647,9 @@ python scripts/admin/admin-server.py --prod --cert cert.pem --key key.pem
 Для запуска в `--prod` обязательно задайте `ADMIN_SECRET_KEY` (в `.env` или env окружении).  
 Если ключ не задан, сервер завершится с ошибкой и не стартует с дефолтным секретом.
 
-При первом запуске создаётся пользователь `admin` / `admin` — **смените пароль сразу**.  
+При первом запуске создаётся пользователь `admin` / `My-secure-admin-password` — **смените пароль сразу**.  
 Если пароль не подходит (например, меняли ранее или восстанавливали БД), сбросьте его:  
-`bash manage.sh admin reset-password` — пароль снова станет `admin`.
+`bash manage.sh admin reset-password` — пароль снова станет `My-secure-admin-password`.
 
 ### API
 
@@ -873,6 +873,41 @@ bash scripts/tools/load-test.sh --quick --output report.txt
 - **Задержка туннеля** — ping VPS1→VPS2 без нагрузки и под нагрузкой, разница avg latency
 - **WireGuard throughput** — RX/TX трафик по каждому пиру
 - **Метрики до/после** — сравнение состояния серверов до и после нагрузочного теста
+### Плановая ёмкость (оценка)
+
+Оценка дана для текущей схемы `AmneziaWG` (full tunnel), при условии что оба VPS доступны и нет внешнего network bottleneck на стороне хостера. Это не SLA, а стартовая planning-модель для capacity.
+
+| Профиль трафика | Пример нагрузки на пользователя | 1 vCPU / 512 MB (текущая база) | 2 vCPU / 2 GB | 4 vCPU / 4 GB |
+|---|---|---:|---:|---:|
+| Лёгкий | мессенджеры, веб, почта | 60-120 активных | 120-250 | 250-500 |
+| Смешанный | веб + периодическое видео | 30-80 активных | 80-170 | 170-350 |
+| Тяжёлый | стабильное видео/стрим | 15-40 активных | 40-90 | 90-180 |
+
+Примечания:
+- «Активные» = пользователи с заметным трафиком в единицу времени; выданных peer-конфигов может быть намного больше.
+- На практике лимит почти всегда упирается в CPU VPS1 и сетевую полосу, а не в сам WireGuard peer count.
+- Для точных цифр используйте `bash scripts/tools/load-test.sh --max-connections ...` на целевом тарифе VPS.
+
+### Набор порогов алертов
+
+Мониторинг (`monitor-web.sh` и `monitor-realtime.sh`) теперь логирует `WARN/ERROR` при выходе метрик за пороги:
+
+| Метрика | WARN | CRIT | Комментарий |
+|---|---:|---:|---|
+| CPU load (в % от числа ядер) | 120% | 180% | `load1 / cpus * 100` |
+| RAM used | 80% | 90% | по `free -m` |
+| Swap used | 64 MB | 256 MB | рост swap обычно признак давления на память |
+| Conntrack usage | 70% | 85% | `nf_conntrack_count / nf_conntrack_max` |
+
+Пороги можно переопределить в `.env` (см. `.env.example`):
+`ALERT_LOAD_WARN_PCT`, `ALERT_LOAD_CRIT_PCT`, `ALERT_MEM_WARN_PCT`, `ALERT_MEM_CRIT_PCT`, `ALERT_SWAP_WARN_MB`, `ALERT_SWAP_CRIT_MB`, `ALERT_CONNTRACK_WARN_PCT`, `ALERT_CONNTRACK_CRIT_PCT`.
+
+### Изменения для безопасного масштабирования
+
+Применены эксплуатационные изменения в скриптах:
+- `scripts/deploy/deploy-proxy.sh`: усилены лимиты `youtube-proxy.service` (`MemoryHigh=384M`, `MemoryMax=448M`, `LimitNOFILE=262144`, `TasksMax=4096`, `OOMPolicy=restart`, `StartLimit*`, `GOMEMLIMIT=384MiB`).
+- `scripts/monitor/monitor-web.sh`: добавлен сбор `conntrack_count/max` и автоматические alert-сообщения в лог при превышении порогов.
+- `scripts/monitor/monitor-realtime.sh`: добавлены те же alert-пороги для живого мониторинга и логирования.
 
 ### Текущая схема маршрутизации
 
@@ -1028,3 +1063,4 @@ sudo systemctl restart awg-quick@awg1
 # Логи
 sudo journalctl -u awg-quick@awg0 -f
 ```
+

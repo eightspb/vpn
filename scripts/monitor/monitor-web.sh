@@ -56,6 +56,14 @@ VPS1_FAIL_STREAK=0
 VPS2_FAIL_STREAK=0
 BACKOFF_MAX_INTERVAL=30
 LAST_SLEEP_INTERVAL=0
+ALERT_LOAD_WARN_PCT=120
+ALERT_LOAD_CRIT_PCT=180
+ALERT_MEM_WARN_PCT=80
+ALERT_MEM_CRIT_PCT=90
+ALERT_SWAP_WARN_MB=64
+ALERT_SWAP_CRIT_MB=256
+ALERT_CONNTRACK_WARN_PCT=70
+ALERT_CONNTRACK_CRIT_PCT=85
 
 LOG_MAX_BYTES=2097152  # 2 MB
 
@@ -79,6 +87,21 @@ log_line() {
 
 set_last_error() {
     if [[ "$1" == "VPS1" ]]; then LAST_ERR_VPS1="$2"; else LAST_ERR_VPS2="$2"; fi
+}
+
+load_alert_thresholds() {
+    local env_file="${PROJECT_ROOT}/.env"
+    local val=""
+    [[ ! -f "$env_file" ]] && return 0
+
+    val="$(read_kv "$env_file" ALERT_LOAD_WARN_PCT)"; [[ -n "$val" ]] && ALERT_LOAD_WARN_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_LOAD_CRIT_PCT)"; [[ -n "$val" ]] && ALERT_LOAD_CRIT_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_MEM_WARN_PCT)"; [[ -n "$val" ]] && ALERT_MEM_WARN_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_MEM_CRIT_PCT)"; [[ -n "$val" ]] && ALERT_MEM_CRIT_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_SWAP_WARN_MB)"; [[ -n "$val" ]] && ALERT_SWAP_WARN_MB="$val"
+    val="$(read_kv "$env_file" ALERT_SWAP_CRIT_MB)"; [[ -n "$val" ]] && ALERT_SWAP_CRIT_MB="$val"
+    val="$(read_kv "$env_file" ALERT_CONNTRACK_WARN_PCT)"; [[ -n "$val" ]] && ALERT_CONNTRACK_WARN_PCT="$val"
+    val="$(read_kv "$env_file" ALERT_CONNTRACK_CRIT_PCT)"; [[ -n "$val" ]] && ALERT_CONNTRACK_CRIT_PCT="$val"
 }
 
 cleanup_all() {
@@ -160,6 +183,8 @@ VPN_RX=\$(( \${AWG0_RX:-0} + \${AWG1_RX:-0} ))
 VPN_TX=\$(( \${AWG0_TX:-0} + \${AWG1_TX:-0} ))
 TCP_EST=\$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=\$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
+CT_COUNT=\$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+CT_MAX=\$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
 AWG0=\$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
 AWG1=\$(sudo systemctl is-active awg-quick@awg1 2>/dev/null || echo unknown)
 HS0=\$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0) print systime()-\$2; else print -1}')
@@ -193,6 +218,8 @@ echo "RX=\${RX:-0}"
 echo "TX=\${TX:-0}"
 echo "TCP_EST=\${TCP_EST:-0}"
 echo "UDP_CONN=\${UDP_CONN:-0}"
+echo "CT_COUNT=\${CT_COUNT:-0}"
+echo "CT_MAX=\${CT_MAX:-0}"
 echo "AWG0=\$AWG0"
 echo "AWG1=\$AWG1"
 echo "HS0=\$HS0"
@@ -250,6 +277,8 @@ VPN_RX=${AWG0_RX:-0}
 VPN_TX=${AWG0_TX:-0}
 TCP_EST=$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
 UDP_CONN=$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
+CT_COUNT=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+CT_MAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
 AWG0=$(sudo systemctl is-active awg-quick@awg0 2>/dev/null || echo unknown)
 HS0=$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if ($2>0) print systime()-$2; else print -1}')
 [[ -z "$HS0" ]] && HS0=-1
@@ -290,6 +319,8 @@ echo "RX=${RX:-0}"
 echo "TX=${TX:-0}"
 echo "TCP_EST=${TCP_EST:-0}"
 echo "UDP_CONN=${UDP_CONN:-0}"
+echo "CT_COUNT=${CT_COUNT:-0}"
+echo "CT_MAX=${CT_MAX:-0}"
 echo "AWG0=$AWG0"
 echo "HS0=$HS0"
 echo "P0=$P0"
@@ -352,7 +383,7 @@ write_json() {
     local V1_MEM_USED="0" V1_MEM_TOTAL="0" V1_MEM_FREE="0"
     local V1_DISK_USED="" V1_DISK_TOTAL="" V1_DISK_PCT="0"
     local V1_NET_IF="" V1_RX="0" V1_TX="0"
-    local V1_TCP_EST="0" V1_UDP_CONN="0"
+    local V1_TCP_EST="0" V1_UDP_CONN="0" V1_CT_COUNT="0" V1_CT_MAX="0"
     local V1_AWG0="" V1_AWG1="" V1_HS0="-1" V1_HS1="-1" V1_A1_ACTIVE="0" V1_P0="0" V1_P1="0" V1_TUN_PING=""
     local V1_RX_SPEED="0" V1_TX_SPEED="0" V1_ERROR=""
     local V1_CPUS="1" V1_UPTIME_S="0" V1_LAST_DEPLOY_TS="0" V1_CPU_MHZ="0" V1_SWAP=""
@@ -381,6 +412,8 @@ write_json() {
         V1_TX="$(parse_kv "$vps1_data" TX)"
         V1_TCP_EST="$(parse_kv "$vps1_data" TCP_EST)"
         V1_UDP_CONN="$(parse_kv "$vps1_data" UDP_CONN)"
+        V1_CT_COUNT="$(parse_kv "$vps1_data" CT_COUNT)"; V1_CT_COUNT="${V1_CT_COUNT:-0}"
+        V1_CT_MAX="$(parse_kv "$vps1_data" CT_MAX)"; V1_CT_MAX="${V1_CT_MAX:-0}"
         V1_AWG0="$(parse_kv "$vps1_data" AWG0)"
         V1_AWG1="$(parse_kv "$vps1_data" AWG1)"
         V1_HS0="$(parse_kv "$vps1_data" HS0)"; V1_HS0="${V1_HS0:--1}"
@@ -435,7 +468,7 @@ write_json() {
     local V2_MEM_USED="0" V2_MEM_TOTAL="0" V2_MEM_FREE="0"
     local V2_DISK_USED="" V2_DISK_TOTAL="" V2_DISK_PCT="0"
     local V2_NET_IF="" V2_RX="0" V2_TX="0"
-    local V2_TCP_EST="0" V2_UDP_CONN="0"
+    local V2_TCP_EST="0" V2_UDP_CONN="0" V2_CT_COUNT="0" V2_CT_MAX="0"
     local V2_AWG0="" V2_HS0="-1" V2_P0="0"
     local V2_AGH="" V2_DNS53="" V2_WEB3000="" V2_WAN_PING=""
     local V2_RX_SPEED="0" V2_TX_SPEED="0" V2_ERROR=""
@@ -465,6 +498,8 @@ write_json() {
         V2_TX="$(parse_kv "$vps2_data" TX)"
         V2_TCP_EST="$(parse_kv "$vps2_data" TCP_EST)"
         V2_UDP_CONN="$(parse_kv "$vps2_data" UDP_CONN)"
+        V2_CT_COUNT="$(parse_kv "$vps2_data" CT_COUNT)"; V2_CT_COUNT="${V2_CT_COUNT:-0}"
+        V2_CT_MAX="$(parse_kv "$vps2_data" CT_MAX)"; V2_CT_MAX="${V2_CT_MAX:-0}"
         V2_AWG0="$(parse_kv "$vps2_data" AWG0)"
         V2_HS0="$(parse_kv "$vps2_data" HS0)"; V2_HS0="${V2_HS0:--1}"
         V2_P0="$(parse_kv "$vps2_data" P0)"
@@ -526,6 +561,7 @@ write_json() {
         J_V1_DISK_USED="${V1_DISK_USED:-}" J_V1_DISK_TOTAL="${V1_DISK_TOTAL:-}" J_V1_DISK_PCT="${V1_DISK_PCT:-0}" \
         J_V1_NET_IF="${V1_NET_IF:-}" J_V1_RX_SPEED="$V1_RX_SPEED" J_V1_TX_SPEED="$V1_TX_SPEED" \
         J_V1_TCP_EST="${V1_TCP_EST:-0}" J_V1_UDP_CONN="${V1_UDP_CONN:-0}" \
+        J_V1_CT_COUNT="${V1_CT_COUNT:-0}" J_V1_CT_MAX="${V1_CT_MAX:-0}" \
         J_V1_AWG0="${V1_AWG0:-}" J_V1_AWG1="${V1_AWG1:-}" J_V1_HS0="${V1_HS0:--1}" J_V1_HS1="${V1_HS1:--1}" J_V1_A1_ACTIVE="${V1_A1_ACTIVE:-0}" \
         J_V1_P0="${V1_P0:-0}" J_V1_P1="${V1_P1:-0}" J_V1_TUN_PING="${V1_TUN_PING:-}" \
         J_V1_CPUS="${V1_CPUS:-1}" J_V1_UPTIME_S="${V1_UPTIME_S:-0}" J_V1_LAST_DEPLOY_TS="${V1_LAST_DEPLOY_TS:-0}" \
@@ -542,6 +578,7 @@ write_json() {
         J_V2_DISK_USED="${V2_DISK_USED:-}" J_V2_DISK_TOTAL="${V2_DISK_TOTAL:-}" J_V2_DISK_PCT="${V2_DISK_PCT:-0}" \
         J_V2_NET_IF="${V2_NET_IF:-}" J_V2_RX_SPEED="$V2_RX_SPEED" J_V2_TX_SPEED="$V2_TX_SPEED" \
         J_V2_TCP_EST="${V2_TCP_EST:-0}" J_V2_UDP_CONN="${V2_UDP_CONN:-0}" \
+        J_V2_CT_COUNT="${V2_CT_COUNT:-0}" J_V2_CT_MAX="${V2_CT_MAX:-0}" \
         J_V2_AWG0="${V2_AWG0:-}" J_V2_HS0="${V2_HS0:--1}" J_V2_P0="${V2_P0:-0}" \
         J_V2_AGH="${V2_AGH:-}" J_V2_DNS53="${V2_DNS53:-}" J_V2_WEB3000="${V2_WEB3000:-}" \
         J_V2_WAN_PING="${V2_WAN_PING:-}" J_V2_ERROR="${V2_ERROR:-}" \
@@ -605,6 +642,8 @@ data = {
         'tx_speed':     ni('J_V1_TX_SPEED'),
         'tcp_est':      ni('J_V1_TCP_EST'),
         'udp_conn':     ni('J_V1_UDP_CONN'),
+        'conntrack_count': ni('J_V1_CT_COUNT'),
+        'conntrack_max': ni('J_V1_CT_MAX'),
         'awg0':         s('J_V1_AWG0'),
         'awg1':         s('J_V1_AWG1'),
         'hs0_age':      ni('J_V1_HS0', -1),
@@ -650,6 +689,8 @@ data = {
         'tx_speed':     ni('J_V2_TX_SPEED'),
         'tcp_est':      ni('J_V2_TCP_EST'),
         'udp_conn':     ni('J_V2_UDP_CONN'),
+        'conntrack_count': ni('J_V2_CT_COUNT'),
+        'conntrack_max': ni('J_V2_CT_MAX'),
         'awg0':         s('J_V2_AWG0'),
         'hs0_age':      ni('J_V2_HS0', -1),
         'peers_awg0':   ni('J_V2_P0'),
@@ -846,6 +887,7 @@ PYSERVER
 # ---------------------------------------------------------------------------
 
 load_defaults_from_files
+load_alert_thresholds
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -962,6 +1004,58 @@ compute_effective_interval() {
     printf "%s" "$effective"
 }
 
+log_metric_alert() {
+    local level="$1" server="$2" metric="$3" value="$4" threshold="$5"
+    log_line "$level" "ALERT $server $metric value=$value threshold=$threshold"
+}
+
+evaluate_server_alerts() {
+    local server="$1" data="$2"
+    [[ -z "$data" ]] && return 0
+
+    local cpus load_raw load1 mem_raw mem_used mem_total mem_pct swap_raw swap_used
+    local ct_count ct_max ct_pct load_pct
+    cpus="$(parse_kv "$data" CPUS)"; cpus="${cpus:-1}"
+    load_raw="$(parse_kv "$data" LOAD)"; load1="${load_raw%%,*}"; load1="${load1:-0}"
+    mem_raw="$(parse_kv "$data" MEM)"
+    mem_used="${mem_raw%%/*}"; mem_used="${mem_used:-0}"
+    mem_total="${mem_raw#*/}"; mem_total="${mem_total%%[^0-9]*}"; mem_total="${mem_total:-0}"
+    swap_raw="$(parse_kv "$data" SWAP)"
+    swap_used="${swap_raw%%/*}"; swap_used="${swap_used:-0}"
+    ct_count="$(parse_kv "$data" CT_COUNT)"; ct_count="${ct_count:-0}"
+    ct_max="$(parse_kv "$data" CT_MAX)"; ct_max="${ct_max:-0}"
+
+    load_pct="$(awk "BEGIN{if (${cpus:-1}<=0) {print 0} else {printf \"%.0f\", ((${load1:-0}/${cpus:-1})*100)}}")"
+    mem_pct="$(awk "BEGIN{if (${mem_total:-0}<=0) {print 0} else {printf \"%.0f\", ((${mem_used:-0}/${mem_total:-1})*100)}}")"
+    ct_pct="$(awk "BEGIN{if (${ct_max:-0}<=0) {print 0} else {printf \"%.0f\", ((${ct_count:-0}/${ct_max:-1})*100)}}")"
+
+    if (( load_pct >= ALERT_LOAD_CRIT_PCT )); then
+        log_metric_alert "ERROR" "$server" "cpu_load_pct" "$load_pct" "$ALERT_LOAD_CRIT_PCT"
+    elif (( load_pct >= ALERT_LOAD_WARN_PCT )); then
+        log_metric_alert "WARN" "$server" "cpu_load_pct" "$load_pct" "$ALERT_LOAD_WARN_PCT"
+    fi
+
+    if (( mem_pct >= ALERT_MEM_CRIT_PCT )); then
+        log_metric_alert "ERROR" "$server" "mem_used_pct" "$mem_pct" "$ALERT_MEM_CRIT_PCT"
+    elif (( mem_pct >= ALERT_MEM_WARN_PCT )); then
+        log_metric_alert "WARN" "$server" "mem_used_pct" "$mem_pct" "$ALERT_MEM_WARN_PCT"
+    fi
+
+    if (( swap_used >= ALERT_SWAP_CRIT_MB )); then
+        log_metric_alert "ERROR" "$server" "swap_used_mb" "$swap_used" "$ALERT_SWAP_CRIT_MB"
+    elif (( swap_used >= ALERT_SWAP_WARN_MB )); then
+        log_metric_alert "WARN" "$server" "swap_used_mb" "$swap_used" "$ALERT_SWAP_WARN_MB"
+    fi
+
+    if (( ct_max > 0 )); then
+        if (( ct_pct >= ALERT_CONNTRACK_CRIT_PCT )); then
+            log_metric_alert "ERROR" "$server" "conntrack_pct" "$ct_pct" "$ALERT_CONNTRACK_CRIT_PCT"
+        elif (( ct_pct >= ALERT_CONNTRACK_WARN_PCT )); then
+            log_metric_alert "WARN" "$server" "conntrack_pct" "$ct_pct" "$ALERT_CONNTRACK_WARN_PCT"
+        fi
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Kill previous instance if running
 # ---------------------------------------------------------------------------
@@ -1060,6 +1154,8 @@ while true; do
     VPS2_DATA="$(cat "$local_tmp2")"; rm -f "$local_tmp2"
 
     write_json "$VPS1_DATA" "$VPS2_DATA"
+    evaluate_server_alerts "VPS1" "$VPS1_DATA"
+    evaluate_server_alerts "VPS2" "$VPS2_DATA"
     if [[ -n "$VPS1_DATA" ]]; then VPS1_FAIL_STREAK=0; else VPS1_FAIL_STREAK=$((VPS1_FAIL_STREAK + 1)); fi
     if [[ -n "$VPS2_DATA" ]]; then VPS2_FAIL_STREAK=0; else VPS2_FAIL_STREAK=$((VPS2_FAIL_STREAK + 1)); fi
     EFFECTIVE_INTERVAL="$(compute_effective_interval)"

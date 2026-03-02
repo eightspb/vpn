@@ -305,26 +305,29 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "S2": "20",
 }
 
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "My-secure-admin-password"
+
 
 def _ensure_default_admin() -> None:
-    """Create admin/admin user if no users exist."""
+    """Create default admin user if no users exist."""
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
     count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if count == 0:
-        pw_hash = bcrypt.hashpw(b"admin", bcrypt.gensalt(rounds=12)).decode()
+        pw_hash = bcrypt.hashpw(DEFAULT_ADMIN_PASSWORD.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode()
         conn.execute(
             "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-            ("admin", pw_hash),
+            (DEFAULT_ADMIN_USERNAME, pw_hash),
         )
         conn.commit()
         log.warning(
             "╔═══════════════════════════════════════════════════════════╗"
         )
         log.warning(
-            "║  Default admin created — username: admin, password: admin ║"
+            "║  Default admin created — username: admin                 ║"
         )
         log.warning(
-            "║  CHANGE THE PASSWORD IMMEDIATELY!                        ║"
+            "║  Password: My-secure-admin-password                      ║"
         )
         log.warning(
             "╚═══════════════════════════════════════════════════════════╝"
@@ -1174,8 +1177,8 @@ def _build_wg_dump_cmd() -> str:
         "sudo -n wg show \"$IFACE\" dump 2>/dev/null || "
         "awg show \"$IFACE\" dump 2>/dev/null || "
         "wg show \"$IFACE\" dump 2>/dev/null || true); "
-        "[ -n \"$DUMP\" ] && printf '%s\n' \"$DUMP\"; "
-        "done"
+        "[ -n \"$DUMP\" ] && printf '%s\\n' \"$DUMP\"; "
+        "done; true"
     )
 
 
@@ -1337,6 +1340,7 @@ def peers_list():
     rows = db.execute(f"SELECT * FROM peers{where} ORDER BY id", params).fetchall()
     db_peers = [_enrich_peer_config_state(_peer_to_dict(r)) for r in rows]
     db_config_files = set()
+    db_ips = set()
     for p in db_peers:
         cf = p.get("config_file")
         if cf:
@@ -1344,10 +1348,17 @@ def peers_list():
                 db_config_files.add(str(Path(cf).resolve()))
             except (OSError, RuntimeError):
                 db_config_files.add(str(Path(cf)))
+        ip = _normalize_peer_lookup_key(p.get("ip"))
+        if ip:
+            db_ips.add(ip)
 
     config_peers = _scan_peers_from_configs_dir()
     for cp in config_peers:
         if cp["config_file"] and str(Path(cp["config_file"]).resolve()) in db_config_files:
+            continue
+        cp_ip = _normalize_peer_lookup_key(cp.get("ip"))
+        # Prevent duplicate rows when peer exists in DB and in config folder.
+        if cp_ip and cp_ip in db_ips:
             continue
         if status and status != "from_config":
             continue
@@ -2314,7 +2325,8 @@ def main() -> None:
         port=port,
         debug=not args.prod,
         use_reloader=False,
-        allow_unsafe_werkzeug=not args.prod,
+        # This app is deployed behind controlled server setup; allow Werkzeug in prod mode.
+        allow_unsafe_werkzeug=True,
         ssl_context=ssl_context,
     )
 

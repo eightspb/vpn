@@ -5,6 +5,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DB = SCRIPT_DIR / "admin.db"
+DEFAULT_ADMIN_PASSWORD = "My-secure-admin-password"
 
 def main():
     import sqlite3
@@ -20,8 +21,8 @@ def main():
         print("User 'admin' not in DB")
         return 1
     h = (row["password_hash"] or "").strip()
-    ok = bcrypt.checkpw(b"admin", h.encode("utf-8"))
-    print("Hash length:", len(h), "| checkpw(b'admin', hash):", ok)
+    ok = bcrypt.checkpw(DEFAULT_ADMIN_PASSWORD.encode("utf-8"), h.encode("utf-8"))
+    print(f"Hash length: {len(h)} | checkpw(default password, hash): {ok}")
     return 0 if ok else 1
 
 if __name__ == "__main__":

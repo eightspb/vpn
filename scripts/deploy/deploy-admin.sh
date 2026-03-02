@@ -10,7 +10,7 @@
 #   bash deploy-admin.sh setup       — Установка зависимостей
 #   bash deploy-admin.sh restart     — Перезапуск
 #   bash deploy-admin.sh logs        — Просмотр логов
-#   bash deploy-admin.sh reset-password  — Сбросить пароль admin на «admin»
+#   bash deploy-admin.sh reset-password  — Сбросить пароль admin на «My-secure-admin-password»
 #
 # Опции:
 #   --port PORT       Порт (по умолчанию: 8081 dev, 8443 prod)
@@ -39,6 +39,7 @@ REQUIREMENTS="${ADMIN_DIR}/requirements.txt"
 VENV_DIR="${ADMIN_DIR}/.venv"
 PID_FILE="${ADMIN_DIR}/admin.pid"
 LOG_FILE="${ADMIN_DIR}/admin.log"
+DEFAULT_ADMIN_PASSWORD="My-secure-admin-password"
 
 # ── Поиск Python ─────────────────────────────────────────────────────────────
 
@@ -373,11 +374,11 @@ cmd_reset_password() {
         return 1
     fi
 
-    step "Сброс пароля пользователя admin на «admin»"
+    step "Сброс пароля пользователя admin на «${DEFAULT_ADMIN_PASSWORD}»"
 
-    "$PYTHON" "${ADMIN_DIR}/reset-admin-password.py" "$db_file" || { err "Не удалось сбросить пароль"; return 1; }
+    "$PYTHON" "${ADMIN_DIR}/reset-admin-password.py" "$db_file" "$DEFAULT_ADMIN_PASSWORD" || { err "Не удалось сбросить пароль"; return 1; }
 
-    ok "Пароль пользователя admin установлен в «admin». Войдите и смените его в настройках."
+    ok "Пароль пользователя admin установлен в «${DEFAULT_ADMIN_PASSWORD}»."
 }
 
 # ── Справка ───────────────────────────────────────────────────────────────────
@@ -394,7 +395,7 @@ deploy-admin.sh — управление VPN Admin Panel
   setup        Установка зависимостей
   restart      Перезапуск
   logs         Просмотр логов (tail -f)
-  reset-password  Сбросить пароль admin на «admin» (если забыли)
+  reset-password  Сбросить пароль admin на «My-secure-admin-password» (если забыли)
 
 Опции:
   --port PORT  Порт (по умолчанию: 8081 dev, 8443 prod)
