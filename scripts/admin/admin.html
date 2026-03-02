@@ -1082,6 +1082,7 @@ const state = {
   peersPage: 1,
   groups: [],
   peersRenderLockUntil: 0,
+  peerOnlineThresholdSec: 55,
 };
 
 const PEERS_PER_PAGE = 50;
@@ -1089,6 +1090,13 @@ let refreshTimer = null;
 const SPEED_HIST_MAX = 60;
 const PEER_SPEED_HIST_MAX = 40;
 const PEER_ONLINE_HS_SEC = 55;
+function normKey(v) {
+  return String(v ?? '').trim();
+}
+function getPeerOnlineThresholdSec() {
+  const n = Number(state.peerOnlineThresholdSec);
+  return Number.isFinite(n) && n > 0 ? n : PEER_ONLINE_HS_SEC;
+}
 function lockPeersRender(ms = 1200) {
   state.peersRenderLockUntil = Date.now() + Math.max(0, Number(ms) || 0);
 }
@@ -1193,9 +1201,32 @@ function fmtUptime(s) {
   return `${m}m`;
 }
 
+function calcLastRebootTs(monTs, uptimeS) {
+  const ts = Number(monTs);
+  const up = Number(uptimeS);
+  if (!Number.isFinite(ts) || !Number.isFinite(up) || ts <= 0 || up <= 0) return null;
+  const rebootTs = Math.floor(ts - up);
+  return rebootTs > 0 ? rebootTs : null;
+}
+
+function calcAgeSec(nowTs, eventTs) {
+  const now = Number(nowTs);
+  const event = Number(eventTs);
+  if (!Number.isFinite(now) || !Number.isFinite(event) || now <= 0 || event <= 0 || now < event) return null;
+  return Math.floor(now - event);
+}
+
+function fmtEpochLocal(tsSec) {
+  if (!tsSec || tsSec <= 0) return '—';
+  const dt = new Date(tsSec * 1000);
+  if (Number.isNaN(dt.getTime())) return '—';
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    + ' ' + dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 function fmtHandshake(ageSec) {
   if (ageSec == null || ageSec < 0) return { text: 'never', cls: 'hs-gray' };
-  if (ageSec < PEER_ONLINE_HS_SEC) return { text: `${ageSec}s ago`, cls: 'hs-green' };
+  if (ageSec < getPeerOnlineThresholdSec()) return { text: `${ageSec}s ago`, cls: 'hs-green' };
   if (ageSec < 600) return { text: `${Math.round(ageSec / 60)}m ago`, cls: 'hs-yellow' };
   return { text: `${Math.round(ageSec / 60)}m ago`, cls: 'hs-red' };
 }
@@ -1289,15 +1320,18 @@ async function loadDashboardData() {
     state.peerStats = stats;
     state.monitoring = monitoring;
     state.peers = Array.isArray(peersRes) ? peersRes : [];
+    const thresholdPeer = (state.peers || []).find(p => Number(p?.connection_threshold_sec) > 0);
+    state.peerOnlineThresholdSec = thresholdPeer ? Number(thresholdPeer.connection_threshold_sec) : PEER_ONLINE_HS_SEC;
     state.monitoringPeers = Array.isArray(monPeersRes) ? monPeersRes : [];
     const mpMap = {};
     (state.monitoringPeers || []).forEach(mp => {
-      const ip = mp.peer_ip || extractPeerIp(mp.allowed_ips);
+      const ip = normKey(mp.peer_ip || extractPeerIp(mp.allowed_ips));
       if (ip) mpMap[ip] = mp;
-      if (mp.public_key) mpMap[mp.public_key] = mp;
+      const pub = normKey(mp.public_key);
+      if (pub) mpMap[pub] = mp;
     });
     (state.peers || []).forEach(p => {
-      const mp = mpMap[p.ip] || mpMap[p.public_key];
+      const mp = mpMap[normKey(p.ip)] || mpMap[normKey(p.public_key)];
       updatePeerLiveStats(p, mp);
     });
     if (monitoring) pushSpeedHist(monitoring);
@@ -1314,20 +1348,26 @@ async function loadPeers() {
     if (state.peersFilter.search) params.set('search', state.peersFilter.search);
     const peers = await api('GET', '/api/peers?' + params.toString());
     state.peers = peers;
+    const thresholdPeer = (state.peers || []).find(p => Number(p?.connection_threshold_sec) > 0);
+    state.peerOnlineThresholdSec = thresholdPeer ? Number(thresholdPeer.connection_threshold_sec) : PEER_ONLINE_HS_SEC;
     state.groups = [...new Set(peers.map(p => p.group_name).filter(Boolean))];
 
     try {
       state.monitoringPeers = await api('GET', '/api/monitoring/peers');
-    } catch (_) {}
+    } catch (_) {
+      // Drop stale runtime snapshot to avoid showing outdated online/offline state.
+      state.monitoringPeers = [];
+    }
 
     const mpMap = {};
     (state.monitoringPeers || []).forEach(mp => {
-      const ip = mp.peer_ip || extractPeerIp(mp.allowed_ips);
+      const ip = normKey(mp.peer_ip || extractPeerIp(mp.allowed_ips));
       if (ip) mpMap[ip] = mp;
-      if (mp.public_key) mpMap[mp.public_key] = mp;
+      const pub = normKey(mp.public_key);
+      if (pub) mpMap[pub] = mp;
     });
     (state.peers || []).forEach(p => {
-      const mp = mpMap[p.ip] || mpMap[p.public_key];
+      const mp = mpMap[normKey(p.ip)] || mpMap[normKey(p.public_key)];
       updatePeerLiveStats(p, mp);
     });
 
@@ -1407,8 +1447,11 @@ function updatePeerLiveStats(peer, monPeer) {
   const nowSec = Date.now() / 1000;
   const rxBytes = Number(peer?.rx_bytes ?? monPeer?.rx_bytes ?? 0);
   const txBytes = Number(peer?.tx_bytes ?? monPeer?.tx_bytes ?? 0);
-  const handshakeAgeSec = peer?.handshake_age_sec ?? monPeer?.handshake_age_sec ?? null;
-  const online = handshakeAgeSec != null && Number(handshakeAgeSec) >= 0 && Number(handshakeAgeSec) < PEER_ONLINE_HS_SEC;
+  const handshakeAgeSec = monPeer?.handshake_age_sec ?? peer?.handshake_age_sec ?? null;
+  const thresholdSec = Number(peer?.connection_threshold_sec ?? getPeerOnlineThresholdSec());
+  const hasBackendConnStatus = peer?.connection_status === 'online' || peer?.connection_status === 'offline';
+  let online = handshakeAgeSec != null && Number(handshakeAgeSec) >= 0 && Number(handshakeAgeSec) < thresholdSec;
+  if (handshakeAgeSec == null && hasBackendConnStatus) online = peer.connection_status === 'online';
   const live = peerLive[key] || { rxHist: [], txHist: [], rxBps: 0, txBps: 0, ts: nowSec };
 
   const dt = nowSec - (live.ts || nowSec);
@@ -1599,23 +1642,29 @@ function renderDashboardContent() {
   const mon = state.monitoring || {};
   const v1 = mon.vps1 || {};
   const v2 = mon.vps2 || {};
+  const totalUptimeSec = (Number(v1.uptime_s) || 0) + (Number(v2.uptime_s) || 0);
   const totalPeers = stats.used || 0;
   const activePeers = stats.by_status?.active || 0;
   const disabledPeers = stats.by_status?.disabled || 0;
   const available = stats.available || 0;
 
-  const vpnRxTotal = (v1.vpn_rx_total || 0) + (v2.vpn_rx_total || 0);
-  const vpnTxTotal = (v1.vpn_tx_total || 0) + (v2.vpn_tx_total || 0);
+  // VPS1 awg0 = tunnel to VPS2, VPS1 awg1 = direct clients.
+  // VPS2 awg0 = tunnel endpoint from VPS1.
+  // Summing VPS1+VPS2 totals double-counts tunnel traffic — show per-server instead.
+  const v1VpnRxTotal = v1.vpn_rx_total || 0;
+  const v1VpnTxTotal = v1.vpn_tx_total || 0;
+  const v2VpnRxTotal = v2.vpn_rx_total || 0;
+  const v2VpnTxTotal = v2.vpn_tx_total || 0;
+  // Kept for chart sparklines (histograms track combined speed, not totals)
   const vpnRxSpeed = (v1.vpn_rx_speed || 0) + (v2.vpn_rx_speed || 0);
   const vpnTxSpeed = (v1.vpn_tx_speed || 0) + (v2.vpn_tx_speed || 0);
-
-  const vpnTotalCombined = vpnRxTotal + vpnTxTotal;
-  const CONNECTED_HS_SEC = PEER_ONLINE_HS_SEC;
+  const CONNECTED_HS_SEC = getPeerOnlineThresholdSec();
   const mpMap = {};
   const mpByIp = {};
   (state.monitoringPeers || []).forEach(mp => {
-    if (mp.public_key) mpMap[mp.public_key] = mp;
-    const ip = mp.peer_ip || extractPeerIp(mp.allowed_ips);
+    const pub = normKey(mp.public_key);
+    if (pub) mpMap[pub] = mp;
+    const ip = normKey(mp.peer_ip || extractPeerIp(mp.allowed_ips));
     if (ip) mpByIp[ip] = mp;
   });
   const isActive = mp => mp && mp.handshake_age_sec != null && mp.handshake_age_sec < CONNECTED_HS_SEC;
@@ -1623,11 +1672,11 @@ function renderDashboardContent() {
   let connectedPeers = (state.peers || [])
     .filter(p => {
       if (p.connection_status === 'online') return true;
-      const m = mpMap[p.public_key] || (p.ip ? mpByIp[p.ip] : null);
+      const m = mpMap[normKey(p.public_key)] || (p.ip ? mpByIp[normKey(p.ip)] : null);
       return isActive(m);
     })
     .map(p => {
-      const mp = mpMap[p.public_key] || mpByIp[p.ip] || {
+      const mp = mpMap[normKey(p.public_key)] || mpByIp[normKey(p.ip)] || {
         handshake_age_sec: p.handshake_age_sec,
         rx_bytes: p.rx_bytes,
         tx_bytes: p.tx_bytes
@@ -1651,6 +1700,16 @@ function renderDashboardContent() {
     const bh = b.handshake_age_sec == null ? Number.POSITIVE_INFINITY : b.handshake_age_sec;
     return ah - bh;
   });
+  const peerNameByIp = {};
+  const peerNameByPub = {};
+  (state.peers || []).forEach(p => {
+    const name = String(p?.name ?? '').trim();
+    if (!name) return;
+    const ip = normKey(p?.ip);
+    const pub = normKey(p?.public_key);
+    if (ip && !peerNameByIp[ip]) peerNameByIp[ip] = name;
+    if (pub && !peerNameByPub[pub]) peerNameByPub[pub] = name;
+  });
   const monitoringPeersCard = monitoringPeersSorted.length > 0
     ? `<div class="card" style="margin-bottom:20px">
         <div class="card-header">
@@ -1661,7 +1720,7 @@ function renderDashboardContent() {
           <table>
             <thead>
               <tr>
-                <th>Peer IP</th>
+                <th>Peer (Name / IP)</th>
                 <th>Endpoint</th>
                 <th>Allowed IPs</th>
                 <th>Handshake</th>
@@ -1672,10 +1731,17 @@ function renderDashboardContent() {
             <tbody>
               ${monitoringPeersSorted.map(mp => {
                 const hs = fmtHandshake(mp.handshake_age_sec);
-                const peerIp = mp.peer_ip || extractPeerIp(mp.allowed_ips) || '—';
+                const peerIp = normKey(mp.peer_ip || extractPeerIp(mp.allowed_ips)) || '—';
+                const peerPub = normKey(mp.public_key);
+                const peerName = (peerPub && peerNameByPub[peerPub]) || (peerIp !== '—' ? peerNameByIp[peerIp] : '') || '';
+                const peerMain = peerName || peerIp;
+                const peerSub = peerName && peerName !== peerIp ? peerIp : '';
                 const shortKey = mp.public_key ? (mp.public_key.slice(0, 10) + '...' + mp.public_key.slice(-6)) : '—';
                 return `<tr>
-                  <td class="mono">${esc(peerIp)}</td>
+                  <td>
+                    <div><strong>${esc(peerMain)}</strong></div>
+                    ${peerSub ? `<div class="mono" style="font-size:12px;color:var(--text-secondary)">${esc(peerSub)}</div>` : ''}
+                  </td>
                   <td class="mono" style="font-size:12px">${esc(mp.endpoint || '—')}</td>
                   <td class="mono" style="font-size:12px">${esc(mp.allowed_ips || '—')}</td>
                   <td class="${hs.cls}" style="font-family:monospace;font-size:12px">${hs.text}</td>
@@ -1713,17 +1779,27 @@ function renderDashboardContent() {
           <div class="empty-state-text">Нет активных подключений (handshake &lt; ${CONNECTED_HS_SEC}с). Данные через /api/monitoring/peers (SSH к VPS1).</div>
         </div>
       </div>`;
+  const monitorStale = mon._monitor_running === false;
   const trafficSummaryRow = `
     <div class="dashboard-section-title">Трафик и скорость</div>
-    ${dataTs ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">Данные мониторинга: ' + dataTs + '</div>' : ''}
+    ${monitorStale ? '<div style="font-size:12px;color:var(--warning,#f59e0b);background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:6px;padding:6px 10px;margin-bottom:8px">⚠ monitor-web.sh не запущен или данные устарели — скорость не обновляется</div>' : ''}
+    ${dataTs ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">Данные мониторинга: ' + dataTs + (monitorStale ? ' (устарели)' : '') + ' · счётчики с последней перезагрузки серверов</div>' : ''}
     <div class="traffic-summary-row">
       <div class="traffic-mini-card">
         <div class="traffic-mini-icon down">↓</div>
-        <div><div class="traffic-mini-value">${fmtBytes(vpnRxTotal)}</div><div class="traffic-mini-label">Всего загрузка (RX)</div></div>
+        <div><div class="traffic-mini-value">${fmtBytes(v1VpnRxTotal)}</div><div class="traffic-mini-label">VPS1 VPN загрузка (RX)</div></div>
       </div>
       <div class="traffic-mini-card">
         <div class="traffic-mini-icon up">↑</div>
-        <div><div class="traffic-mini-value">${fmtBytes(vpnTxTotal)}</div><div class="traffic-mini-label">Всего отдача (TX)</div></div>
+        <div><div class="traffic-mini-value">${fmtBytes(v1VpnTxTotal)}</div><div class="traffic-mini-label">VPS1 VPN отдача (TX)</div></div>
+      </div>
+      <div class="traffic-mini-card">
+        <div class="traffic-mini-icon down">↓</div>
+        <div><div class="traffic-mini-value">${fmtBytes(v2VpnRxTotal)}</div><div class="traffic-mini-label">VPS2 VPN загрузка (RX)</div></div>
+      </div>
+      <div class="traffic-mini-card">
+        <div class="traffic-mini-icon up">↑</div>
+        <div><div class="traffic-mini-value">${fmtBytes(v2VpnTxTotal)}</div><div class="traffic-mini-label">VPS2 VPN отдача (TX)</div></div>
       </div>
       <div class="traffic-mini-card">
         <div class="traffic-mini-icon down">⇅</div>
@@ -1732,10 +1808,6 @@ function renderDashboardContent() {
       <div class="traffic-mini-card">
         <div class="traffic-mini-icon up">⇅</div>
         <div><div class="traffic-mini-value">${fmtBytesSpeed(vpnTxSpeed)}</div><div class="traffic-mini-label">Скорость TX</div></div>
-      </div>
-      <div class="traffic-mini-card" style="border-color:var(--accent)">
-        <div class="traffic-mini-icon" style="background:var(--accent-glow);color:var(--accent)">⇄</div>
-        <div><div class="traffic-mini-value">${fmtBytes(vpnTotalCombined)}</div><div class="traffic-mini-label">Общий трафик ↓+↑</div></div>
       </div>
     </div>
     <div class="traffic-charts-grid">
@@ -1815,14 +1887,18 @@ function renderDashboardContent() {
         <div class="summary-icon ${connectedCount > 0 ? 'teal' : 'red'}">📶</div>
         <div class="summary-info"><div class="summary-value">${connectedCount}</div><div class="summary-label">Сейчас подключено</div></div>
       </div>
+      <div class="summary-card">
+        <div class="summary-icon blue">⏱</div>
+        <div class="summary-info"><div class="summary-value">${fmtUptime(totalUptimeSec)}</div><div class="summary-label">Общий аптайм (VPS1+VPS2)</div></div>
+      </div>
     </div>
     ${connectedBlock}
     ${monitoringPeersCard}
     ${trafficSummaryRow}
     <div class="dashboard-section-title">Серверы VPS</div>
     <div class="servers-grid">
-      ${renderServerCard('VPS1', v1)}
-      ${renderServerCard('VPS2', v2)}
+      ${renderServerCard('VPS1', v1, mon.ts)}
+      ${renderServerCard('VPS2', v2, mon.ts)}
     </div>
     ${monitorLogCard}
     <div class="dashboard-section-title">Недавняя активность</div>
@@ -1853,10 +1929,17 @@ function renderDashboardContent() {
   }).catch(() => {});
 }
 
-function renderServerCard(name, d) {
+function renderServerCard(name, d, monTs) {
   const online = !!d?.online;
   const dotCls = online ? 'online' : 'offline';
   const statusLabel = online ? 'Online' : 'Offline';
+  const lastRebootTs = calcLastRebootTs(monTs, d?.uptime_s);
+  const lastRebootText = fmtEpochLocal(lastRebootTs);
+  const lastDeployTs = Number(d?.last_deploy_ts) > 0 ? Number(d.last_deploy_ts) : null;
+  const lastDeployAgeSec = calcAgeSec(monTs, lastDeployTs);
+  const lastDeployText = lastDeployTs
+    ? `${fmtEpochLocal(lastDeployTs)}${lastDeployAgeSec != null ? ` (${fmtUptime(lastDeployAgeSec)} ago)` : ''}`
+    : '—';
 
   if (!online) {
     return `<div class="server-card">
@@ -1867,6 +1950,8 @@ function renderServerCard(name, d) {
         <span class="server-status-label ${dotCls}" style="margin-left:auto">${statusLabel}</span>
       </div>
       <div class="server-body">
+        <div class="server-detail-item" style="margin-bottom:10px"><span class="server-detail-key">Last reboot</span><span class="server-detail-val">${lastRebootText}</span></div>
+        <div class="server-detail-item" style="margin-bottom:10px"><span class="server-detail-key">Last deploy</span><span class="server-detail-val">${lastDeployText}</span></div>
         <div class="empty-state" style="padding:20px">
           <div class="empty-state-icon" style="font-size:28px">⚠</div>
           <div class="empty-state-text">Server is offline or unreachable</div>
@@ -1933,6 +2018,8 @@ function renderServerCard(name, d) {
         <div class="server-detail-item"><span class="server-detail-key">Procs</span><span class="server-detail-val">${fmtNum(d.proc_count)}</span></div>
         <div class="server-detail-item"><span class="server-detail-key">Open files</span><span class="server-detail-val">${fmtNum(d.open_files)}</span></div>
         <div class="server-detail-item"><span class="server-detail-key">Free RAM</span><span class="server-detail-val">${d.mem_free_mb != null ? fmtMB(d.mem_free_mb) : '—'}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">Last reboot</span><span class="server-detail-val">${lastRebootText}</span></div>
+        <div class="server-detail-item"><span class="server-detail-key">Last deploy</span><span class="server-detail-val">${lastDeployText}</span></div>
       </div>
       <div class="server-phys-row">
         <span class="net-if">${esc(d.net_if || '')}</span>
@@ -2022,8 +2109,10 @@ function renderPeersContent() {
     </td></tr>`;
   } else {
     rows = paginated.map(p => {
-      const monPeer = mpMap[p.public_key] || mpByIp[p.ip];
-      const hsAge = p.handshake_age_sec != null ? p.handshake_age_sec : monPeer?.handshake_age_sec;
+      const monPeer = mpMap[normKey(p.public_key)] || mpByIp[normKey(p.ip)];
+      const thresholdSec = Number(p.connection_threshold_sec || getPeerOnlineThresholdSec());
+      const hasBackendConnStatus = p.connection_status === 'online' || p.connection_status === 'offline';
+      const hsAge = monPeer?.handshake_age_sec ?? p.handshake_age_sec ?? null;
       const hs = fmtHandshake(hsAge);
       const rx = (p.rx_bytes != null ? p.rx_bytes : monPeer?.rx_bytes) ? fmtBytes(p.rx_bytes ?? monPeer?.rx_bytes) : '—';
       const tx = (p.tx_bytes != null ? p.tx_bytes : monPeer?.tx_bytes) ? fmtBytes(p.tx_bytes ?? monPeer?.tx_bytes) : '—';
@@ -2033,7 +2122,8 @@ function renderPeersContent() {
       const speedDotCls = speedTotal > 1 ? 'peer-speed-dot' : 'peer-speed-dot idle';
       const speedTitle = `${p.name || p.ip || 'peer'} · ${p.ip || ''}`;
       const hasId = p.id != null;
-      const isOnline = hsAge != null && hsAge >= 0 && hsAge < PEER_ONLINE_HS_SEC;
+      let isOnline = hsAge != null && hsAge >= 0 && hsAge < thresholdSec;
+      if (hsAge == null && hasBackendConnStatus) isOnline = p.connection_status === 'online';
       const connBadge = connectionBadge(isOnline ? 'online' : 'offline', hsAge);
       const actions = hasId
         ? `<div class="btn-group">

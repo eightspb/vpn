@@ -198,11 +198,30 @@ write_conf() {
     } > "$file"
 }
 
+# Извлекает значение junk-параметра из JUNK_BLOCK (Jc, Jmin, Jmax, S1, S2, H1-H4)
+_junk_val() { echo "$JUNK_BLOCK" | awk -v k="$1" -F'[[:space:]]*=[[:space:]]*' '$1==k{print $2; exit}'; }
+
+# Генерирует нативный AmneziaVPN JSON рядом с .conf файлом
+_write_amnezia_json() {
+    local conf_file="$1" priv="$2" addr="$3" mtu="$4" allowed="$5" profile_name="$6"
+    local json_file="${conf_file%.conf}.json"
+    amnezia_write_json "$json_file" "$priv" "$addr" "$mtu" "$allowed" \
+        "$SERVER_PUB" "$ENDPOINT" "$VPS1_IP" "$SERVER_PORT" "$DNS" \
+        "$(_junk_val Jc)" "$(_junk_val Jmin)" "$(_junk_val Jmax)" \
+        "$(_junk_val S1)" "$(_junk_val S2)" \
+        "$(_junk_val H1)" "$(_junk_val H2)" "$(_junk_val H3)" "$(_junk_val H4)" \
+        "$profile_name"
+}
+
 write_conf "${OUTPUT_DIR}/client.conf" "$CLIENT_PRIV" "${CLIENT_IP}/24" "$MTU_PC" "0.0.0.0/0" "${SERVER_NAME} - client"
-ok "client.conf (компьютер, full tunnel)"
+ok "client.conf (компьютер, raw WireGuard)"
+_write_amnezia_json "${OUTPUT_DIR}/client.conf" "$CLIENT_PRIV" "${CLIENT_IP}/24" "$MTU_PC" "0.0.0.0/0" "${SERVER_NAME} - client"
+ok "client.json (компьютер, AmneziaVPN)"
 
 write_conf "${OUTPUT_DIR}/phone.conf" "$PHONE_PRIV" "${PHONE_IP}/24" "$MTU_PHONE" "0.0.0.0/0" "${SERVER_NAME} - phone"
-ok "phone.conf (телефон, full tunnel)"
+ok "phone.conf (телефон, raw WireGuard)"
+_write_amnezia_json "${OUTPUT_DIR}/phone.conf" "$PHONE_PRIV" "${PHONE_IP}/24" "$MTU_PHONE" "0.0.0.0/0" "${SERVER_NAME} - phone"
+ok "phone.json (телефон, AmneziaVPN)"
 
 # ---------------------------------------------------------------------------
 step "4/4: Обновление keys.env и keys.txt"
@@ -255,8 +274,10 @@ echo -e "${BOLD}║                        ГОТОВО!                        
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  Сгенерированные конфиги:"
-echo -e "    ${GREEN}1.${NC} ${BOLD}client.conf${NC}       — компьютер (весь трафик через VPN)"
-echo -e "    ${GREEN}2.${NC} ${BOLD}phone.conf${NC}        — телефон (весь трафик через VPN)"
+echo -e "    ${GREEN}1.${NC} ${BOLD}client.json${NC}  — компьютер (импорт в AmneziaVPN)"
+echo -e "    ${GREEN}2.${NC} ${BOLD}phone.json${NC}   — телефон   (импорт в AmneziaVPN)"
+echo -e "    ${CYAN}   client.conf / phone.conf${NC} — raw WireGuard (не для AmneziaVPN)"
 echo ""
-echo -e "  Импортируйте нужный конфиг в AmneziaVPN на устройстве."
+echo -e "  Импортируйте ${BOLD}.json${NC} файл через:"
+echo -e "    AmneziaVPN → Добавить → Файл с настройками подключения"
 echo ""

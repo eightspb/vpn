@@ -68,6 +68,7 @@ check "Contains log rotation" grep -q "logrotate" "$HARDEN"
 check "Accepts --role parameter" grep -q "\-\-role" "$HARDEN"
 check "Accepts --vpn-port parameter" grep -q "\-\-vpn-port" "$HARDEN"
 check "Accepts --adguard-bind parameter" grep -q "\-\-adguard-bind" "$HARDEN"
+check "Contains apt retry helper (_apt_install)" grep -q "_apt_install" "$HARDEN"
 check "Contains PasswordAuthentication no" grep -q "PasswordAuthentication no" "$HARDEN"
 check "Contains MaxAuthTries" grep -q "MaxAuthTries" "$HARDEN"
 check "Contains persistent iptables save" grep -q "iptables-save" "$HARDEN"
@@ -190,6 +191,18 @@ for script in deploy.sh deploy-vps1.sh deploy-vps2.sh deploy-proxy.sh security-u
 done
 
 check "lib/common.sh syntax OK" bash -n "$PROJECT_DIR/lib/common.sh"
+
+echo ""
+
+# ── 9. security-update.sh resilience ────────────────────────────────────────
+echo "9. security-update.sh DNS resilience:"
+
+UPDATE="$PROJECT_DIR/scripts/deploy/security-update.sh"
+if [[ -f "$UPDATE" ]]; then
+    check "security-update.sh has apt retry logic (_apt_update)" grep -q "_apt_update" "$UPDATE"
+    check "security-update.sh upgrade is non-fatal on DNS failure" grep -q "upgrade.*||" "$UPDATE"
+    check "security-update.sh dist-upgrade is non-fatal on DNS failure" grep -q "dist-upgrade.*||" "$UPDATE"
+fi
 
 echo ""
 

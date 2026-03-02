@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "admin-server",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["scripts/admin/admin-server.py"],
+      "port": 8081,
+      "autoPort": false
+    },
+    {
+      "name": "monitor-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["scripts/monitor/monitor-web.sh"],
+      "port": 8080,
+      "autoPort": false
+    }
+  ]
+}

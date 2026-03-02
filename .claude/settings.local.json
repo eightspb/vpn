@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /c/WORK_MICS/vpn config --list)",
+      "Bash(wc -l /c/WORK_MICS/vpn/scripts/deploy/*.sh /c/WORK_MICS/vpn/scripts/admin/*.py /c/WORK_MICS/vpn/scripts/monitor/*.sh)",
+      "Bash(wc -l /c/WORK_MICS/vpn/tests/*.sh)",
+      "Bash(wc -l /c/WORK_MICS/vpn/scripts/tools/*.sh)",
+      "Bash(wc -l /c/WORK_MICS/vpn/*.sh)",
+      "Bash(git -C /c/WORK_MICS/vpn log --oneline -20)",
+      "Bash(git -C /c/WORK_MICS/vpn status --short)"
+    ]
+  }
+}

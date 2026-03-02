@@ -54,6 +54,7 @@ ENV_PATH = PROJECT_ROOT / ".env"
 KEYS_ENV_PATH = PROJECT_ROOT / "vpn-output" / "keys.env"
 PEERS_JSON_PATH = PROJECT_ROOT / "vpn-output" / "peers.json"
 MONITOR_DATA_PATH = PROJECT_ROOT / "scripts" / "monitor" / "vpn-output" / "data.json"
+MONITOR_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "monitor" / "monitor-web.sh"
 # Единая папка конфигов пиров — все .conf файлы хранятся и загружаются отсюда
 CONFIGS_DIR = PROJECT_ROOT / "vpn-output"
 
@@ -555,6 +556,10 @@ def ssh_exec(host: str, user: str, key_path: str, password: str, command: str) -
         err_out = stderr.read().decode(errors="replace")
         if err_out:
             log.debug("SSH stderr from %s: %s", host, err_out.strip())
+        exit_code = stdout.channel.recv_exit_status()
+        if exit_code != 0:
+            short_err = (err_out.strip() or out.strip() or f"exit code {exit_code}")
+            raise RuntimeError(f"SSH command failed on {host}: {short_err}")
         return out
     finally:
         client.close()
@@ -760,12 +765,23 @@ def _generate_psk_ssh() -> str:
 def _get_server_info() -> dict[str, str]:
     """Fetch server public key, port, and junk parameters from VPS1."""
     out = _vps1_ssh(
-        'echo "=PUB="; awg show awg1 public-key; '
-        'echo "=PORT="; awg show awg1 listen-port; '
+        'echo "=PUB="; '
+        '(sudo -n awg show awg1 public-key 2>/dev/null || '
+        'awg show awg1 public-key 2>/dev/null || '
+        "sudo -n awk '/^PublicKey[[:space:]]*=/{print $3; exit}' /etc/amnezia/amneziawg/awg1.conf 2>/dev/null || "
+        "awk '/^PublicKey[[:space:]]*=/{print $3; exit}' /etc/amnezia/amneziawg/awg1.conf 2>/dev/null || true); "
+        'echo "=PORT="; '
+        '(sudo -n awg show awg1 listen-port 2>/dev/null || '
+        'awg show awg1 listen-port 2>/dev/null || '
+        "sudo -n awk '/^ListenPort[[:space:]]*=/{print $3; exit}' /etc/amnezia/amneziawg/awg1.conf 2>/dev/null || "
+        "awk '/^ListenPort[[:space:]]*=/{print $3; exit}' /etc/amnezia/amneziawg/awg1.conf 2>/dev/null || true); "
         'echo "=JUNK="; '
+        '(sudo -n awk "/^\\[Interface\\]/{f=1;next} f && /^\\[/{exit} '
+        'f && /^(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4)[[:space:]]*=/{print}" '
+        '/etc/amnezia/amneziawg/awg1.conf 2>/dev/null || '
         'awk "/^\\[Interface\\]/{f=1;next} f && /^\\[/{exit} '
         'f && /^(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4)[[:space:]]*=/{print}" '
-        "/etc/amnezia/amneziawg/awg1.conf"
+        '/etc/amnezia/amneziawg/awg1.conf 2>/dev/null || true)'
     )
     info: dict[str, str] = {}
     current_tag = ""
@@ -781,6 +797,14 @@ def _get_server_info() -> dict[str, str]:
         elif current_tag == "JUNK" and "=" in line:
             k, _, v = line.partition("=")
             info[k.strip()] = v.strip()
+
+    if not info.get("server_public_key"):
+        env_pub = (get_env("VPS1_CLIENT_PUB") or "").strip()
+        if env_pub:
+            info["server_public_key"] = env_pub
+    if not info.get("server_port"):
+        env_port = (get_env("VPS1_PORT_CLIENTS") or "").strip()
+        info["server_port"] = env_port or "51820"
     return info
 
 
@@ -805,26 +829,37 @@ def _build_config(
     """Build a .conf file content for a peer."""
     mtu = MTU_BY_TYPE.get(device_type, 1360)
     dns = settings.get("DNS", "10.8.0.2")
-    endpoint_ip = get_env("VPS1_IP")
-    endpoint_port = server_info.get("server_port", "51820")
+    endpoint_ip = (get_env("VPS1_IP") or "").strip()
+    endpoint_port = (server_info.get("server_port") or "51820").strip() or "51820"
+    server_public_key = (server_info.get("server_public_key") or "").strip()
+
+    if not endpoint_ip:
+        raise ValueError("VPS1_IP is empty in .env/keys.env")
+    if not server_public_key:
+        raise ValueError("server public key (awg1) is empty")
+
+    required_junk = ("Jc", "Jmin", "Jmax", "S1", "S2")
+    missing_junk = [p for p in required_junk if not (server_info.get(p) or "").strip()]
+    if missing_junk:
+        raise ValueError(f"missing live AWG junk params: {', '.join(missing_junk)}")
 
     lines = [
         "[Interface]",
         f"PrivateKey = {private_key}",
-        f"Address = {peer_ip}/32",
+        f"Address = {peer_ip}/24",
         f"DNS = {dns}",
         f"MTU = {mtu}",
     ]
 
     for param in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"):
-        val = server_info.get(param) or settings.get(param)
+        val = server_info.get(param)
         if val:
             lines.append(f"{param} = {val}")
 
     lines += [
         "",
         "[Peer]",
-        f"PublicKey = {server_info.get('server_public_key', '')}",
+        f"PublicKey = {server_public_key}",
         f"PresharedKey = {preshared_key}",
         f"Endpoint = {endpoint_ip}:{endpoint_port}",
         "AllowedIPs = 0.0.0.0/0",
@@ -837,7 +872,8 @@ def _add_peer_to_server(public_key: str, preshared_key: str, peer_ip: str) -> No
     """Register a peer on VPS1 via SSH (awg set + config append)."""
     _vps1_ssh(
         f"printf '%s' '{preshared_key}' > /tmp/psk && "
-        f"awg set awg1 peer '{public_key}' preshared-key /tmp/psk allowed-ips '{peer_ip}/32' && "
+        f"(sudo -n awg set awg1 peer '{public_key}' preshared-key /tmp/psk allowed-ips '{peer_ip}/32' || "
+        f"awg set awg1 peer '{public_key}' preshared-key /tmp/psk allowed-ips '{peer_ip}/32') && "
         f"rm -f /tmp/psk"
     )
 
@@ -845,7 +881,7 @@ def _add_peer_to_server(public_key: str, preshared_key: str, peer_ip: str) -> No
 def _remove_peer_from_server(public_key: str) -> None:
     """Remove a peer from VPS1 via SSH."""
     if public_key:
-        _vps1_ssh(f"awg set awg1 peer '{public_key}' remove")
+        _vps1_ssh(f"sudo -n awg set awg1 peer '{public_key}' remove || awg set awg1 peer '{public_key}' remove")
 
 
 def _get_all_settings(db: sqlite3.Connection) -> dict[str, str]:
@@ -872,6 +908,87 @@ def _generate_qr_base64(text: str) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def _parse_conf_sections(conf_text: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Parse WireGuard-like config text into Interface/Peer key-value maps."""
+    iface: dict[str, str] = {}
+    peer: dict[str, str] = {}
+    section = ""
+    for raw in conf_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            continue
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip()
+        if section == "interface":
+            iface[key] = val
+        elif section == "peer":
+            peer[key] = val
+    return iface, peer
+
+
+def _amnezia_share_url_from_conf(conf_text: str, description: str = "VPN") -> str:
+    """Build Amnezia share URL (vpn://base64(json)) from a .conf content."""
+    iface, peer = _parse_conf_sections(conf_text)
+
+    endpoint = peer.get("Endpoint", "")
+    host = endpoint
+    port = "51820"
+    if ":" in endpoint:
+        host, _, ep_port = endpoint.rpartition(":")
+        if host:
+            port = ep_port or port
+
+    last_cfg_lines = [
+        "[Interface]",
+        f"Address = {iface.get('Address', '')}",
+        f"DNS = {iface.get('DNS', '10.8.0.2')}",
+        f"PrivateKey = {iface.get('PrivateKey', '')}",
+        f"MTU = {iface.get('MTU', '1280')}",
+        "",
+        "[Peer]",
+        f"PublicKey = {peer.get('PublicKey', '')}",
+        f"AllowedIPs = {peer.get('AllowedIPs', '0.0.0.0/0')}",
+        f"PersistentKeepalive = {peer.get('PersistentKeepalive', '25')}",
+        f"Endpoint = {endpoint}",
+    ]
+    last_config = "\n".join(last_cfg_lines) + "\n"
+
+    awg: dict[str, str] = {
+        "H1": iface.get("H1", ""),
+        "H2": iface.get("H2", ""),
+        "H3": iface.get("H3", ""),
+        "H4": iface.get("H4", ""),
+        "Jc": iface.get("Jc", ""),
+        "Jmax": iface.get("Jmax", ""),
+        "Jmin": iface.get("Jmin", ""),
+        "S1": iface.get("S1", ""),
+        "S2": iface.get("S2", ""),
+        "last_config": last_config,
+        "port": port,
+        "transport_proto": "udp",
+    }
+
+    payload = {
+        "containers": [{
+            "awg": awg,
+            "container": "amnezia-awg",
+        }],
+        "defaultContainer": "amnezia-awg",
+        "description": description,
+        "dns1": iface.get("DNS", "10.8.0.2"),
+        "dns2": "8.8.8.8",
+        "hostName": host or get_env("VPS1_IP"),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return "vpn://" + base64.b64encode(raw.encode("utf-8")).decode("utf-8")
 
 
 # =============================================================================
@@ -1045,6 +1162,23 @@ def _split_wg_dump_line(line: str) -> list[str]:
     return [p for p in re.split(r"\s+", line.strip()) if p]
 
 
+WG_DUMP_IFACE_CANDIDATES = ("awg1", "awg0", "wg1", "wg0")
+
+
+def _build_wg_dump_cmd() -> str:
+    """Build remote shell command that concatenates dumps from known WG/AWG interfaces."""
+    iface_list = " ".join(WG_DUMP_IFACE_CANDIDATES)
+    return (
+        f"for IFACE in {iface_list}; do "
+        "DUMP=$(sudo -n awg show \"$IFACE\" dump 2>/dev/null || "
+        "sudo -n wg show \"$IFACE\" dump 2>/dev/null || "
+        "awg show \"$IFACE\" dump 2>/dev/null || "
+        "wg show \"$IFACE\" dump 2>/dev/null || true); "
+        "[ -n \"$DUMP\" ] && printf '%s\n' \"$DUMP\"; "
+        "done"
+    )
+
+
 def _extract_peer_ip(allowed_ips: str) -> str | None:
     """Extract first IPv4 from AllowedIPs string."""
     if not allowed_ips:
@@ -1053,34 +1187,35 @@ def _extract_peer_ip(allowed_ips: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _get_monitoring_indexes() -> tuple[dict[str, dict], dict[str, dict]]:
+def _parse_wg_dump_peers(dump: str) -> list[dict[str, Any]]:
     """
-    Fetch runtime peer snapshot from VPS1.
+    Parse concatenated `wg/awg show <iface> dump` output.
 
-    Returns two indexes:
-      - by_ip:  ip -> peer metrics
-      - by_pub: public_key -> peer metrics
+    Notes:
+      - We skip interface rows by requiring CIDR in the allowed-ips column.
+      - Duplicates can appear when querying multiple interface names; dedupe by
+        (public_key, allowed_ips, endpoint).
     """
-    by_ip: dict[str, dict] = {}
-    by_pub: dict[str, dict] = {}
-    dump_cmd = (
-        "sudo -n awg show awg1 dump 2>/dev/null || "
-        "sudo -n wg show awg1 dump 2>/dev/null || "
-        "awg show awg1 dump 2>/dev/null || "
-        "wg show awg1 dump 2>/dev/null"
-    )
-    try:
-        dump = _vps1_ssh(dump_cmd)
-    except Exception as exc:
-        log.debug("Monitoring by IP (SSH): %s", exc)
-        return by_ip, by_pub
     now = int(time.time())
+    peers_data: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
     for line in dump.strip().splitlines():
         parts = _split_wg_dump_line(line)
         if len(parts) < 7:
             continue
-        public_key = parts[0]
+        pub_key = parts[0]
+        preshared = parts[1] if len(parts) > 1 else ""
+        endpoint = parts[2] if len(parts) > 2 else ""
         allowed_ips = parts[3] if len(parts) > 3 else ""
+        # Interface row doesn't contain AllowedIPs CIDR (peer row does).
+        if "/" not in allowed_ips:
+            continue
+
+        dedupe_key = (pub_key, allowed_ips, endpoint)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
         peer_ip = _extract_peer_ip(allowed_ips)
         try:
             latest_handshake = int(parts[4]) if len(parts) > 4 and parts[4] and parts[4] != "0" else 0
@@ -1094,17 +1229,78 @@ def _get_monitoring_indexes() -> tuple[dict[str, dict], dict[str, dict]]:
             tx_bytes = int(parts[6]) if len(parts) > 6 and parts[6] else 0
         except (ValueError, TypeError):
             tx_bytes = 0
+        keepalive = parts[7] if len(parts) > 7 else ""
+
         handshake_age = now - latest_handshake if latest_handshake > 0 else None
-        peer_data = {
-            "public_key": public_key,
+        peers_data.append({
+            "public_key": pub_key,
+            "preshared_key": preshared,
+            "endpoint": endpoint,
+            "allowed_ips": allowed_ips,
+            "peer_ip": peer_ip,
+            "latest_handshake": latest_handshake,
             "handshake_age_sec": handshake_age,
             "rx_bytes": rx_bytes,
             "tx_bytes": tx_bytes,
-            "latest_handshake": latest_handshake,
+            "persistent_keepalive": keepalive,
+        })
+    return peers_data
+
+
+def _normalize_peer_lookup_key(value: Any) -> str:
+    """Normalize lookup keys (IP/public key) from DB/monitoring payload."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _prefer_new_peer_data(new_data: dict[str, Any], old_data: dict[str, Any] | None) -> bool:
+    """
+    Decide whether new peer metrics should replace existing metrics in index.
+
+    Prefer the row with newer/latest handshake; if handshakes are equal or absent,
+    prefer the row with larger traffic counters.
+    """
+    if old_data is None:
+        return True
+    old_hs = int(old_data.get("latest_handshake") or 0)
+    new_hs = int(new_data.get("latest_handshake") or 0)
+    if new_hs != old_hs:
+        return new_hs > old_hs
+    old_traffic = int(old_data.get("rx_bytes") or 0) + int(old_data.get("tx_bytes") or 0)
+    new_traffic = int(new_data.get("rx_bytes") or 0) + int(new_data.get("tx_bytes") or 0)
+    return new_traffic >= old_traffic
+
+
+def _get_monitoring_indexes() -> tuple[dict[str, dict], dict[str, dict]]:
+    """
+    Fetch runtime peer snapshot from VPS1.
+
+    Returns two indexes:
+      - by_ip:  ip -> peer metrics
+      - by_pub: public_key -> peer metrics
+    """
+    by_ip: dict[str, dict] = {}
+    by_pub: dict[str, dict] = {}
+    dump_cmd = _build_wg_dump_cmd()
+    try:
+        dump = _vps1_ssh(dump_cmd)
+    except Exception as exc:
+        log.debug("Monitoring by IP (SSH): %s", exc)
+        return by_ip, by_pub
+    for peer in _parse_wg_dump_peers(dump):
+        public_key = _normalize_peer_lookup_key(peer.get("public_key"))
+        peer_ip = _normalize_peer_lookup_key(peer.get("peer_ip"))
+        peer_data = {
+            "public_key": public_key,
+            "handshake_age_sec": peer.get("handshake_age_sec"),
+            "rx_bytes": peer.get("rx_bytes", 0),
+            "tx_bytes": peer.get("tx_bytes", 0),
+            "latest_handshake": peer.get("latest_handshake", 0),
         }
-        if public_key:
+        if public_key and _prefer_new_peer_data(peer_data, by_pub.get(public_key)):
             by_pub[public_key] = peer_data
-        if peer_ip:
+        if peer_ip and _prefer_new_peer_data(peer_data, by_ip.get(peer_ip)):
             by_ip[peer_ip] = peer_data
     return by_ip, by_pub
 
@@ -1189,8 +1385,8 @@ def peers_list():
         mon_by_ip, mon_by_pub = {}, {}
     CONNECTED_HS_SEC = max(15, PEER_ONLINE_HANDSHAKE_SEC)
     for p in db_peers:
-        ip = p.get("ip")
-        pub = p.get("public_key")
+        ip = _normalize_peer_lookup_key(p.get("ip"))
+        pub = _normalize_peer_lookup_key(p.get("public_key"))
         mon = mon_by_ip.get(ip) if ip else None
         if mon is None and pub:
             mon = mon_by_pub.get(pub)
@@ -1281,7 +1477,11 @@ def peers_create():
         log.error("Failed to get server info: %s", exc)
         return jsonify({"error": f"Cannot reach VPS1: {exc}"}), 502
 
-    config_content = _build_config(priv, ip, psk, device_type, settings, server_info)
+    try:
+        config_content = _build_config(priv, ip, psk, device_type, settings, server_info)
+    except ValueError as exc:
+        log.error("Invalid server info for config generation: %s", exc)
+        return jsonify({"error": f"Invalid server config: {exc}"}), 500
 
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
     safe_ip = ip.replace(".", "_")
@@ -1678,22 +1878,24 @@ def peers_config(peer_id: int):
         return jsonify({"error": "Peer not found"}), 404
 
     config_path = _resolve_config_path(peer["config_file"])
-    if config_path:
-        content = config_path.read_text(encoding="utf-8")
-    elif peer["private_key"]:
+    if peer["private_key"]:
         settings = _get_all_settings(db)
         try:
             server_info = _get_server_info()
-        except Exception:
-            server_info = {}
-        content = _build_config(
-            peer["private_key"],
-            peer["ip"],
-            peer["preshared_key"] or "",
-            peer["type"],
-            settings,
-            server_info,
-        )
+            content = _build_config(
+                peer["private_key"],
+                peer["ip"],
+                peer["preshared_key"] or "",
+                peer["type"],
+                settings,
+                server_info,
+            )
+            if config_path:
+                config_path.write_text(content, encoding="utf-8")
+        except Exception as exc:
+            return jsonify({"error": f"Failed to build live config: {exc}"}), 500
+    elif config_path:
+        content = config_path.read_text(encoding="utf-8")
     else:
         return jsonify({"error": "Config not available"}), 404
 
@@ -1747,25 +1949,29 @@ def peers_qr(peer_id: int):
         return jsonify({"error": "Peer not found"}), 404
 
     config_path = _resolve_config_path(peer["config_file"])
-    if config_path:
-        content = config_path.read_text(encoding="utf-8")
-    elif peer["private_key"]:
+    if peer["private_key"]:
         settings = _get_all_settings(db)
         try:
             server_info = _get_server_info()
-        except Exception:
-            server_info = {}
-        content = _build_config(
-            peer["private_key"],
-            peer["ip"],
-            peer["preshared_key"] or "",
-            peer["type"],
-            settings,
-            server_info,
-        )
+            content = _build_config(
+                peer["private_key"],
+                peer["ip"],
+                peer["preshared_key"] or "",
+                peer["type"],
+                settings,
+                server_info,
+            )
+            if config_path:
+                config_path.write_text(content, encoding="utf-8")
+        except Exception as exc:
+            return jsonify({"error": f"Failed to build live config: {exc}"}), 500
+    elif config_path:
+        content = config_path.read_text(encoding="utf-8")
     else:
         return jsonify({"error": "Config not available for QR"}), 404
 
+    # Amnezia reliably imports QR with raw WG/AWG config text.
+    # Keep QR payload identical to downloadable .conf content.
     qr_b64 = _generate_qr_base64(content)
     return jsonify({"qr_png_base64": qr_b64})
 
@@ -1803,9 +2009,14 @@ def peers_stats():
 def monitoring_data():
     """Return current monitoring data from scripts/monitor/vpn-output/data.json."""
     if not MONITOR_DATA_PATH.is_file():
-        return jsonify({"error": "Monitoring data not available", "path": str(MONITOR_DATA_PATH)}), 404
+        return jsonify({
+            "error": "Monitoring data not available",
+            "path": str(MONITOR_DATA_PATH),
+            "_monitor_running": False,
+        }), 404
     try:
         data = json.loads(MONITOR_DATA_PATH.read_text(encoding="utf-8"))
+        data["_monitor_running"] = _is_monitor_running()
         return jsonify(data)
     except (json.JSONDecodeError, OSError) as exc:
         return jsonify({"error": f"Failed to read monitoring data: {exc}"}), 500
@@ -1815,59 +2026,13 @@ def monitoring_data():
 @auth_required_or_local
 def monitoring_peers():
     """Get active peers with handshake times and traffic from VPS1 via SSH."""
-    dump_cmd = (
-        "sudo -n awg show awg1 dump 2>/dev/null || "
-        "sudo -n wg show awg1 dump 2>/dev/null || "
-        "awg show awg1 dump 2>/dev/null || "
-        "wg show awg1 dump 2>/dev/null"
-    )
+    dump_cmd = _build_wg_dump_cmd()
     try:
         dump = _vps1_ssh(dump_cmd)
     except Exception as exc:
         log.warning("monitoring/peers SSH failed: %s (check VPS1_IP, VPS1_KEY in .env)", exc)
         return jsonify({"error": f"SSH failed: {exc}"}), 502
-
-    peers_data: list[dict] = []
-    for line in dump.strip().splitlines():
-        parts = _split_wg_dump_line(line)
-        if len(parts) < 7:
-            continue
-        pub_key = parts[0]
-        preshared = parts[1]
-        endpoint = parts[2]
-        allowed_ips = parts[3]
-        peer_ip = _extract_peer_ip(allowed_ips)
-        try:
-            latest_handshake = int(parts[4]) if len(parts) > 4 and parts[4] and parts[4] != "0" else 0
-        except (ValueError, TypeError):
-            latest_handshake = 0
-        try:
-            rx_bytes = int(parts[5]) if len(parts) > 5 and parts[5] else 0
-        except (ValueError, TypeError):
-            rx_bytes = 0
-        try:
-            tx_bytes = int(parts[6]) if len(parts) > 6 and parts[6] else 0
-        except (ValueError, TypeError):
-            tx_bytes = 0
-        keepalive = parts[7] if len(parts) > 7 else ""
-
-        handshake_age = None
-        if latest_handshake > 0:
-            handshake_age = int(time.time()) - latest_handshake
-
-        peers_data.append({
-            "public_key": pub_key,
-            "endpoint": endpoint,
-            "allowed_ips": allowed_ips,
-            "peer_ip": peer_ip,
-            "latest_handshake": latest_handshake,
-            "handshake_age_sec": handshake_age,
-            "rx_bytes": rx_bytes,
-            "tx_bytes": tx_bytes,
-            "persistent_keepalive": keepalive,
-        })
-
-    return jsonify(peers_data)
+    return jsonify(_parse_wg_dump_peers(dump))
 
 
 # WebSocket: real-time monitoring
@@ -2031,6 +2196,70 @@ def _internal_error(_e):
 
 
 # =============================================================================
+# Monitor autostart
+# =============================================================================
+
+
+def _is_monitor_running() -> bool:
+    """Return True if monitor-web.sh is actively writing data.json (updated < 30s ago)."""
+    if not MONITOR_DATA_PATH.is_file():
+        return False
+    try:
+        return (time.time() - MONITOR_DATA_PATH.stat().st_mtime) < 30
+    except OSError:
+        return False
+
+
+def _detect_bash() -> list[str] | None:
+    """Return a command list to invoke bash, or None if not found."""
+    import shutil
+    if sys.platform == "win32":
+        if shutil.which("wsl"):
+            return ["wsl", "bash"]
+        if shutil.which("bash"):
+            return ["bash"]
+    else:
+        if shutil.which("bash"):
+            return ["bash"]
+    return None
+
+
+def _start_monitor() -> None:
+    """Start monitor-web.sh in background if not already running."""
+    if _is_monitor_running():
+        log.info("monitor-web.sh already running (data.json is fresh)")
+        return
+
+    bash = _detect_bash()
+    if bash is None:
+        log.warning("monitor-web.sh autostart skipped: bash not found in PATH")
+        return
+
+    if not MONITOR_SCRIPT_PATH.is_file():
+        log.warning("monitor-web.sh autostart skipped: not found at %s", MONITOR_SCRIPT_PATH)
+        return
+
+    script_path = str(MONITOR_SCRIPT_PATH)
+    if sys.platform == "win32" and bash[0] == "wsl":
+        # Convert Windows path to WSL path: C:\foo\bar -> /mnt/c/foo/bar
+        drive = script_path[0].lower()
+        rest = script_path[2:].replace("\\", "/")
+        script_path = f"/mnt/{drive}{rest}"
+
+    cmd = bash + [script_path]
+    try:
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        log.info("monitor-web.sh launched, waiting for first data.json poll (~5s)")
+    except Exception as exc:
+        log.warning("monitor-web.sh autostart failed: %s", exc)
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -2057,6 +2286,7 @@ def main() -> None:
     _ensure_default_admin()
     _load_default_settings()
     _import_peers_from_json()
+    _start_monitor()
 
     host = args.host or ("0.0.0.0" if args.prod else "127.0.0.1")
     port = args.port or (8443 if args.prod else 8081)

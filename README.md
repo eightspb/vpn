@@ -422,7 +422,11 @@ bash manage.sh deploy \
   --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
   --vps2-ip 38.135.122.81 --vps2-key .ssh/ssh-key-1772056840349 \
   --with-proxy --remove-adguard
+```
 
+**Если при деплое пишет «Не удалось подключиться к VPS1»:** скрипт выведет последние строки вывода `ssh -v`. Проверьте: (1) доступность хоста: `ping 130.193.41.13` или `Test-NetConnection -ComputerName 130.193.41.13 -Port 22` в PowerShell; (2) в `.env` указан верный `VPS1_KEY` (путь к приватному ключу) и `VPS1_USER`; (3) на сервере в `~/.ssh/authorized_keys` добавлен публичный ключ этого пользователя; (4) SSH с ключом вручную: `ssh -i .ssh/ваш_ключ VPS1_USER@VPS1_IP`.
+
+```bash
 # Мониторинг (параметры из .env)
 bash manage.sh monitor
 bash manage.sh monitor --web

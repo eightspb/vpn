@@ -102,6 +102,11 @@ require_vars "deploy.sh" VPS1_IP VPS2_IP
 [[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && err "Укажите --vps1-key или --vps1-pass (или VPS1_KEY в .env)"
 [[ -z "$VPS2_KEY" && -z "$VPS2_PASS" ]] && err "Укажите --vps2-key или --vps2-pass (или VPS2_KEY в .env)"
 
+# Ключи с /mnt/ (WSL/Windows) копируем во временные файлы — иначе SSH может падать по правам
+VPS1_KEY="$(prepare_key_for_ssh "$VPS1_KEY")"
+VPS2_KEY="$(prepare_key_for_ssh "$VPS2_KEY")"
+trap cleanup_temp_keys EXIT
+
 # ── SSH хелперы ────────────────────────────────────────────────────────────
 run1() {
     local -a ssh_opts=(-T -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no)
@@ -196,8 +201,15 @@ mkdir -p "$OUTPUT_DIR"
 step "Шаг 1/8: Проверка SSH подключений"
 
 log "Подключаюсь к VPS1..."
-VPS1_OS=$(run1 "cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'") \
-    || err "Не удалось подключиться к VPS1 (${VPS1_IP})"
+VPS1_OS=$(run1 "cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'") || {
+    echo -e "${RED}Детали SSH (VPS1):${NC}" >&2
+    if [[ -n "$VPS1_KEY" ]]; then
+        ssh -v -o ConnectTimeout=10 -o BatchMode=yes -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "echo ok" 2>&1 | tail -20 >&2
+    else
+        sshpass -p "$VPS1_PASS" ssh -v -o ConnectTimeout=10 "${VPS1_USER}@${VPS1_IP}" "echo ok" 2>&1 | tail -20 >&2
+    fi
+    err "Не удалось подключиться к VPS1 (${VPS1_IP}). Проверьте: сеть, ключ (VPS1_KEY), пользователя (VPS1_USER), что sshd слушает порт 22."
+}
 ok "VPS1: $VPS1_OS"
 
 log "Подключаюсь к VPS2..."
@@ -720,6 +732,19 @@ if [[ "$WITH_PROXY" == "true" ]]; then
     # Convert Windows path to Linux path for bash
     LINUX_SCRIPT_DIR=$(cd "$SCRIPT_DIR" && pwd)
     bash "${LINUX_SCRIPT_DIR}/deploy-proxy.sh" $PROXY_ARGS
+fi
+
+# ── Фиксация времени успешного деплоя на серверах ─────────────────────────
+DEPLOY_TS="$(date +%s)"
+if run1 "echo '${DEPLOY_TS}' | sudo tee /etc/vpn-last-deploy.ts >/dev/null && sudo chmod 644 /etc/vpn-last-deploy.ts"; then
+    ok "VPS1: last deploy timestamp updated"
+else
+    warn "VPS1: failed to update /etc/vpn-last-deploy.ts"
+fi
+if run2 "echo '${DEPLOY_TS}' | sudo tee /etc/vpn-last-deploy.ts >/dev/null && sudo chmod 644 /etc/vpn-last-deploy.ts"; then
+    ok "VPS2: last deploy timestamp updated"
+else
+    warn "VPS2: failed to update /etc/vpn-last-deploy.ts"
 fi
 
 # ── Итог ──────────────────────────────────────────────────────────────────

@@ -35,9 +35,10 @@ NC='\033[0m'
 
 # ── Функции вывода ────────────────────────────────────────────────────────────
 log()  { echo -e "${CYAN}[$(date +%H:%M:%S)]${NC} $*"; }
-ok()   { echo -e "${GREEN}✓${NC} $*"; }
-err()  { echo -e "${RED}✗ ОШИБКА:${NC} $*" >&2; exit 1; }
-warn() { echo -e "${YELLOW}⚠${NC} $*"; }
+ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
+err()  { echo -e "  ${RED}✗ ОШИБКА:${NC} $*" >&2; exit 1; }
+warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
+info() { echo -e "  ${CYAN}→${NC} $*"; }
 step() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
 
 # ── Парсинг значений ──────────────────────────────────────────────────────────
@@ -305,6 +306,151 @@ ssh_run_script() {
     ssh_upload "$tmp" "$ip" "$user" "$key" "$pass" /tmp/_vpn_step.sh
     rm -f "$tmp"
     ssh_exec "$ip" "$user" "$key" "$pass" "sudo bash /tmp/_vpn_step.sh"
+}
+
+# ── AmneziaVPN конфиг-генерация ───────────────────────────────────────────────
+
+# Возвращает доступную команду Python (python3 или python)
+_find_python() {
+    if command -v python3 &>/dev/null; then echo "python3"
+    elif command -v python &>/dev/null; then echo "python"
+    else echo ""; fi
+}
+
+# Генерирует нативный JSON-конфиг AmneziaVPN (amnezia-awg формат).
+# Параметры (позиционные):
+#   1  out_file     — путь к выходному .json файлу
+#   2  priv_key     — приватный ключ клиента
+#   3  client_addr  — IP клиента с маской (например: 10.9.0.3/24)
+#   4  mtu          — MTU (например: 1280)
+#   5  allowed_ips  — AllowedIPs (например: 0.0.0.0/0)
+#   6  server_pub   — публичный ключ сервера
+#   7  endpoint     — endpoint сервера (host:port)
+#   8  host_ip      — IP сервера (для поля hostName)
+#   9  port         — порт сервера
+#   10 dns          — DNS-адрес клиента
+#   11-19           — Jc Jmin Jmax S1 S2 H1 H2 H3 H4
+#   20 description  — имя профиля
+amnezia_write_json() {
+    local out_file="$1"  priv_key="$2"  client_addr="$3" mtu="$4"
+    local allowed_ips="$5" server_pub="$6" endpoint="$7" host_ip="$8"
+    local port="${9}"      dns="${10}"
+    local jc="${11}"       jmin="${12}"     jmax="${13}"
+    local s1="${14}"       s2="${15}"
+    local h1="${16}"       h2="${17}"       h3="${18}"      h4="${19}"
+    local description="${20:-VPN}"
+
+    local _py; _py="$(_find_python)"
+    [[ -z "$_py" ]] && { warn "python/python3 не найден — AmneziaVPN JSON не сгенерирован"; return 1; }
+
+    OUT="$out_file" PRIV="$priv_key" ADDR="$client_addr" MTU_V="$mtu" \
+    ALLOWED="$allowed_ips" SPUB="$server_pub" EP="$endpoint" \
+    HOST="$host_ip" PORT_V="$port" DNS_V="$dns" \
+    JC="$jc" JMIN="$jmin" JMAX="$jmax" S1V="$s1" S2V="$s2" \
+    H1V="$h1" H2V="$h2" H3V="$h3" H4V="$h4" DESC="$description" \
+    "$_py" - << 'AMNEZIA_PY'
+import json, os
+e = os.environ
+last_config = (
+    "[Interface]\n"
+    f"Address = {e['ADDR']}\n"
+    f"DNS = {e['DNS_V']}\n"
+    f"PrivateKey = {e['PRIV']}\n"
+    f"MTU = {e['MTU_V']}\n"
+    "\n[Peer]\n"
+    f"PublicKey = {e['SPUB']}\n"
+    f"AllowedIPs = {e['ALLOWED']}\n"
+    "PersistentKeepalive = 25\n"
+    f"Endpoint = {e['EP']}\n"
+)
+cfg = {
+    "containers": [{
+        "awg": {
+            "H1": e["H1V"], "H2": e["H2V"], "H3": e["H3V"], "H4": e["H4V"],
+            "Jc": e["JC"], "Jmax": e["JMAX"], "Jmin": e["JMIN"],
+            "S1": e["S1V"], "S2": e["S2V"],
+            "last_config": last_config,
+            "port": e["PORT_V"],
+            "transport_proto": "udp"
+        },
+        "container": "amnezia-awg"
+    }],
+    "defaultContainer": "amnezia-awg",
+    "description": e["DESC"],
+    "dns1": e["DNS_V"],
+    "dns2": "8.8.8.8",
+    "hostName": e["HOST"]
+}
+with open(e["OUT"], "w") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+AMNEZIA_PY
+}
+
+# Выводит QR-код AmneziaVPN в терминале (формат vpn://base64).
+# $1 — путь к .json файлу конфига
+amnezia_qr_show() {
+    local json_file="$1"
+    [[ -f "$json_file" ]] || { warn "JSON не найден: $json_file"; return 1; }
+    local _py; _py="$(_find_python)"
+    [[ -z "$_py" ]] && { warn "python/python3 не найден — QR недоступен"; return 1; }
+    local share_url
+    share_url=$("$_py" -c "
+import base64, sys
+data = open(sys.argv[1]).read()
+sys.stdout.write('vpn://' + base64.b64encode(data.encode()).decode())
+" "$json_file")
+    if command -v qrencode &>/dev/null; then
+        printf "%s" "$share_url" | qrencode -t ANSIUTF8
+    else
+        "$_py" -c "
+import base64, sys
+try:
+    import qrcode
+    data = open(sys.argv[1]).read()
+    url = 'vpn://' + base64.b64encode(data.encode()).decode()
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
+    qr.add_data(url)
+    qr.make(fit=True)
+    qr.print_ascii(invert=True)
+except ImportError:
+    print('Для QR установите: pip install qrcode[pil] или sudo apt install qrencode')
+    sys.exit(1)
+" "$json_file"
+    fi
+}
+
+# Сохраняет QR-код AmneziaVPN как PNG.
+# $1 — путь к .json файлу конфига, $2 — путь к PNG
+amnezia_qr_save_png() {
+    local json_file="$1" png_file="$2"
+    [[ -f "$json_file" ]] || { warn "JSON не найден: $json_file"; return 1; }
+    local _py; _py="$(_find_python)"
+    [[ -z "$_py" ]] && { warn "python/python3 не найден — QR недоступен"; return 1; }
+    local share_url
+    share_url=$("$_py" -c "
+import base64, sys
+data = open(sys.argv[1]).read()
+sys.stdout.write('vpn://' + base64.b64encode(data.encode()).decode())
+" "$json_file")
+    if command -v qrencode &>/dev/null; then
+        printf "%s" "$share_url" | qrencode -t PNG -o "$png_file" -s 6
+    else
+        "$_py" -c "
+import base64, sys
+try:
+    import qrcode
+    data = open(sys.argv[1]).read()
+    url = 'vpn://' + base64.b64encode(data.encode()).decode()
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=6, border=2)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color='black', back_color='white')
+    img.save(sys.argv[2])
+except ImportError:
+    print('Для QR PNG установите: pip install qrcode[pil]')
+    sys.exit(1)
+" "$json_file" "$png_file"
+    fi
 }
 
 # ── Проверка зависимостей ─────────────────────────────────────────────────────

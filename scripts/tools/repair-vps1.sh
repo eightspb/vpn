@@ -17,43 +17,30 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+source "${SCRIPT_DIR}/../../lib/common.sh"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+trap cleanup_temp_keys EXIT
 
 ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
 fail() { echo -e "  ${RED}✗${NC} $*" >&2; exit 1; }
-warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
 hdr()  { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
 
 # ---------------------------------------------------------------------------
-# Загрузка конфига из .env
+# Загрузка конфига
 # ---------------------------------------------------------------------------
-read_kv() {
-    local file="$1" key="$2"
-    awk -F= -v k="$key" '$1==k{sub(/^[^=]*=/,"",$0); gsub(/\r/,""); gsub(/^[ \t'"'"']+|[ \t'"'"']+$/,""); print; exit}' "$file" 2>/dev/null
-}
+VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS2_IP=""
 
-expand_path() {
-    local p="${1//\\/\/}"
-    if [[ "$p" =~ ^([A-Za-z]):/(.*)$ ]]; then
-        p="/mnt/${BASH_REMATCH[1],,}/${BASH_REMATCH[2]}"
-    fi
-    [[ "$p" == "~/"* ]] && p="${HOME}/${p#'~/'}"
-    echo "$p"
-}
+load_defaults_from_files
 
-[[ -f ".env" ]] || fail ".env не найден. Создайте его по образцу .env.example"
+VPS1_USER="${VPS1_USER:-root}"
 
-VPS1_IP=$(read_kv .env VPS1_IP)
-VPS1_USER=$(read_kv .env VPS1_USER); VPS1_USER="${VPS1_USER:-root}"
-VPS1_KEY=$(expand_path "$(read_kv .env VPS1_KEY)")
-VPS2_IP=$(read_kv .env VPS2_IP)
+VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
+VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
+VPS1_KEY="$(prepare_key_for_ssh "$VPS1_KEY")"
 
-[[ -z "$VPS1_IP" ]] && fail "VPS1_IP не задан в .env"
-[[ -z "$VPS2_IP" ]] && fail "VPS2_IP не задан в .env"
+require_vars "repair-vps1.sh" VPS1_IP VPS2_IP
+[[ -z "$VPS1_KEY" ]] && err "VPS1_KEY не найден — укажите VPS1_KEY в .env или положите ключ в .ssh/"
 
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o LogLevel=ERROR"
 ssh1() { ssh $SSH_OPTS -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1; }

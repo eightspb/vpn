@@ -381,11 +381,17 @@ for dtype in pc desktop laptop phone mobile tablet router mikrotik openwrt; do
     fi
 done
 
-# Split tunnel removed
-if grep -q 'split' "$MANAGE_PEERS"; then
-    fail "В manage-peers.sh всё ещё есть split tunnel"
+# Split tunnel removed (check only split-tunnel semantics, not string split())
+if grep -Eqi 'split[ _-]?tunnel|--split([[:space:]]|=|$)|mode[[:space:]]*=[[:space:]]*split' "$MANAGE_PEERS"; then
+    fail "В manage-peers.sh всё ещё есть split tunnel логика/опции"
 else
     pass "Split tunnel удалён из manage-peers.sh"
+fi
+
+if grep -q '0.0.0.0/0' "$MANAGE_PEERS"; then
+    pass "Full tunnel по умолчанию (AllowedIPs = 0.0.0.0/0)"
+else
+    fail "Не найден full tunnel по умолчанию (AllowedIPs = 0.0.0.0/0)"
 fi
 
 # QR code support

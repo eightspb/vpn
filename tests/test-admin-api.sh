@@ -76,7 +76,9 @@ http_get() {
 }
 
 http_post() {
-    local path="$1" body="${2:-{}}"
+    local path="$1"
+    local body="${2:-}"
+    [[ -z "$body" ]] && body='{}'
     curl -s -w "\n%{http_code}" -X POST \
         -H "Content-Type: application/json" \
         -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
@@ -84,7 +86,9 @@ http_post() {
 }
 
 http_put() {
-    local path="$1" body="${2:-{}}"
+    local path="$1"
+    local body="${2:-}"
+    [[ -z "$body" ]] && body='{}'
     curl -s -w "\n%{http_code}" -X PUT \
         -H "Content-Type: application/json" \
         -b "$COOKIE_JAR" -c "$COOKIE_JAR" \

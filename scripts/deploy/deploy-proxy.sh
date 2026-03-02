@@ -229,6 +229,14 @@ $SSH "systemctl start youtube-proxy"
 sleep 2
 $SSH "systemctl status youtube-proxy --no-pager -l"
 
+# Mark successful deploy time on VPS2.
+DEPLOY_TS="$(date +%s)"
+if $SSH "echo '${DEPLOY_TS}' | sudo tee /etc/vpn-last-deploy.ts >/dev/null && sudo chmod 644 /etc/vpn-last-deploy.ts"; then
+    ok "VPS2: last deploy timestamp updated"
+else
+    warn "VPS2: failed to update /etc/vpn-last-deploy.ts"
+fi
+
 # ── Print CA download URL ─────────────────────────────────────────────────────
 echo ""
 echo "=== DONE ==="

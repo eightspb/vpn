@@ -375,6 +375,14 @@ PersistentKeepalive = 25
 EOF
 ok "Клиентский конфиг: ${BOLD}${CLIENT_CONF}${NC}"
 
+# Фиксируем время последнего успешного деплоя на VPS1
+DEPLOY_TS="$(date +%s)"
+if run1 "echo '${DEPLOY_TS}' | sudo tee /etc/vpn-last-deploy.ts >/dev/null && sudo chmod 644 /etc/vpn-last-deploy.ts"; then
+    ok "VPS1: last deploy timestamp updated"
+else
+    warn "VPS1: failed to update /etc/vpn-last-deploy.ts"
+fi
+
 echo ""
 echo -e "${BOLD}Деплой VPS1 завершён.${NC}"
 echo -e "Дальше запустите: ${BOLD}bash deploy-vps2.sh --vps2-ip ${VPS2_IP} --vps2-key ... --keys-file ${KEYS_ENV}${NC}"

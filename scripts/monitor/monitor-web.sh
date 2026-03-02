@@ -176,6 +176,14 @@ UPTIME_S=\$(awk '{print int(\$1)}' /proc/uptime 2>/dev/null || echo 0)
 CPU_MHZ=\$(awk '/cpu MHz/{sum+=\$4; n++} END{if(n>0) printf "%.0f", sum/n; else print 0}' /proc/cpuinfo 2>/dev/null || echo 0)
 MEM_FREE=\$(free -m 2>/dev/null | awk '/Mem:/ {print \$4}')
 SWAP_RAW=\$(free -m 2>/dev/null | awk '/Swap:/ {print \$3"/"\$2"MB"}')
+LAST_DEPLOY_TS=\$(awk 'NR==1{print int(\$1)}' /etc/vpn-last-deploy.ts 2>/dev/null || echo 0)
+if ! [[ "\$LAST_DEPLOY_TS" =~ ^[0-9]+$ ]] || [[ "\$LAST_DEPLOY_TS" -le 0 ]]; then
+  C1=\$(stat -c %Y /etc/amnezia/amneziawg/awg1.conf 2>/dev/null || echo 0)
+  C2=\$(stat -c %Y /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || echo 0)
+  [[ "\$C1" =~ ^[0-9]+$ ]] || C1=0
+  [[ "\$C2" =~ ^[0-9]+$ ]] || C2=0
+  LAST_DEPLOY_TS=\$(( C1 > C2 ? C1 : C2 ))
+fi
 echo "HOST=\$HOST"
 echo "LOAD=\$LOAD"
 echo "MEM=\$MEM"
@@ -195,6 +203,7 @@ echo "P1=\$P1"
 echo "TUN_PING=\$TUN_PING"
 echo "CPUS=\${CPUS:-1}"
 echo "UPTIME_S=\${UPTIME_S:-0}"
+echo "LAST_DEPLOY_TS=\${LAST_DEPLOY_TS:-0}"
 echo "CPU_MHZ=\${CPU_MHZ:-0}"
 echo "MEM_FREE=\${MEM_FREE:-0}"
 echo "SWAP=\${SWAP_RAW:-0/0MB}"
@@ -260,6 +269,18 @@ UPTIME_S=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)
 CPU_MHZ=$(awk '/cpu MHz/{sum+=$4; n++} END{if(n>0) printf "%.0f", sum/n; else print 0}' /proc/cpuinfo 2>/dev/null || echo 0)
 MEM_FREE=$(free -m 2>/dev/null | awk '/Mem:/ {print $4}')
 SWAP_RAW=$(free -m 2>/dev/null | awk '/Swap:/ {print $3"/"$2"MB"}')
+LAST_DEPLOY_TS=$(awk 'NR==1{print int($1)}' /etc/vpn-last-deploy.ts 2>/dev/null || echo 0)
+if ! [[ "$LAST_DEPLOY_TS" =~ ^[0-9]+$ ]] || [[ "$LAST_DEPLOY_TS" -le 0 ]]; then
+  C1=$(stat -c %Y /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || echo 0)
+  C2=$(stat -c %Y /opt/AdGuardHome/AdGuardHome.yaml 2>/dev/null || echo 0)
+  C3=$(stat -c %Y /opt/youtube-proxy/config.yaml 2>/dev/null || echo 0)
+  [[ "$C1" =~ ^[0-9]+$ ]] || C1=0
+  [[ "$C2" =~ ^[0-9]+$ ]] || C2=0
+  [[ "$C3" =~ ^[0-9]+$ ]] || C3=0
+  LAST_DEPLOY_TS=$C1
+  [[ "$C2" -gt "$LAST_DEPLOY_TS" ]] && LAST_DEPLOY_TS=$C2
+  [[ "$C3" -gt "$LAST_DEPLOY_TS" ]] && LAST_DEPLOY_TS=$C3
+fi
 echo "HOST=$HOST"
 echo "LOAD=$LOAD"
 echo "MEM=$MEM"
@@ -278,6 +299,7 @@ echo "WEB3000=$WEB3000"
 echo "WAN_PING=$WAN_PING"
 echo "CPUS=${CPUS:-1}"
 echo "UPTIME_S=${UPTIME_S:-0}"
+echo "LAST_DEPLOY_TS=${LAST_DEPLOY_TS:-0}"
 echo "CPU_MHZ=${CPU_MHZ:-0}"
 echo "MEM_FREE=${MEM_FREE:-0}"
 echo "SWAP=${SWAP_RAW:-0/0MB}"
@@ -333,7 +355,7 @@ write_json() {
     local V1_TCP_EST="0" V1_UDP_CONN="0"
     local V1_AWG0="" V1_AWG1="" V1_HS0="-1" V1_HS1="-1" V1_A1_ACTIVE="0" V1_P0="0" V1_P1="0" V1_TUN_PING=""
     local V1_RX_SPEED="0" V1_TX_SPEED="0" V1_ERROR=""
-    local V1_CPUS="1" V1_UPTIME_S="0" V1_CPU_MHZ="0" V1_SWAP=""
+    local V1_CPUS="1" V1_UPTIME_S="0" V1_LAST_DEPLOY_TS="0" V1_CPU_MHZ="0" V1_SWAP=""
     local V1_RX_TOTAL="0" V1_TX_TOTAL="0"
     local V1_VPN_RX="0" V1_VPN_TX="0" V1_VPN_RX_SPEED="0" V1_VPN_TX_SPEED="0"
     local V1_VPN_RX_TOTAL="0" V1_VPN_TX_TOTAL="0"
@@ -369,6 +391,7 @@ write_json() {
         V1_TUN_PING="$(parse_kv "$vps1_data" TUN_PING)"
         V1_CPUS="$(parse_kv "$vps1_data" CPUS)"; V1_CPUS="${V1_CPUS:-1}"
         V1_UPTIME_S="$(parse_kv "$vps1_data" UPTIME_S)"; V1_UPTIME_S="${V1_UPTIME_S:-0}"
+        V1_LAST_DEPLOY_TS="$(parse_kv "$vps1_data" LAST_DEPLOY_TS)"; V1_LAST_DEPLOY_TS="${V1_LAST_DEPLOY_TS:-0}"
         V1_CPU_MHZ="$(parse_kv "$vps1_data" CPU_MHZ)"; V1_CPU_MHZ="${V1_CPU_MHZ:-0}"
         V1_MEM_FREE="$(parse_kv "$vps1_data" MEM_FREE)"; V1_MEM_FREE="${V1_MEM_FREE:-0}"
         V1_SWAP="$(parse_kv "$vps1_data" SWAP)"; V1_SWAP="${V1_SWAP:-0/0MB}"
@@ -416,7 +439,7 @@ write_json() {
     local V2_AWG0="" V2_HS0="-1" V2_P0="0"
     local V2_AGH="" V2_DNS53="" V2_WEB3000="" V2_WAN_PING=""
     local V2_RX_SPEED="0" V2_TX_SPEED="0" V2_ERROR=""
-    local V2_CPUS="1" V2_UPTIME_S="0" V2_CPU_MHZ="0" V2_SWAP=""
+    local V2_CPUS="1" V2_UPTIME_S="0" V2_LAST_DEPLOY_TS="0" V2_CPU_MHZ="0" V2_SWAP=""
     local V2_RX_TOTAL="0" V2_TX_TOTAL="0"
     local V2_VPN_RX="0" V2_VPN_TX="0" V2_VPN_RX_SPEED="0" V2_VPN_TX_SPEED="0"
     local V2_VPN_RX_TOTAL="0" V2_VPN_TX_TOTAL="0"
@@ -451,6 +474,7 @@ write_json() {
         V2_WAN_PING="$(parse_kv "$vps2_data" WAN_PING)"
         V2_CPUS="$(parse_kv "$vps2_data" CPUS)"; V2_CPUS="${V2_CPUS:-1}"
         V2_UPTIME_S="$(parse_kv "$vps2_data" UPTIME_S)"; V2_UPTIME_S="${V2_UPTIME_S:-0}"
+        V2_LAST_DEPLOY_TS="$(parse_kv "$vps2_data" LAST_DEPLOY_TS)"; V2_LAST_DEPLOY_TS="${V2_LAST_DEPLOY_TS:-0}"
         V2_CPU_MHZ="$(parse_kv "$vps2_data" CPU_MHZ)"; V2_CPU_MHZ="${V2_CPU_MHZ:-0}"
         V2_MEM_FREE="$(parse_kv "$vps2_data" MEM_FREE)"; V2_MEM_FREE="${V2_MEM_FREE:-0}"
         V2_SWAP="$(parse_kv "$vps2_data" SWAP)"; V2_SWAP="${V2_SWAP:-0/0MB}"
@@ -504,7 +528,7 @@ write_json() {
         J_V1_TCP_EST="${V1_TCP_EST:-0}" J_V1_UDP_CONN="${V1_UDP_CONN:-0}" \
         J_V1_AWG0="${V1_AWG0:-}" J_V1_AWG1="${V1_AWG1:-}" J_V1_HS0="${V1_HS0:--1}" J_V1_HS1="${V1_HS1:--1}" J_V1_A1_ACTIVE="${V1_A1_ACTIVE:-0}" \
         J_V1_P0="${V1_P0:-0}" J_V1_P1="${V1_P1:-0}" J_V1_TUN_PING="${V1_TUN_PING:-}" \
-        J_V1_CPUS="${V1_CPUS:-1}" J_V1_UPTIME_S="${V1_UPTIME_S:-0}" \
+        J_V1_CPUS="${V1_CPUS:-1}" J_V1_UPTIME_S="${V1_UPTIME_S:-0}" J_V1_LAST_DEPLOY_TS="${V1_LAST_DEPLOY_TS:-0}" \
         J_V1_CPU_MHZ="${V1_CPU_MHZ:-0}" J_V1_SWAP="${V1_SWAP:-0/0MB}" \
         J_V1_RX_TOTAL="${V1_RX_TOTAL:-0}" J_V1_TX_TOTAL="${V1_TX_TOTAL:-0}" \
         J_V1_VPN_RX_SPEED="$V1_VPN_RX_SPEED" J_V1_VPN_TX_SPEED="$V1_VPN_TX_SPEED" \
@@ -521,7 +545,7 @@ write_json() {
         J_V2_AWG0="${V2_AWG0:-}" J_V2_HS0="${V2_HS0:--1}" J_V2_P0="${V2_P0:-0}" \
         J_V2_AGH="${V2_AGH:-}" J_V2_DNS53="${V2_DNS53:-}" J_V2_WEB3000="${V2_WEB3000:-}" \
         J_V2_WAN_PING="${V2_WAN_PING:-}" J_V2_ERROR="${V2_ERROR:-}" \
-        J_V2_CPUS="${V2_CPUS:-1}" J_V2_UPTIME_S="${V2_UPTIME_S:-0}" \
+        J_V2_CPUS="${V2_CPUS:-1}" J_V2_UPTIME_S="${V2_UPTIME_S:-0}" J_V2_LAST_DEPLOY_TS="${V2_LAST_DEPLOY_TS:-0}" \
         J_V2_CPU_MHZ="${V2_CPU_MHZ:-0}" J_V2_SWAP="${V2_SWAP:-0/0MB}" \
         J_V2_RX_TOTAL="${V2_RX_TOTAL:-0}" J_V2_TX_TOTAL="${V2_TX_TOTAL:-0}" \
         J_V2_VPN_RX_SPEED="$V2_VPN_RX_SPEED" J_V2_VPN_TX_SPEED="$V2_VPN_TX_SPEED" \
@@ -565,6 +589,7 @@ data = {
         'cpus':         ni('J_V1_CPUS', 1),
         'cpu_mhz':      ni('J_V1_CPU_MHZ'),
         'uptime_s':     ni('J_V1_UPTIME_S'),
+        'last_deploy_ts': ni('J_V1_LAST_DEPLOY_TS'),
         'load1':        nf('J_V1_LOAD1'),
         'load5':        nf('J_V1_LOAD5'),
         'load15':       nf('J_V1_LOAD15'),
@@ -609,6 +634,7 @@ data = {
         'cpus':         ni('J_V2_CPUS', 1),
         'cpu_mhz':      ni('J_V2_CPU_MHZ'),
         'uptime_s':     ni('J_V2_UPTIME_S'),
+        'last_deploy_ts': ni('J_V2_LAST_DEPLOY_TS'),
         'load1':        nf('J_V2_LOAD1'),
         'load5':        nf('J_V2_LOAD5'),
         'load15':       nf('J_V2_LOAD15'),
@@ -1009,7 +1035,6 @@ echo ""
 
 while true; do
     check_internal_ips
-    PREV_TS="$(date +%s)"
 
     # Collect from both servers in parallel to avoid one blocking the other
     local_tmp1="$(mktemp)"

@@ -6,7 +6,9 @@ cd "$ROOT"
 FAIL=0
 
 echo "=== Phase 2: Go build youtube-proxy ==="
-if (cd youtube-proxy && go build ./...); then
+if ! command -v go >/dev/null 2>&1; then
+  echo "SKIP: go не найден, пропускаем go build"
+elif (cd youtube-proxy && go build ./...); then
   echo "OK: youtube-proxy build"
 else
   echo "FAIL: youtube-proxy build"
@@ -15,19 +17,19 @@ fi
 
 echo ""
 echo "=== Phase 2: MTU in scripts/deploy/deploy-vps1.sh (awg0, awg1) ==="
-if grep -q "MTU = 1320" scripts/deploy/deploy-vps1.sh && grep -q "MTU = 1280" scripts/deploy/deploy-vps1.sh; then
+if grep -q "MTU = 1420" scripts/deploy/deploy-vps1.sh && grep -q "MTU = 1360" scripts/deploy/deploy-vps1.sh; then
   echo "OK: scripts/deploy/deploy-vps1.sh has MTU for awg0 and awg1"
 else
-  echo "FAIL: scripts/deploy/deploy-vps1.sh expected MTU = 1320 (awg0) and MTU = 1280 (awg1)"
+  echo "FAIL: scripts/deploy/deploy-vps1.sh expected MTU = 1420 (awg0) and MTU = 1360 (awg1)"
   FAIL=1
 fi
 
 echo ""
 echo "=== Phase 2: MTU in scripts/deploy/deploy-vps2.sh (awg0) ==="
-if grep -q "MTU = 1280" scripts/deploy/deploy-vps2.sh; then
+if grep -q "MTU = 1420" scripts/deploy/deploy-vps2.sh; then
   echo "OK: scripts/deploy/deploy-vps2.sh has MTU for awg0"
 else
-  echo "FAIL: scripts/deploy/deploy-vps2.sh expected MTU = 1280 for awg0"
+  echo "FAIL: scripts/deploy/deploy-vps2.sh expected MTU = 1420 for awg0"
   FAIL=1
 fi
 

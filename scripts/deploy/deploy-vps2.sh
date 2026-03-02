@@ -342,6 +342,14 @@ echo AGH_OK
 "
 ok "AdGuard Home установлен"
 
+# Фиксируем время последнего успешного деплоя на VPS2
+DEPLOY_TS="$(date +%s)"
+if run2 "echo '${DEPLOY_TS}' | sudo tee /etc/vpn-last-deploy.ts >/dev/null && sudo chmod 644 /etc/vpn-last-deploy.ts"; then
+    ok "VPS2: last deploy timestamp updated"
+else
+    warn "VPS2: failed to update /etc/vpn-last-deploy.ts"
+fi
+
 echo ""
 echo -e "${BOLD}Деплой VPS2 завершён.${NC}"
 echo ""

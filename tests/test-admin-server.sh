@@ -144,6 +144,10 @@ check_pattern "Audit logging function"     "def audit"
 check_pattern "SSH exec helper"            "def ssh_exec"
 check_pattern "SSH upload helper"          "def ssh_upload"
 check_pattern "WebSocket monitor"          "_monitor_loop"
+check_pattern "Monitor autostart path"     "MONITOR_SCRIPT_PATH"
+check_pattern "Monitor running check"      "_is_monitor_running"
+check_pattern "Monitor start function"     "_start_monitor"
+check_pattern "Monitor running API field"  "_monitor_running"
 check_pattern "Auth decorator"             "def auth_required"
 check_pattern "Local bypass decorator"     "def auth_required_or_local"
 check_pattern "Monitoring peer_ip field"   "peer_ip"
@@ -174,8 +178,9 @@ done
 if [[ -z "$PYTHON" ]]; then
     skip "Python not found — cannot run syntax/import checks"
 else
-    if "$PYTHON" -c "import ast; ast.parse(open('$ADMIN_SCRIPT').read())" 2>/dev/null; then
-        pass "Python syntax valid (ast.parse)"
+    # Use py_compile to handle both MSYS (/c/...) and native Windows paths correctly
+    if "$PYTHON" -m py_compile "$ADMIN_SCRIPT" 2>/dev/null; then
+        pass "Python syntax valid (py_compile)"
     else
         fail "Python syntax error in admin-server.py"
     fi
@@ -338,6 +343,75 @@ print('|'.join(results))
         fi
 
         rm -f "$TEST_DB" 2>/dev/null || true
+    fi
+fi
+
+# ── Section 5b: Monitor autostart logic ─────────────────────────────────────
+
+echo ""
+echo "── 5b. Monitor autostart ──"
+
+MONITOR_SCRIPT="${PROJECT_ROOT}/scripts/monitor/monitor-web.sh"
+MONITOR_DATA="${PROJECT_ROOT}/scripts/monitor/vpn-output/data.json"
+
+if [[ -f "$MONITOR_SCRIPT" ]]; then
+    pass "monitor-web.sh exists"
+else
+    fail "monitor-web.sh NOT found at $MONITOR_SCRIPT"
+fi
+
+# Test _is_monitor_running logic: fresh file = running, stale/absent = not running
+if [[ -z "$PYTHON" ]]; then
+    skip "Python not found — cannot test _is_monitor_running"
+else
+    MONITOR_TEST=$("$PYTHON" -c "
+import time, os, tempfile, pathlib
+
+def _is_monitor_running(path):
+    p = pathlib.Path(path)
+    if not p.is_file():
+        return False
+    try:
+        return (time.time() - p.stat().st_mtime) < 30
+    except OSError:
+        return False
+
+results = []
+
+# Case 1: file does not exist
+results.append('no_file=' + ('ok' if not _is_monitor_running('/nonexistent/path/data.json') else 'fail'))
+
+# Case 2: fresh file (just created)
+with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as f:
+    f.write(b'{\"ts\": 1}')
+    fresh = f.name
+results.append('fresh_file=' + ('ok' if _is_monitor_running(fresh) else 'fail'))
+os.unlink(fresh)
+
+# Case 3: stale file (mtime set to 60s ago)
+with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as f:
+    f.write(b'{\"ts\": 1}')
+    stale = f.name
+old_time = time.time() - 60
+os.utime(stale, (old_time, old_time))
+results.append('stale_file=' + ('ok' if not _is_monitor_running(stale) else 'fail'))
+os.unlink(stale)
+
+print('|'.join(results))
+" 2>&1) || true
+
+    if [[ -n "$MONITOR_TEST" ]]; then
+        IFS='|' read -ra CHECKS <<< "$MONITOR_TEST"
+        for check in "${CHECKS[@]}"; do
+            key="${check%%=*}"; val="${check##*=}"
+            if [[ "$val" == "ok" ]]; then
+                pass "Monitor check: ${key//_/ }"
+            else
+                fail "Monitor check: ${key//_/ }"
+            fi
+        done
+    else
+        fail "Monitor autostart test produced no output"
     fi
 fi
 

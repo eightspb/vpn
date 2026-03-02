@@ -28,6 +28,24 @@ export UCF_FORCE_CONFFOLD=1
 
 APT_OPTS=(-y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold")
 
+# apt-get update + install with 3 attempts to handle transient DNS failures
+# (cloud providers sometimes delay DNS resolution during early boot / cloud-init)
+_apt_install() {
+    local i
+    for i in 1 2 3; do
+        apt-get -qq update 2>/dev/null || true
+        if apt-get "${APT_OPTS[@]}" install "$@" >/dev/null 2>&1; then
+            return 0
+        fi
+        if [[ $i -lt 3 ]]; then
+            echo "[security-harden] apt install failed (attempt $i/3, DNS?), retrying in 20s..."
+            sleep 20
+        fi
+    done
+    echo "[security-harden] ERROR: failed to install: $* — DNS unavailable on this server?" >&2
+    return 1
+}
+
 SSH_PORT=22
 VPN_PORT=51820
 VPN_NET="10.8.0.0/24"
@@ -49,10 +67,47 @@ done
 
 echo "[security-harden] Starting hardening (role=${ROLE:-any})..."
 
+# ── 0. Preflight: hostname + DNS ─────────────────────────────────────────────
+
+# Fix "sudo: unable to resolve host <hostname>" — добавляем hostname в /etc/hosts
+_hn="$(hostname 2>/dev/null || true)"
+if [[ -n "$_hn" ]] && ! grep -qE "^\s*[0-9].*\b${_hn}\b" /etc/hosts 2>/dev/null; then
+    echo "127.0.1.1 $_hn" >> /etc/hosts
+    echo "[security-harden] hostname '$_hn' added to /etc/hosts"
+fi
+
+# Ждём DNS до 90 секунд (cloud-init иногда запаздывает с настройкой сети)
+_dns_ready=false
+for _i in 1 2 3 4 5 6; do
+    if getent hosts archive.ubuntu.com &>/dev/null || \
+       getent hosts deb.debian.org &>/dev/null; then
+        _dns_ready=true
+        break
+    fi
+    echo "[security-harden] DNS not ready (attempt $_i/6), waiting 15s..."
+    sleep 15
+done
+
+# Если DNS так и не поднялся — прописываем fallback 8.8.8.8
+if [[ "$_dns_ready" == false ]]; then
+    echo "[security-harden] DNS still unavailable — configuring fallback nameservers..."
+    # На системах с systemd-resolved /etc/resolv.conf — симлинк; заменяем реальным файлом
+    if [[ -L /etc/resolv.conf ]]; then
+        rm -f /etc/resolv.conf
+    fi
+    printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
+    if getent hosts archive.ubuntu.com &>/dev/null || \
+       getent hosts deb.debian.org &>/dev/null; then
+        echo "[security-harden] DNS is now working via 8.8.8.8"
+        _dns_ready=true
+    else
+        echo "[security-harden] WARNING: DNS still unavailable — apt may fail" >&2
+    fi
+fi
+
 # ── 1. fail2ban ──────────────────────────────────────────────────────────────
 echo "[security-harden] Installing fail2ban..."
-apt-get -qq update
-apt-get "${APT_OPTS[@]}" install fail2ban >/dev/null 2>&1
+_apt_install fail2ban
 
 cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
@@ -76,7 +131,7 @@ echo "[security-harden] fail2ban configured: ban after 3 attempts for 1 hour"
 
 # ── 2. unattended-upgrades ──────────────────────────────────────────────────
 echo "[security-harden] Configuring unattended-upgrades..."
-apt-get "${APT_OPTS[@]}" install unattended-upgrades apt-listchanges >/dev/null 2>&1
+_apt_install unattended-upgrades apt-listchanges
 
 cat > /etc/apt/apt.conf.d/20auto-upgrades << 'EOF'
 APT::Periodic::Update-Package-Lists "1";
@@ -191,8 +246,18 @@ echo "[security-harden] Installing rkhunter..."
 apt-get "${APT_OPTS[@]}" install rkhunter >/dev/null 2>&1 || true
 
 if command -v rkhunter >/dev/null 2>&1; then
-    rkhunter --update --nocolors 2>/dev/null || true
-    rkhunter --propupd --nocolors 2>/dev/null || true
+    # Debian/Ubuntu can ship WEB_CMD="/bin/false", which rkhunter 1.4.6 may
+    # report as invalid. Force a parser-safe value to avoid noisy warnings.
+    if [[ -f /etc/rkhunter.conf ]]; then
+        if grep -Eq '^[[:space:]]*WEB_CMD=' /etc/rkhunter.conf; then
+            sed -i -E 's|^[[:space:]]*WEB_CMD=.*$|WEB_CMD="false"|' /etc/rkhunter.conf
+        else
+            echo 'WEB_CMD="false"' >> /etc/rkhunter.conf
+        fi
+    fi
+
+    rkhunter --update --nocolors >/dev/null 2>&1 || true
+    rkhunter --propupd --nocolors >/dev/null 2>&1 || true
 
     cat > /etc/cron.daily/rkhunter-check << 'CRONEOF'
 #!/bin/bash
@@ -212,6 +277,9 @@ fi
 
 # ── 6. CPU watchdog (miner detection) ───────────────────────────────────────
 echo "[security-harden] Installing CPU watchdog cron..."
+apt-get "${APT_OPTS[@]}" install cron >/dev/null 2>&1 || true
+systemctl enable cron >/dev/null 2>&1 || true
+systemctl restart cron >/dev/null 2>&1 || true
 
 cat > /usr/local/bin/cpu-watchdog.sh << 'WATCHEOF'
 #!/bin/bash
@@ -242,8 +310,16 @@ WATCHEOF
 chmod +x /usr/local/bin/cpu-watchdog.sh
 
 CRON_LINE="*/5 * * * * /usr/local/bin/cpu-watchdog.sh"
-(crontab -l 2>/dev/null | grep -v "cpu-watchdog" ; echo "$CRON_LINE") | crontab -
-echo "[security-harden] CPU watchdog: checks every 5 min, threshold 80%"
+if command -v crontab >/dev/null 2>&1; then
+    TMP_CRON="$(mktemp)"
+    (crontab -l 2>/dev/null || true) | grep -v "cpu-watchdog" > "$TMP_CRON" || true
+    echo "$CRON_LINE" >> "$TMP_CRON"
+    crontab "$TMP_CRON"
+    rm -f "$TMP_CRON"
+    echo "[security-harden] CPU watchdog: checks every 5 min, threshold 80%"
+else
+    echo "[security-harden] CPU watchdog: crontab not available, schedule skipped"
+fi
 
 # ── 7. Kernel hardening (sysctl) ────────────────────────────────────────────
 echo "[security-harden] Applying kernel security parameters..."

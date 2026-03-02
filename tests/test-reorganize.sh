@@ -182,15 +182,15 @@ echo ""
 echo "--- 6. scripts/monitor/monitor-web.sh: JSON_FILE ---"
 
 if [[ -f "scripts/monitor/monitor-web.sh" ]]; then
-    if grep -q 'JSON_FILE=.*\.\./\.\./vpn-output/data\.json' scripts/monitor/monitor-web.sh 2>/dev/null; then
-        ok "monitor-web.sh: JSON_FILE указывает на ../../vpn-output/data.json"
+    if grep -q 'JSON_FILE="\./vpn-output/data\.json"' scripts/monitor/monitor-web.sh 2>/dev/null; then
+        ok "monitor-web.sh: JSON_FILE указывает на ./vpn-output/data.json"
     else
-        fail "monitor-web.sh: JSON_FILE не обновлён (ожидается ../../vpn-output/data.json)"
+        fail "monitor-web.sh: JSON_FILE не обновлён (ожидается ./vpn-output/data.json)"
     fi
-    if ! grep -q 'JSON_FILE="\./vpn-output/data\.json"' scripts/monitor/monitor-web.sh 2>/dev/null; then
-        ok "monitor-web.sh: старый JSON_FILE путь отсутствует"
+    if ! grep -q 'JSON_FILE=.*\.\./\.\./vpn-output/data\.json' scripts/monitor/monitor-web.sh 2>/dev/null; then
+        ok "monitor-web.sh: старый JSON_FILE путь ../../vpn-output/data.json отсутствует"
     else
-        fail "monitor-web.sh: старый JSON_FILE путь ./vpn-output/data.json всё ещё присутствует"
+        fail "monitor-web.sh: старый JSON_FILE путь ../../vpn-output/data.json всё ещё присутствует"
     fi
 else
     fail "scripts/monitor/monitor-web.sh не найден"

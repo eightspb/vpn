@@ -24,9 +24,9 @@ PASS=0
 FAIL=0
 SKIP=0
 
-pass() { ((PASS++)); echo -e "\033[0;32m  ✓ $*\033[0m"; }
-fail() { ((FAIL++)); echo -e "\033[0;31m  ✗ $*\033[0m"; }
-skip() { ((SKIP++)); echo -e "\033[1;33m  ⊘ $* (skipped)\033[0m"; }
+pass() { PASS=$((PASS + 1)); echo -e "\033[0;32m  ✓ $*\033[0m"; }
+fail() { FAIL=$((FAIL + 1)); echo -e "\033[0;31m  ✗ $*\033[0m"; }
+skip() { SKIP=$((SKIP + 1)); echo -e "\033[1;33m  ⊘ $* (skipped)\033[0m"; }
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -93,7 +93,7 @@ echo "── 4. HTML structure check ──"
 
 check_html() {
     local desc="$1" pattern="$2"
-    if grep -qi "$pattern" "$ADMIN_HTML" 2>/dev/null; then
+    if grep -qi -- "$pattern" "$ADMIN_HTML" 2>/dev/null; then
         pass "HTML: $desc"
     else
         fail "HTML: $desc (missing: $pattern)"
@@ -111,7 +111,7 @@ check_html "Peers table"    "peers"
 check_html "Settings page"  "settings"
 check_html "Audit log"      "audit"
 check_html "API calls"      "/api/"
-check_html "JWT token"      "token"
+check_html "Cookie session auth" "credentials: 'include'"
 check_html "QR code"        "qr"
 check_html "Modal"          "modal"
 check_html "Live peers table" "WireGuard peers (live)"
@@ -136,7 +136,7 @@ echo "── 6. Backend API endpoints ──"
 
 check_py() {
     local desc="$1" pattern="$2"
-    if grep -qE "$pattern" "$ADMIN_SCRIPT" 2>/dev/null; then
+    if grep -qE -- "$pattern" "$ADMIN_SCRIPT" 2>/dev/null; then
         pass "Backend: $desc"
     else
         fail "Backend: $desc (pattern: $pattern)"
@@ -203,7 +203,7 @@ echo "── 8. Deploy script structure ──"
 
 check_deploy() {
     local desc="$1" pattern="$2"
-    if grep -qE "$pattern" "$DEPLOY_SCRIPT" 2>/dev/null; then
+    if grep -qE -- "$pattern" "$DEPLOY_SCRIPT" 2>/dev/null; then
         pass "Deploy: $desc"
     else
         fail "Deploy: $desc (pattern: $pattern)"
@@ -233,8 +233,8 @@ check_deploy "Graceful stop helper"    "stop_pid_gracefully"
 echo ""
 echo "── 9. Security features ──"
 
-check_py "Rate limit: 5 attempts"     "LOGIN_MAX_ATTEMPTS.*=.*5"
-check_py "Rate limit: 60s window"     "LOGIN_WINDOW_SEC.*=.*60"
+check_py "Rate limit: 20 attempts"    "LOGIN_MAX_ATTEMPTS.*=.*20"
+check_py "Rate limit: 120s window"    "LOGIN_WINDOW_SEC.*=.*120"
 check_py "bcrypt rounds=12"           "rounds=12"
 check_py "JWT TTL configurable"       "JWT_TTL_HOURS"
 check_py "CORS configuration"         "CORS\("
@@ -252,7 +252,7 @@ echo "── 10. Frontend API integration ──"
 
 check_html_api() {
     local desc="$1" pattern="$2"
-    if grep -q "$pattern" "$ADMIN_HTML" 2>/dev/null; then
+    if grep -q -- "$pattern" "$ADMIN_HTML" 2>/dev/null; then
         pass "Frontend: $desc"
     else
         fail "Frontend: $desc (missing: $pattern)"
@@ -263,7 +263,7 @@ check_html_api "Auth login call"      "/api/auth/login"
 check_html_api "Peers list call"      "/api/peers"
 check_html_api "Settings call"        "/api/settings"
 check_html_api "Audit call"           "/api/audit"
-check_html_api "Health check"         "/api/health"
+check_html_api "Auth me check"        "/api/auth/me"
 check_html_api "Cookie session (credentials include)" "credentials: 'include'"
 check_html_api "Peer speed tooltip" "peer-speed-tooltip"
 check_html_api "Peers speed column" ">Speed<"

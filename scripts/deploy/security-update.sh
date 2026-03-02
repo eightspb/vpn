@@ -11,17 +11,32 @@ APT_OPTS=(
   -o Dpkg::Options::="--force-confold"
 )
 
+# Retry apt-get update to handle transient DNS failures (cloud-init network delays)
+_apt_update() {
+    local i
+    for i in 1 2 3; do
+        apt-get -qq update 2>/dev/null && return 0
+        if [[ $i -lt 3 ]]; then
+            echo "[security-update] apt update failed (attempt $i/3, DNS?), retrying in 20s..."
+            sleep 20
+        fi
+    done
+    echo "[security-update] WARNING: apt update failed after 3 attempts — upgrading with cached lists" >&2
+}
+
 echo "[security-update] apt index update"
-apt-get -qq update
+_apt_update
 
 echo "[security-update] finish interrupted dpkg state"
 dpkg --force-confdef --force-confold --configure -a
 
 echo "[security-update] upgrade packages"
-apt-get "${APT_OPTS[@]}" upgrade
+apt-get "${APT_OPTS[@]}" upgrade || \
+    echo "[security-update] WARNING: upgrade incomplete (DNS down? packages pending next run)" >&2
 
 echo "[security-update] dist-upgrade packages"
-apt-get "${APT_OPTS[@]}" dist-upgrade
+apt-get "${APT_OPTS[@]}" dist-upgrade || \
+    echo "[security-update] WARNING: dist-upgrade incomplete (DNS down? packages pending next run)" >&2
 
 echo "[security-update] cleanup unused packages"
 apt-get -y autoremove --purge

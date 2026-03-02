@@ -80,6 +80,9 @@ _get_field() {
     echo "$_SERVER_DATA" | awk "/^=${tag}=/{found=1; next} found && /^=/{exit} found{print}"
 }
 
+# Извлекает значение junk-параметра из блока сервера
+_junk_val() { _get_field JUNK | awk -v k="$1" -F'[[:space:]]*=[[:space:]]*' '$1==k{print $2; exit}'; }
+
 # ── Peers DB (JSON-like flat file) ───────────────────────────────────────────
 
 _init_db() {
@@ -211,26 +214,32 @@ _write_config() {
     } > "$file"
 }
 
+# ── AmneziaVPN JSON generation ───────────────────────────────────────────────
+
+# Генерирует нативный AmneziaVPN JSON рядом с .conf файлом
+_write_amnezia_json() {
+    local conf_file="$1" priv="$2" addr="$3" mtu="$4" allowed="$5" profile_name="${6:-VPN}"
+    local json_file="${conf_file%.conf}.json"
+    local server_pub server_port
+    server_pub="$(_get_field PUB)"
+    server_port="$(_get_field PORT)"
+    amnezia_write_json "$json_file" "$priv" "$addr" "$mtu" "$allowed" \
+        "$server_pub" "${VPS1_IP}:${server_port}" "$VPS1_IP" "$server_port" "10.8.0.2" \
+        "$(_junk_val Jc)" "$(_junk_val Jmin)" "$(_junk_val Jmax)" \
+        "$(_junk_val S1)" "$(_junk_val S2)" \
+        "$(_junk_val H1)" "$(_junk_val H2)" "$(_junk_val H3)" "$(_junk_val H4)" \
+        "$profile_name"
+}
+
 # ── QR code generation ───────────────────────────────────────────────────────
 
 _show_qr() {
     local conf_file="$1"
-    if command -v qrencode &>/dev/null; then
+    local json_file="${conf_file%.conf}.json"
+    if [[ -f "$json_file" ]]; then
+        amnezia_qr_show "$json_file"
+    elif command -v qrencode &>/dev/null; then
         qrencode -t ANSIUTF8 < "$conf_file"
-    elif command -v python3 &>/dev/null; then
-        python3 -c "
-import sys
-try:
-    import qrcode
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L)
-    qr.add_data(open('$conf_file').read())
-    qr.make(fit=True)
-    qr.print_ascii(invert=True)
-except ImportError:
-    print('Для QR установите: pip install qrcode[pil]')
-    print('Или: sudo apt install qrencode')
-    sys.exit(1)
-"
     else
         warn "Для QR-кодов установите qrencode или python3 qrcode"
         return 1
@@ -239,22 +248,11 @@ except ImportError:
 
 _save_qr_png() {
     local conf_file="$1" png_file="$2"
-    if command -v qrencode &>/dev/null; then
+    local json_file="${conf_file%.conf}.json"
+    if [[ -f "$json_file" ]]; then
+        amnezia_qr_save_png "$json_file" "$png_file"
+    elif command -v qrencode &>/dev/null; then
         qrencode -t PNG -o "$png_file" -r "$conf_file" -s 6
-    elif command -v python3 &>/dev/null; then
-        python3 -c "
-import sys
-try:
-    import qrcode
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=6, border=2)
-    qr.add_data(open('$conf_file').read())
-    qr.make(fit=True)
-    img = qr.make_image(fill_color='black', back_color='white')
-    img.save('$png_file')
-except ImportError:
-    print('Для PNG QR установите: pip install qrcode[pil]')
-    sys.exit(1)
-"
     else
         warn "Для QR PNG установите qrencode или python3 qrcode[pil]"
         return 1
@@ -340,6 +338,8 @@ printf 'PRIV=%s\nPUB=%s\n' \"\$PRIV\" \"\$PUB\"
 
     _write_config "$conf_file" "$priv" "${ip}/24" "$mtu" "0.0.0.0/0" "$profile_name"
     ok "Конфиг: $conf_file"
+    _write_amnezia_json "$conf_file" "$priv" "${ip}/24" "$mtu" "0.0.0.0/0" "$profile_name" \
+        && ok "AmneziaVPN JSON: ${conf_file%.conf}.json"
 
     _db_add "$name" "$ip" "$type" "$pub" "$priv" "$(date +%Y-%m-%d_%H:%M:%S)" "$conf_file"
     ok "Пир добавлен в базу"
@@ -720,8 +720,21 @@ cmd_export() {
         profile_name="${server_name} - ${name}"
         _write_config "$conf_file" "$priv" "${peer_ip}/24" "$mtu" "0.0.0.0/0" "$profile_name"
         ok "Конфиг пересоздан: $conf_file"
+        _write_amnezia_json "$conf_file" "$priv" "${peer_ip}/24" "$mtu" "0.0.0.0/0" "$profile_name" \
+            && ok "AmneziaVPN JSON: ${conf_file%.conf}.json"
     else
         ok "Конфиг: $conf_file"
+        local json_file="${conf_file%.conf}.json"
+        if [[ ! -f "$json_file" ]]; then
+            local server_name profile_name
+            server_name="$(_get_field NAME)"
+            server_name="${server_name:-$VPS1_IP}"
+            profile_name="${server_name} - ${name}"
+            _write_amnezia_json "$conf_file" "$priv" "${peer_ip}/24" "$mtu" "0.0.0.0/0" "$profile_name" \
+                && ok "AmneziaVPN JSON создан: $json_file"
+        else
+            ok "AmneziaVPN JSON: $json_file"
+        fi
     fi
 
     if [[ "$show_qr" == true ]]; then

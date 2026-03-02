@@ -180,9 +180,13 @@ SERVER_PUB="$(clean_value "$SERVER_PUB")"
 SERVER_NAME="$(ssh_exec "hostname -f 2>/dev/null || hostname")"
 SERVER_NAME="$(clean_value "$SERVER_NAME")"
 SERVER_NAME="${SERVER_NAME:-$VPS1_IP}"
+SERVER_PORT="$(ssh_exec "sudo awg show awg1 listen-port 2>/dev/null || echo 51820")"
+SERVER_PORT="$(clean_value "$SERVER_PORT")"
+SERVER_PORT="${SERVER_PORT:-51820}"
 
 # Получаем junk-параметры из конфига сервера для AmneziaWG
-JUNK_PARAMS="$(ssh_exec "sudo awk '/^\[Interface\]/{found=1} found && /^(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4)=/{print}' /etc/amnezia/amneziawg/awg1.conf 2>/dev/null || true")"
+JUNK_PARAMS="$(ssh_exec "sudo awk '/^\[Interface\]/{found=1} found && /^(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4)[[:space:]]*=/{print}' /etc/amnezia/amneziawg/awg1.conf 2>/dev/null || true")"
+_junk_param() { echo "$JUNK_PARAMS" | awk -v k="$1" -F'[[:space:]]*=[[:space:]]*' '$1==k{print $2; exit}'; }
 
 # ---------------------------------------------------------------------------
 # Генерируем клиентский конфиг
@@ -209,9 +213,18 @@ CLIENT_CONF_FILE="${OUTPUT_DIR}/peer_${PEER_NAME}_${PEER_IP//./_}.conf"
     echo "[Peer]"
     echo "PublicKey  = ${SERVER_PUB}"
     echo "AllowedIPs = 0.0.0.0/0"
-    echo "Endpoint   = ${VPS1_IP}:51820"
+    echo "Endpoint   = ${VPS1_IP}:${SERVER_PORT}"
     echo "PersistentKeepalive = 25"
 } > "$CLIENT_CONF_FILE"
+
+# Генерируем нативный AmneziaVPN JSON
+CLIENT_JSON_FILE="${OUTPUT_DIR}/peer_${PEER_NAME}_${PEER_IP//./_}.json"
+amnezia_write_json "$CLIENT_JSON_FILE" "$PHONE_PRIV" "${PEER_IP}/24" "1280" "0.0.0.0/0" \
+    "$SERVER_PUB" "${VPS1_IP}:${SERVER_PORT}" "$VPS1_IP" "$SERVER_PORT" "${TUN_NET}.1" \
+    "$(_junk_param Jc)" "$(_junk_param Jmin)" "$(_junk_param Jmax)" \
+    "$(_junk_param S1)" "$(_junk_param S2)" \
+    "$(_junk_param H1)" "$(_junk_param H2)" "$(_junk_param H3)" "$(_junk_param H4)" \
+    "${SERVER_NAME} - ${PEER_NAME}"
 
 echo ""
 echo "=== ГОТОВО ==="
@@ -220,9 +233,10 @@ echo "  Пир:        ${PEER_NAME}"
 echo "  IP пира:    ${PEER_IP}/24"
 echo "  Публичный ключ пира: ${PHONE_PUB}"
 echo ""
-echo "  Конфиг сохранён: ${CLIENT_CONF_FILE}"
+echo "  AmneziaVPN JSON: ${CLIENT_JSON_FILE}"
+echo "  Raw WireGuard:   ${CLIENT_CONF_FILE}"
 echo ""
 echo "  Для подключения:"
-echo "    1. Скопируйте ${CLIENT_CONF_FILE} на устройство"
-echo "    2. Импортируйте в AmneziaWG"
+echo "    1. Скопируйте ${CLIENT_JSON_FILE} на устройство"
+echo "    2. AmneziaVPN → Добавить → Файл с настройками подключения"
 echo ""
