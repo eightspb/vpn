@@ -684,6 +684,157 @@ WebSocket: подключение к `/` — real-time обновления мо
 bash tests/test-admin-server.sh
 ```
 
+## Новый backend (FastAPI, foundation)
+
+Модульный FastAPI backend — foundation для будущей миграции bot/admin/billing. На текущем этапе предоставляет только health/ready/meta endpoints. **Не заменяет** текущую админ-панель (`manage.sh admin`).
+
+### Локальный запуск
+
+**Вариант 1 — Docker (рекомендуется):**
+```bash
+docker compose -f docker-compose.backend.yml up -d
+```
+
+Поднимает backend (порт 8000), Postgres (хост `55432` → контейнер `5432`), Redis (6379).
+
+**Вариант 2 — без Docker:**
+```bash
+# Убедитесь, что .env содержит APP_PORT, DATABASE_URL, REDIS_URL (или оставьте по умолчанию)
+bash scripts/backend/run.sh
+```
+
+Backend слушает `http://0.0.0.0:8000`.
+
+### Проверка health endpoints
+
+```bash
+curl http://localhost:8000/health   # → {"status":"ok"}
+curl http://localhost:8000/ready    # → {"status":"ready"}
+curl http://localhost:8000/api/v1/meta  # → {"version":"0.1.0","env":"development"}
+```
+
+### Тесты backend
+
+```bash
+bash tests/test-backend-health.sh
+```
+
+### Telegram Bot MVP (Stage 2)
+
+Bot работает как отдельный сервис и не заменяет `scripts/admin/admin-server.py`.
+
+**Запуск bot-сервиса локально:**
+```bash
+# 1) Поднять Postgres/Redis
+docker compose -f docker-compose.backend.yml up -d postgres redis
+
+# 2) Применить миграции (включая 003 telegram_profiles)
+python -m alembic upgrade head
+
+# 3) Запустить bot API
+uvicorn backend.bot.main:app --host 0.0.0.0 --port 8010 --reload
+
+# или helper-скриптом
+bash scripts/backend/run-bot.sh
+```
+
+**Нужные env-переменные:**
+```bash
+TELEGRAM_BOT_TOKEN=<real token>
+TELEGRAM_WEBHOOK_SECRET_TOKEN=<secret for Telegram header>
+TEST_PAYMENT_WEBHOOK_SECRET=<secret for test provider webhook>
+BOT_INTERNAL_API_TOKEN=<token for internal confirm>
+BOT_SERVICE_PORT=8010
+BOT_OUTBOUND_ENABLED=true
+```
+
+**Webhook Telegram (локально через tunnel):**
+```bash
+# Пример с ngrok:
+ngrok http 8010
+
+# Затем выставить webhook
+curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://<your-ngrok>.ngrok-free.app/webhook/telegram\",\"secret_token\":\"${TELEGRAM_WEBHOOK_SECRET_TOKEN}\"}"
+```
+
+**Webhook Telegram (сервер):**
+```bash
+curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"https://<your-domain>/webhook/telegram\",\"secret_token\":\"${TELEGRAM_WEBHOOK_SECRET_TOKEN}\"}"
+```
+
+**Локальная проверка mock-оплаты:**
+```bash
+# Подтверждение платежа internal endpoint (из ответа бота взять external_id)
+curl -X POST "http://127.0.0.1:8010/payments/test/confirm/<external_id>?token=${BOT_INTERNAL_API_TOKEN}"
+```
+
+**Автотест happy path:**
+```bash
+bash tests/test-bot-happy-path.sh
+```
+
+### Локальный стенд (зафиксировано)
+
+Используем один источник Postgres: контейнер `vpn-postgres-1` на порту `55432` (избегаем конфликта с локальным Windows PostgreSQL на `5432`).
+
+```bash
+DATABASE_URL=postgresql+psycopg2://vpn:secret@127.0.0.1:55432/vpn
+```
+
+Валидные команды для smoke/migration:
+
+```bash
+docker compose -f docker-compose.backend.yml up -d postgres
+python -m alembic upgrade head
+bash scripts/migrate_to_pg.sh --dry-run
+bash scripts/migrate_to_pg.sh
+bash tests/test-backend-health.sh
+bash tests/test-migrate-to-pg.sh
+```
+
+### Структура
+
+```
+backend/
+├── api/           # роутеры и эндпоинты
+├── bot/           # отдельный bot service (webhook + FSM router)
+├── core/           # конфигурация
+├── db/             # engine, session, Base
+├── services/       # бизнес-логика (bot/audit и др.)
+├── repositories/   # доступ к данным
+├── models/         # доменные модели (users, plans, subscriptions, etc.)
+├── integrations/   # внешние сервисы (test payment provider и др.)
+├── workers/        # фоновые задачи (пока пусто)
+└── main.py         # FastAPI app
+```
+
+### Миграция в Postgres (admin.db + peers.json → PG)
+
+Подготовка таблиц и импорт данных из текущих источников (SQLite admin.db и vpn-output/peers.json).
+
+**Требования:** Postgres, `DATABASE_URL` в `.env`.
+
+**Команды:**
+```bash
+# 1. Поднять Postgres (если ещё не запущен)
+docker compose -f docker-compose.backend.yml up -d postgres
+
+# 2. Применить миграции (создать таблицы)
+python -m alembic upgrade head
+
+# 3. Импортировать данные из admin.db и peers.json (идемпотентно)
+bash scripts/migrate_to_pg.sh
+
+# Проверка без записи
+bash scripts/migrate_to_pg.sh --dry-run
+```
+
+Идемпотентность: повторный запуск `migrate_to_pg` не создаёт дубли (проверка по `username`, `source_id`, `key`).
+
 ## Тесты
 
 Проверка изменений Фазы 2 (производительность: DNS-кэш, стриминг, MTU в deploy):
@@ -1063,4 +1214,3 @@ sudo systemctl restart awg-quick@awg1
 # Логи
 sudo journalctl -u awg-quick@awg0 -f
 ```
-

@@ -37,6 +37,10 @@ scripts/admin/admin.log
 scripts/admin/.venv/
 scripts/admin/__pycache__/
 
+# Backend runtime files
+backend/.venv/
+backend/__pycache__/
+
 # Python cache artifacts
 __pycache__/
 *.pyc

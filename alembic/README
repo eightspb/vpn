@@ -1,0 +1,5 @@
+Alembic migrations for VPN Postgres backend.
+
+Run from project root:
+  python -m alembic upgrade head
+  python -m alembic revision --autogenerate -m "description"
