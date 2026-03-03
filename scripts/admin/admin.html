@@ -1732,7 +1732,7 @@ function renderDashboardContent() {
     connectedPeers.push({ name: ip, ip, mp });
     if (mp.public_key) matchedIds.add(mp.public_key);
   });
-  const connectedCount = connectedPeers.length;
+  const connectedCount = connectedPeers.length || Number(v1.active_peers_awg1 || 0);
   const dataTs = mon?.ts ? new Date(mon.ts * 1000).toLocaleTimeString() : null;
   const monitoringPeersSorted = [...(state.monitoringPeers || [])].sort((a, b) => {
     const ah = a.handshake_age_sec == null ? Number.POSITIVE_INFINITY : a.handshake_age_sec;

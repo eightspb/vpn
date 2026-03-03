@@ -24,9 +24,9 @@ if [[ -z "$PYTHON" ]]; then
 fi
 
 RUN_PYTHON="$PYTHON"
-if [[ -f "${BACKEND_DIR}/.venv/Scripts/python.exe" ]]; then
+if [[ -f "${BACKEND_DIR}/.venv/Scripts/python.exe" ]] && "${BACKEND_DIR}/.venv/Scripts/python.exe" --version >/dev/null 2>&1; then
     RUN_PYTHON="${BACKEND_DIR}/.venv/Scripts/python.exe"
-elif [[ -f "${BACKEND_DIR}/.venv/bin/python" ]]; then
+elif [[ -f "${BACKEND_DIR}/.venv/bin/python" ]] && "${BACKEND_DIR}/.venv/bin/python" --version >/dev/null 2>&1; then
     RUN_PYTHON="${BACKEND_DIR}/.venv/bin/python"
 fi
 
@@ -40,13 +40,20 @@ from fastapi.testclient import TestClient
 
 project_root = Path.cwd()
 db_path = project_root / "vpn-output" / "admin-v1-test.sqlite3"
+output_dir = project_root / "vpn-output" / "test-artifacts-admin-v1"
 if db_path.exists():
     db_path.unlink()
+if output_dir.exists():
+    for conf in output_dir.glob("*"):
+        conf.unlink(missing_ok=True)
+else:
+    output_dir.mkdir(parents=True, exist_ok=True)
 
 os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{db_path.as_posix()}"
 os.environ["APP_ENV"] = "development"
 os.environ["BOT_OUTBOUND_ENABLED"] = "false"
 os.environ["LEGACY_ADMIN_BASE_URL"] = "http://127.0.0.1:65535"
+os.environ["VPN_OUTPUT_DIR"] = output_dir.as_posix()
 
 from backend.core.config import get_settings
 import backend.db.session as db_session_module
@@ -165,6 +172,8 @@ peer_create = client.post(
 )
 assert peer_create.status_code == 200, peer_create.text
 peer_id = peer_create.json()["id"]
+assert peer_create.json().get("private_key"), "peer private key should be generated"
+assert peer_create.json().get("public_key"), "peer public key should be generated"
 
 peer_list = client.get("/api/v1/admin/peers")
 assert peer_list.status_code == 200, peer_list.text
@@ -173,6 +182,8 @@ assert any(item.get("id") == peer_id for item in peer_list.json())
 peer_cfg = client.get(f"/api/v1/admin/peers/{peer_id}/config")
 assert peer_cfg.status_code == 200, peer_cfg.text
 assert "Address =" in peer_cfg.text
+assert "PrivateKey =" in peer_cfg.text
+assert "TODO_SERVER_" not in peer_cfg.text
 
 mon_data = client.get("/api/v1/admin/monitoring/data")
 assert mon_data.status_code == 200, mon_data.text
@@ -196,6 +207,10 @@ logout = client.post("/api/v1/admin/auth/logout")
 assert logout.status_code == 200, logout.text
 post_logout = client.get("/api/v1/admin/auth/me")
 assert post_logout.status_code == 401, post_logout.text
+
+for conf in output_dir.glob("*"):
+    conf.unlink(missing_ok=True)
+output_dir.rmdir()
 
 print("OK: Stage 3 admin API happy path passed")
 PY

@@ -23,9 +23,9 @@ if [[ -z "$PYTHON" ]]; then
 fi
 
 RUN_PYTHON="$PYTHON"
-if [[ -f "${BACKEND_DIR}/.venv/Scripts/python.exe" ]]; then
+if [[ -f "${BACKEND_DIR}/.venv/Scripts/python.exe" ]] && "${BACKEND_DIR}/.venv/Scripts/python.exe" --version >/dev/null 2>&1; then
     RUN_PYTHON="${BACKEND_DIR}/.venv/Scripts/python.exe"
-elif [[ -f "${BACKEND_DIR}/.venv/bin/python" ]]; then
+elif [[ -f "${BACKEND_DIR}/.venv/bin/python" ]] && "${BACKEND_DIR}/.venv/bin/python" --version >/dev/null 2>&1; then
     RUN_PYTHON="${BACKEND_DIR}/.venv/bin/python"
 fi
 
@@ -38,12 +38,19 @@ from fastapi.testclient import TestClient
 
 project_root = Path.cwd()
 db_path = project_root / "vpn-output" / "admin-rbac-test.sqlite3"
+output_dir = project_root / "vpn-output" / "test-artifacts-admin-rbac"
 if db_path.exists():
     db_path.unlink()
+if output_dir.exists():
+    for conf in output_dir.glob("*"):
+        conf.unlink(missing_ok=True)
+else:
+    output_dir.mkdir(parents=True, exist_ok=True)
 
 os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{db_path.as_posix()}"
 os.environ["APP_ENV"] = "development"
 os.environ["BOT_OUTBOUND_ENABLED"] = "false"
+os.environ["VPN_OUTPUT_DIR"] = output_dir.as_posix()
 
 from backend.core.config import get_settings
 import backend.db.session as db_session_module
@@ -113,6 +120,10 @@ assert users.status_code == 200
 readonly_id = next(item["id"] for item in users.json()["items"] if item["username"] == "readonly")
 upd = owner.put(f"/api/v1/admin/users/{readonly_id}", json={"role": "operator"})
 assert upd.status_code == 200, upd.text
+
+for conf in output_dir.glob("*"):
+    conf.unlink(missing_ok=True)
+output_dir.rmdir()
 
 print("OK: Stage 3 RBAC smoke passed")
 PY

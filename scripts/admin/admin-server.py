@@ -58,8 +58,10 @@ KEYS_ENV_PATH = PROJECT_ROOT / "vpn-output" / "keys.env"
 PEERS_JSON_PATH = PROJECT_ROOT / "vpn-output" / "peers.json"
 MONITOR_DATA_PATH = PROJECT_ROOT / "scripts" / "monitor" / "vpn-output" / "data.json"
 MONITOR_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "monitor" / "monitor-web.sh"
+MONITOR_DATA_FALLBACK_PATH = PROJECT_ROOT / "vpn-output" / "data.json"
 # Единая папка конфигов пиров — все .conf файлы хранятся и загружаются отсюда
 CONFIGS_DIR = PROJECT_ROOT / "vpn-output"
+MONITOR_STALE_SEC = int(os.environ.get("ADMIN_MONITOR_STALE_SEC", "90"))
 
 # =============================================================================
 # Logging
@@ -410,6 +412,11 @@ def _import_peers_from_json() -> None:
 # =============================================================================
 
 
+def _config_has_placeholders(conf_text: str) -> bool:
+    markers = ("TODO_SERVER_PUBLIC_KEY", "TODO_SERVER_ENDPOINT")
+    return any(marker in conf_text for marker in markers)
+
+
 def _parse_peer_from_config_file(config_path: Path) -> dict | None:
     """Parse a WireGuard .conf file and return peer info (name, ip, config_file)."""
     if not config_path.is_file():
@@ -417,6 +424,9 @@ def _parse_peer_from_config_file(config_path: Path) -> dict | None:
     try:
         text = config_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
+        return None
+    if _config_has_placeholders(text):
+        # Ignore synthetic/incomplete configs from tests to avoid broken peers in UI.
         return None
     ip = ""
     for line in text.splitlines():
@@ -1927,6 +1937,8 @@ def peers_config(peer_id: int):
         content = config_path.read_text(encoding="utf-8")
     else:
         return jsonify({"error": "Config not available"}), 404
+    if _config_has_placeholders(content):
+        return jsonify({"error": "Config contains placeholder values (TODO_*). Regenerate peer config."}), 422
 
     _mark_config_downloaded(db, peer_id)
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", peer["name"])
@@ -1952,6 +1964,8 @@ def peers_config_by_ip(peer_ip: str):
                 config_path = CONFIGS_DIR / Path(cp["config_file"]).name
             if config_path.is_file():
                 content = config_path.read_text(encoding="utf-8")
+                if _config_has_placeholders(content):
+                    return jsonify({"error": "Config contains placeholder values (TODO_*). Regenerate peer config."}), 422
                 safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", cp["name"])
                 if db_peer is not None:
                     _mark_config_downloaded(db, int(db_peer["id"]))
@@ -1998,6 +2012,8 @@ def peers_qr(peer_id: int):
         content = config_path.read_text(encoding="utf-8")
     else:
         return jsonify({"error": "Config not available for QR"}), 404
+    if _config_has_placeholders(content):
+        return jsonify({"error": "Config contains placeholder values (TODO_*). Regenerate peer config before QR export."}), 422
 
     # Amnezia reliably imports QR with raw WG/AWG config text.
     # Keep QR payload identical to downloadable .conf content.
@@ -2037,15 +2053,17 @@ def peers_stats():
 @auth_required_or_local
 def monitoring_data():
     """Return current monitoring data from scripts/monitor/vpn-output/data.json."""
-    if not MONITOR_DATA_PATH.is_file():
+    monitor_path = _resolve_monitor_data_path()
+    if monitor_path is None:
         return jsonify({
             "error": "Monitoring data not available",
-            "path": str(MONITOR_DATA_PATH),
+            "paths": [str(MONITOR_DATA_PATH), str(MONITOR_DATA_FALLBACK_PATH)],
             "_monitor_running": False,
         }), 404
     try:
-        data = json.loads(MONITOR_DATA_PATH.read_text(encoding="utf-8"))
+        data = json.loads(monitor_path.read_text(encoding="utf-8"))
         data["_monitor_running"] = _is_monitor_running()
+        data["_monitor_path"] = str(monitor_path)
         return jsonify(data)
     except (json.JSONDecodeError, OSError) as exc:
         return jsonify({"error": f"Failed to read monitoring data: {exc}"}), 500
@@ -2073,8 +2091,9 @@ def _monitor_loop() -> None:
     """Background thread that emits monitoring data every 5 seconds."""
     while not _monitor_stop.is_set():
         try:
-            if MONITOR_DATA_PATH.is_file():
-                data = json.loads(MONITOR_DATA_PATH.read_text(encoding="utf-8"))
+            monitor_path = _resolve_monitor_data_path()
+            if monitor_path is not None:
+                data = json.loads(monitor_path.read_text(encoding="utf-8"))
                 socketio.emit("monitoring_update", data, namespace="/")
         except Exception as exc:
             log.debug("Monitor emit error: %s", exc)
@@ -2310,12 +2329,29 @@ def _internal_error(_e):
 # =============================================================================
 
 
+def _resolve_monitor_data_path() -> Path | None:
+    """Return the freshest available monitor data file."""
+    candidates = [MONITOR_DATA_PATH, MONITOR_DATA_FALLBACK_PATH]
+    existing = []
+    for path in candidates:
+        if path.is_file():
+            try:
+                existing.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    if not existing:
+        return None
+    existing.sort(key=lambda item: item[0], reverse=True)
+    return existing[0][1]
+
+
 def _is_monitor_running() -> bool:
-    """Return True if monitor-web.sh is actively writing data.json (updated < 30s ago)."""
-    if not MONITOR_DATA_PATH.is_file():
+    """Return True if monitor data is fresh enough for current poll/backoff interval."""
+    monitor_path = _resolve_monitor_data_path()
+    if monitor_path is None:
         return False
     try:
-        return (time.time() - MONITOR_DATA_PATH.stat().st_mtime) < 30
+        return (time.time() - monitor_path.stat().st_mtime) < MONITOR_STALE_SEC
     except OSError:
         return False
 
