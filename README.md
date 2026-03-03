@@ -841,6 +841,49 @@ bash tests/test-admin-v1-happy-path.sh
 bash tests/test-admin-rbac-smoke.sh
 ```
 
+### Billing v2 (Stage 4)
+
+- PaymentGateway abstraction: `test` + `manual` провайдеры.
+- Статусы транзакций: `pending -> completed|canceled|failed -> refunded`.
+- Идемпотентность webhook через таблицу `payment_webhook_events` (`provider + event_id`).
+- Trial v1 anti-abuse: ограничения по пользователю и периоду (cooldown + уникальный `user+month`).
+- Promocode v1: `fixed` / `percent`, срок действия, лимит использований.
+
+```bash
+# миграции Stage 4
+python -m alembic upgrade head
+
+# smoke billing v2
+bash tests/test-billing-v2.sh
+```
+
+### Notifications + Worker automation (Stage 5)
+
+- Worker stack: `APScheduler` (единый scheduler + delivery loop).
+- Периодические задачи:
+  - `notify_expiring_3d` (по умолчанию каждые 60 мин)
+  - `notify_expiring_1d` (каждые 60 мин)
+  - `notify_expired` (каждые 60 мин)
+  - `cleanup_stale` (каждые 360 мин)
+  - `sync_subscription_states` (каждые 30 мин)
+  - `deliver_notifications` (каждые 20 сек)
+- Broadcast v1: сегменты `all|active|expired`, журнал кампаний в `broadcast_campaigns`.
+- Retry + DLQ:
+  - экспоненциальный backoff (`WORKER_RETRY_BASE_SECONDS`, `WORKER_RETRY_MAX_SECONDS`)
+  - ограничение попыток `WORKER_MAX_RETRIES`
+  - после исчерпания попыток запись попадает в `worker_dead_letters`.
+
+```bash
+# миграции Stage 5
+python -m alembic upgrade head
+
+# локально worker
+bash scripts/backend/run-worker.sh
+
+# docker stack (backend + bot + worker + pg + redis)
+docker compose -f docker-compose.backend.yml up -d
+```
+
 ### Локальный стенд (зафиксировано)
 
 Используем один источник Postgres: контейнер `vpn-postgres-1` на порту `55432` (избегаем конфликта с локальным Windows PostgreSQL на `5432`).
@@ -872,7 +915,7 @@ backend/
 ├── repositories/   # доступ к данным
 ├── models/         # доменные модели (users, plans, subscriptions, etc.)
 ├── integrations/   # внешние сервисы (test payment provider и др.)
-├── workers/        # фоновые задачи (пока пусто)
+├── workers/        # фоновые задачи + scheduler/delivery loop
 └── main.py         # FastAPI app
 ```
 

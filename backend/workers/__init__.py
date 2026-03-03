@@ -1,1 +1,1 @@
-"""Workers — фоновые задачи (пока пусто)."""
+"""Worker package for background jobs."""

@@ -65,3 +65,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg2://vpn:secret@postgres:5432/vpn
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "backend.workers.main"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

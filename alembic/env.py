@@ -26,10 +26,17 @@ from backend.models import (
     PlanOffer,
     Subscription,
     Transaction,
+    Promocode,
+    TrialActivation,
+    PaymentWebhookEvent,
     Setting,
     AuditLog,
     PeerDevice,
     TelegramProfile,
+    NotificationEvent,
+    BroadcastCampaign,
+    WorkerJobRun,
+    WorkerDeadLetter,
 )
 
 target_metadata = Base.metadata

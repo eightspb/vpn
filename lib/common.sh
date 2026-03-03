@@ -41,6 +41,11 @@ warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
 step() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
 
+# ── SSH client bins (cross-platform override) ───────────────────────────────
+SSH_BIN="${SSH_BIN:-ssh}"
+SCP_BIN="${SCP_BIN:-scp}"
+SSHPASS_BIN="${SSHPASS_BIN:-sshpass}"
+
 # ── Парсинг значений ──────────────────────────────────────────────────────────
 
 # Убирает \r, кавычки и пробелы по краям
@@ -238,6 +243,23 @@ COMMON_TEMP_KEY_FILES=()
 prepare_key_for_ssh() {
     local key="$1" tmp_key
     if [[ -z "$key" || ! -f "$key" ]]; then printf "%s" "$key"; return; fi
+    # For Windows OpenSSH (ssh.exe), keep key path in Windows form.
+    if [[ "${SSH_BIN:-ssh}" == *"ssh.exe" ]]; then
+        if [[ "$key" =~ ^/mnt/([A-Za-z])/(.*)$ ]]; then
+            local drive="${BASH_REMATCH[1]}"
+            local rest="${BASH_REMATCH[2]}"
+            printf "%s:/%s" "${drive^^}" "${rest}"
+            return
+        fi
+        if [[ "$key" =~ ^/([A-Za-z])/(.*)$ ]]; then
+            local drive2="${BASH_REMATCH[1]}"
+            local rest2="${BASH_REMATCH[2]}"
+            printf "%s:/%s" "${drive2^^}" "${rest2}"
+            return
+        fi
+        printf "%s" "$key"
+        return
+    fi
     if [[ "$key" == /mnt/* ]]; then
         tmp_key="$(mktemp /tmp/vpn_key_XXXXXX)" || { printf "%s" "$key"; return; }
         cp "$key" "$tmp_key" 2>/dev/null || { rm -f "$tmp_key"; printf "%s" "$key"; return; }
@@ -256,6 +278,32 @@ cleanup_temp_keys() {
     done
 }
 
+_path_for_native_ssh() {
+    local p="$1"
+    if command -v cygpath >/dev/null 2>&1; then
+        local win
+        win="$(cygpath -w "$p" 2>/dev/null || true)"
+        if [[ -n "$win" ]]; then
+            win="${win//\\//}"
+            printf "%s" "$win"
+            return
+        fi
+    fi
+    if [[ "$p" =~ ^/mnt/([A-Za-z])/(.*)$ ]]; then
+        local drive="${BASH_REMATCH[1]}"
+        local rest="${BASH_REMATCH[2]}"
+        printf "%s:/%s" "${drive^^}" "${rest}"
+        return
+    fi
+    if [[ "$p" =~ ^/([A-Za-z])/(.*)$ ]]; then
+        local drive2="${BASH_REMATCH[1]}"
+        local rest2="${BASH_REMATCH[2]}"
+        printf "%s:/%s" "${drive2^^}" "${rest2}"
+        return
+    fi
+    printf "%s" "$p"
+}
+
 # ── SSH-хелперы ───────────────────────────────────────────────────────────────
 
 # Выполняет команду на удалённом сервере через SSH
@@ -271,11 +319,11 @@ ssh_exec() {
     pass="$(clean_value "$pass")"
 
     if [[ -n "$key" && -f "$key" ]]; then
-        timeout "$timeout" ssh "${ssh_opts[@]}" -i "$key" "${user}@${ip}" "$cmd"
+        timeout "$timeout" "$SSH_BIN" "${ssh_opts[@]}" -i "$key" "${user}@${ip}" "$cmd"
     elif [[ -n "$pass" ]]; then
-        timeout "$timeout" sshpass -p "$pass" ssh "${ssh_opts[@]}" "${user}@${ip}" "$cmd"
+        timeout "$timeout" "$SSHPASS_BIN" -p "$pass" "$SSH_BIN" "${ssh_opts[@]}" "${user}@${ip}" "$cmd"
     else
-        timeout "$timeout" ssh "${ssh_opts[@]}" "${user}@${ip}" "$cmd"
+        timeout "$timeout" "$SSH_BIN" "${ssh_opts[@]}" "${user}@${ip}" "$cmd"
     fi
 }
 
@@ -285,14 +333,18 @@ ssh_upload() {
     local local_file="$1" ip="$2" user="$3" key="$4" pass="$5"
     local dst="${6:-/tmp/$(basename "$local_file")}"
     local scp_opts=(-o StrictHostKeyChecking=accept-new)
+    local src="$local_file"
     key="$(expand_tilde "$key")"
+    if [[ "$SCP_BIN" == *".exe" ]]; then
+        src="$(_path_for_native_ssh "$local_file")"
+    fi
 
     if [[ -n "$key" && -f "$key" ]]; then
-        scp "${scp_opts[@]}" -i "$key" "$local_file" "${user}@${ip}:${dst}"
+        "$SCP_BIN" "${scp_opts[@]}" -i "$key" "$src" "${user}@${ip}:${dst}"
     elif [[ -n "$pass" ]]; then
-        sshpass -p "$pass" scp "${scp_opts[@]}" "$local_file" "${user}@${ip}:${dst}"
+        "$SSHPASS_BIN" -p "$pass" "$SCP_BIN" "${scp_opts[@]}" "$src" "${user}@${ip}:${dst}"
     else
-        scp "${scp_opts[@]}" "$local_file" "${user}@${ip}:${dst}"
+        "$SCP_BIN" "${scp_opts[@]}" "$src" "${user}@${ip}:${dst}"
     fi
 }
 
@@ -472,11 +524,11 @@ check_deps() {
         fi
     done
 
-    for cmd in ssh scp awk "${filtered[@]+"${filtered[@]}"}"; do
+    for cmd in "$SSH_BIN" "$SCP_BIN" awk "${filtered[@]+"${filtered[@]}"}"; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [[ "$need_sshpass" == "true" ]]; then
-        command -v sshpass &>/dev/null || missing+=("sshpass")
+        command -v "$SSHPASS_BIN" &>/dev/null || missing+=("$SSHPASS_BIN")
     fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then

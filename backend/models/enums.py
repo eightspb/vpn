@@ -26,3 +26,20 @@ class SubscriptionStatus(str, enum.Enum):
     EXPIRED = "expired"
     CANCELLED = "cancelled"
     PENDING = "pending"
+
+
+class TransactionStatus(str, enum.Enum):
+    """Статус платежной транзакции."""
+
+    PENDING = "pending"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+    FAILED = "failed"
+    REFUNDED = "refunded"
+
+
+class PromocodeKind(str, enum.Enum):
+    """Тип промокода."""
+
+    FIXED = "fixed"
+    PERCENT = "percent"

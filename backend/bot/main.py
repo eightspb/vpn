@@ -60,16 +60,39 @@ async def test_payment_webhook(
     if settings.TEST_PAYMENT_WEBHOOK_SECRET and x_test_payment_secret != settings.TEST_PAYMENT_WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="invalid payment secret")
     payload: dict[str, Any] = await request.json()
-    external_id = str(payload.get("external_id") or "").strip()
-    if not external_id:
-        raise HTTPException(status_code=400, detail="external_id required")
-    with get_session() as session:
-        found = bot_service.confirm_payment(
-            session=session,
-            external_id=external_id,
-            ip_address=request.client.host if request.client else None,
-            source="payment_webhook",
-        )
+    try:
+        with get_session() as session:
+            found = bot_service.process_payment_webhook(
+                session=session,
+                provider="test",
+                payload=payload,
+                ip_address=request.client.host if request.client else None,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not found:
+        raise HTTPException(status_code=404, detail="payment not found")
+    return {"ok": True}
+
+
+@app.post("/payments/manual/webhook")
+async def manual_payment_webhook(
+    request: Request,
+    x_test_payment_secret: str | None = Header(default=None),
+) -> dict[str, bool]:
+    if settings.TEST_PAYMENT_WEBHOOK_SECRET and x_test_payment_secret != settings.TEST_PAYMENT_WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="invalid payment secret")
+    payload: dict[str, Any] = await request.json()
+    try:
+        with get_session() as session:
+            found = bot_service.process_payment_webhook(
+                session=session,
+                provider="manual",
+                payload=payload,
+                ip_address=request.client.host if request.client else None,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not found:
         raise HTTPException(status_code=404, detail="payment not found")
     return {"ok": True}
@@ -85,6 +108,7 @@ def internal_confirm_payment(external_id: str, token: str | None = None) -> dict
             external_id=external_id,
             ip_address=None,
             source="internal_confirm",
+            provider="test",
         )
     if not found:
         raise HTTPException(status_code=404, detail="payment not found")

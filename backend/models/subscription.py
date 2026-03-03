@@ -4,11 +4,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.session import Base
-from backend.models.enums import SubscriptionStatus
+from backend.models.enums import SubscriptionStatus, TransactionStatus
 
 
 class Subscription(Base):
@@ -43,8 +43,21 @@ class Transaction(Base):
         ForeignKey("subscriptions.id"), nullable=True
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    original_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    discount_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="RUB", nullable=False)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)  # test, stripe, etc.
     external_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[TransactionStatus] = mapped_column(
+        Enum(
+            TransactionStatus,
+            name="transactionstatus",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        default=TransactionStatus.PENDING,
+        nullable=False,
+    )
+    is_trial: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    promocode_id: Mapped[Optional[int]] = mapped_column(ForeignKey("promocodes.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

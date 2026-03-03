@@ -65,6 +65,7 @@ from backend.models import (
     Subscription,
     SubscriptionStatus,
     Transaction,
+    TransactionStatus,
     User,
 )
 
@@ -103,7 +104,7 @@ with get_session() as session:
         currency="RUB",
         provider="test",
         external_id="tx-1",
-        status="pending",
+        status=TransactionStatus.PENDING,
     )
     session.add(tx)
     session.add(Setting(key="DNS", value="10.8.0.2"))

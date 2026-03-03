@@ -61,7 +61,7 @@ db_session_module.engine = None
 db_session_module.SessionLocal = None
 
 from backend.db.session import Base, get_engine, get_session
-from backend.models import Plan, PlanKind, PlanOffer, Subscription, Transaction, AuditLog, User
+from backend.models import Plan, PlanKind, PlanOffer, Subscription, Transaction, TransactionStatus, AuditLog, User
 from backend.models.telegram_profile import TelegramProfile
 
 _ = User, TelegramProfile  # keep imported for metadata registration
@@ -119,7 +119,7 @@ assert resp.status_code == 200, resp.text
 with get_session() as session:
     tx = session.scalar(select(Transaction).order_by(Transaction.id.desc()))
     assert tx is not None
-    assert tx.status == "pending"
+    assert tx.status == TransactionStatus.PENDING
     external_id = tx.external_id
 
 confirm_resp = client.post(f"/payments/test/confirm/{external_id}?token=internal-token")
@@ -152,7 +152,7 @@ with get_session() as session:
     assert subscription is not None
     assert subscription.status.value == "active"
     tx = session.scalar(select(Transaction).order_by(Transaction.id.desc()))
-    assert tx is not None and tx.status == "completed"
+    assert tx is not None and tx.status == TransactionStatus.COMPLETED
 
     actions = set(session.scalars(select(AuditLog.action)).all())
     required = {"registration", "payment_created", "payment_confirmed", "subscription_activated", "bot_settings_updated"}

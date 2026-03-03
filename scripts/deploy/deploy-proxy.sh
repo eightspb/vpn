@@ -18,6 +18,10 @@ fi
 
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
+SSH_BIN="${SSH_BIN:-ssh}"
+SCP_BIN="${SCP_BIN:-scp}"
+SSHPASS_BIN="${SSHPASS_BIN:-sshpass}"
+
 PROXY_DIR="$SCRIPT_DIR/../../youtube-proxy"
 BINARY_NAME="youtube-proxy"
 REMOTE_DIR="/opt/youtube-proxy"
@@ -56,14 +60,14 @@ require_vars "deploy-proxy.sh" VPS2_IP
 
 # Формируем SSH/SCP команды с учётом ключа или пароля
 if [[ -n "$VPS2_KEY" ]]; then
-    SSH="ssh -i $VPS2_KEY -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
-    SCP="scp -i $VPS2_KEY -o StrictHostKeyChecking=accept-new"
+    SSH="$SSH_BIN -i $VPS2_KEY -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
+    SCP="$SCP_BIN -i $VPS2_KEY -o StrictHostKeyChecking=accept-new"
 elif [[ -n "$VPS2_PASS" ]]; then
-    SSH="sshpass -p '$VPS2_PASS' ssh -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
-    SCP="sshpass -p '$VPS2_PASS' scp -o StrictHostKeyChecking=accept-new"
+    SSH="$SSHPASS_BIN -p '$VPS2_PASS' $SSH_BIN -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
+    SCP="$SSHPASS_BIN -p '$VPS2_PASS' $SCP_BIN -o StrictHostKeyChecking=accept-new"
 else
-    SSH="ssh -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
-    SCP="scp -o StrictHostKeyChecking=accept-new"
+    SSH="$SSH_BIN -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
+    SCP="$SCP_BIN -o StrictHostKeyChecking=accept-new"
 fi
 
 echo ""

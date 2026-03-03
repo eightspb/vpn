@@ -15,13 +15,36 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.db.session import get_session
-from backend.models import AuditLog, Plan, PlanKind, PlanOffer, Setting, Subscription, Transaction, User
-from backend.models.enums import RoleEnum, SubscriptionStatus
+from backend.models import (
+    AuditLog,
+    BroadcastCampaign,
+    Plan,
+    PlanKind,
+    PlanOffer,
+    Promocode,
+    PromocodeKind,
+    Setting,
+    Subscription,
+    Transaction,
+    User,
+    WorkerDeadLetter,
+    WorkerJobRun,
+)
+from backend.models.enums import RoleEnum, SubscriptionStatus, TransactionStatus
 from backend.services.audit_service import write_audit_event
-from backend.services.bot_service import build_bot_service
+from backend.services.bot_service import TelegramGateway, build_bot_service
+from backend.services.broadcast_service import BroadcastService
+from backend.services.notifications_service import NotificationsService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 bot_service = build_bot_service()
+_notification_service = NotificationsService(
+    TelegramGateway(
+        token=get_settings().TELEGRAM_BOT_TOKEN,
+        outbound_enabled=get_settings().BOT_OUTBOUND_ENABLED,
+    )
+)
+broadcast_service = BroadcastService(_notification_service)
 
 try:
     import bcrypt  # type: ignore
@@ -55,10 +78,15 @@ PERMISSIONS: dict[str, set[str]] = {
         "transactions:read",
         "settings:read",
         "settings:write",
+        "promocodes:read",
+        "promocodes:write",
         "audit:read",
         "peers:read",
         "peers:write",
         "monitoring:read",
+        "broadcasts:read",
+        "broadcasts:write",
+        "workers:read",
     },
     "operator": {
         "users:read",
@@ -68,10 +96,14 @@ PERMISSIONS: dict[str, set[str]] = {
         "subscriptions:write",
         "transactions:read",
         "settings:read",
+        "promocodes:read",
         "audit:read",
         "peers:read",
         "peers:write",
         "monitoring:read",
+        "broadcasts:read",
+        "broadcasts:write",
+        "workers:read",
     },
     "readonly": {
         "users:read",
@@ -80,9 +112,12 @@ PERMISSIONS: dict[str, set[str]] = {
         "subscriptions:read",
         "transactions:read",
         "settings:read",
+        "promocodes:read",
         "audit:read",
         "peers:read",
         "monitoring:read",
+        "broadcasts:read",
+        "workers:read",
     },
     "support": {
         "users:read",
@@ -225,6 +260,28 @@ class SubscriptionUpdateRequest(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     items: dict[str, str]
+
+
+class PromocodeCreateRequest(BaseModel):
+    code: str = Field(min_length=3, max_length=64)
+    kind: PromocodeKind
+    value: Decimal = Field(gt=0)
+    usage_limit: int | None = Field(default=None, ge=1)
+    expires_at: datetime | None = None
+    is_active: bool = True
+
+
+class PromocodeUpdateRequest(BaseModel):
+    kind: PromocodeKind | None = None
+    value: Decimal | None = Field(default=None, gt=0)
+    usage_limit: int | None = Field(default=None, ge=1)
+    expires_at: datetime | None = None
+    is_active: bool | None = None
+
+
+class BroadcastCreateRequest(BaseModel):
+    segment: str = Field(min_length=3, max_length=16)
+    message: str = Field(min_length=1, max_length=4000)
 
 
 @router.post("/auth/login")
@@ -732,7 +789,11 @@ def _transaction_payload(item: Transaction) -> dict[str, Any]:
         "currency": item.currency,
         "provider": item.provider,
         "external_id": item.external_id,
-        "status": item.status,
+        "status": item.status.value,
+        "original_amount": str(item.original_amount) if item.original_amount is not None else None,
+        "discount_amount": str(item.discount_amount) if item.discount_amount is not None else None,
+        "is_trial": bool(item.is_trial),
+        "promocode_id": item.promocode_id,
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }
 
@@ -741,14 +802,24 @@ def _transaction_payload(item: Transaction) -> dict[str, Any]:
 def transactions_list(
     status_value: str | None = None,
     provider: str | None = None,
+    from_ts: datetime | None = None,
+    to_ts: datetime | None = None,
     _: User = Depends(require_permission("transactions:read")),
     session: Session = Depends(_db_session),
 ) -> dict[str, Any]:
     stmt = select(Transaction)
     if status_value:
-        stmt = stmt.where(Transaction.status == status_value)
+        try:
+            status_enum = TransactionStatus(status_value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid status: {status_value}") from exc
+        stmt = stmt.where(Transaction.status == status_enum)
     if provider:
         stmt = stmt.where(Transaction.provider == provider)
+    if from_ts is not None:
+        stmt = stmt.where(Transaction.created_at >= from_ts)
+    if to_ts is not None:
+        stmt = stmt.where(Transaction.created_at <= to_ts)
 
     items = session.scalars(stmt.order_by(Transaction.id.desc())).all()
     return {"items": [_transaction_payload(i) for i in items], "total": len(items)}
@@ -764,6 +835,90 @@ def transactions_get(
     if item is None:
         raise HTTPException(status_code=404, detail="transaction not found")
     return _transaction_payload(item)
+
+
+def _promocode_payload(item: Promocode) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "code": item.code,
+        "kind": item.kind.value,
+        "value": str(item.value),
+        "is_active": bool(item.is_active),
+        "usage_limit": item.usage_limit,
+        "used_count": item.used_count,
+        "expires_at": item.expires_at.isoformat() if item.expires_at else None,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
+@router.get("/promocodes")
+def promocodes_list(
+    active_only: bool = False,
+    _: User = Depends(require_permission("promocodes:read")),
+    session: Session = Depends(_db_session),
+) -> dict[str, Any]:
+    stmt = select(Promocode)
+    if active_only:
+        stmt = stmt.where(Promocode.is_active.is_(True))
+    items = session.scalars(stmt.order_by(Promocode.id.desc())).all()
+    return {"items": [_promocode_payload(item) for item in items], "total": len(items)}
+
+
+@router.post("/promocodes")
+def promocodes_create(
+    payload: PromocodeCreateRequest,
+    request: Request,
+    actor: User = Depends(require_permission("promocodes:write")),
+    session: Session = Depends(_db_session),
+) -> dict[str, Any]:
+    code = payload.code.strip().upper()
+    exists = session.scalar(select(Promocode.id).where(Promocode.code == code))
+    if exists is not None:
+        raise HTTPException(status_code=409, detail="promocode already exists")
+    item = Promocode(
+        code=code,
+        kind=payload.kind,
+        value=payload.value,
+        usage_limit=payload.usage_limit,
+        expires_at=payload.expires_at,
+        is_active=payload.is_active,
+    )
+    session.add(item)
+    session.flush()
+    write_audit_event(
+        session=session,
+        action="admin_promocode_created",
+        user_id=actor.id,
+        target=f"promocode:{item.id}",
+        details=_promocode_payload(item),
+        ip_address=request.client.host if request.client else None,
+    )
+    return _promocode_payload(item)
+
+
+@router.put("/promocodes/{promocode_id}")
+def promocodes_update(
+    promocode_id: int,
+    payload: PromocodeUpdateRequest,
+    request: Request,
+    actor: User = Depends(require_permission("promocodes:write")),
+    session: Session = Depends(_db_session),
+) -> dict[str, Any]:
+    item = session.get(Promocode, promocode_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="promocode not found")
+    data = payload.model_dump(exclude_unset=True)
+    for key, value in data.items():
+        setattr(item, key, value)
+    write_audit_event(
+        session=session,
+        action="admin_promocode_updated",
+        user_id=actor.id,
+        target=f"promocode:{item.id}",
+        details=data,
+        ip_address=request.client.host if request.client else None,
+    )
+    return _promocode_payload(item)
 
 
 @router.get("/settings")
@@ -843,6 +998,124 @@ def audit_list(
         for row in rows
     ]
     return {"items": items, "total": int(total), "page": page, "pages": pages}
+
+
+def _campaign_payload(item: BroadcastCampaign) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "segment": item.segment,
+        "message": item.message,
+        "status": item.status,
+        "total_targets": item.total_targets,
+        "sent_count": item.sent_count,
+        "failed_count": item.failed_count,
+        "created_by_user_id": item.created_by_user_id,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "started_at": item.started_at.isoformat() if item.started_at else None,
+        "finished_at": item.finished_at.isoformat() if item.finished_at else None,
+        "last_error": item.last_error,
+    }
+
+
+@router.get("/broadcasts")
+def broadcasts_list(
+    limit: int = 100,
+    _: User = Depends(require_permission("broadcasts:read")),
+    session: Session = Depends(_db_session),
+) -> dict[str, Any]:
+    items = broadcast_service.list_campaigns(session=session, limit=limit)
+    return {"items": [_campaign_payload(item) for item in items], "total": len(items)}
+
+
+@router.post("/broadcasts")
+def broadcasts_create(
+    payload: BroadcastCreateRequest,
+    request: Request,
+    actor: User = Depends(require_permission("broadcasts:write")),
+    session: Session = Depends(_db_session),
+) -> dict[str, Any]:
+    try:
+        campaign = broadcast_service.create_campaign(
+            session=session,
+            segment=payload.segment.strip().lower(),
+            message=payload.message,
+            created_by_user_id=actor.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    write_audit_event(
+        session=session,
+        action="admin_broadcast_created",
+        user_id=actor.id,
+        target=f"broadcast:{campaign.id}",
+        details={"segment": campaign.segment, "total_targets": campaign.total_targets},
+        ip_address=request.client.host if request.client else None,
+    )
+    return _campaign_payload(campaign)
+
+
+@router.get("/workers/runs")
+def workers_runs(
+    task_name: str | None = None,
+    status_value: str | None = None,
+    limit: int = 100,
+    _: User = Depends(require_permission("workers:read")),
+    session: Session = Depends(_db_session),
+) -> dict[str, Any]:
+    stmt = select(WorkerJobRun)
+    if task_name:
+        stmt = stmt.where(WorkerJobRun.task_name == task_name)
+    if status_value:
+        stmt = stmt.where(WorkerJobRun.status == status_value)
+    rows = session.scalars(
+        stmt.order_by(WorkerJobRun.id.desc()).limit(max(1, min(limit, 500)))
+    ).all()
+    items = [
+        {
+            "id": row.id,
+            "task_name": row.task_name,
+            "status": row.status,
+            "started_at": row.started_at.isoformat() if row.started_at else None,
+            "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+            "duration_ms": row.duration_ms,
+            "processed_count": row.processed_count,
+            "success_count": row.success_count,
+            "error_count": row.error_count,
+            "details": row.details,
+            "error_message": row.error_message,
+        }
+        for row in rows
+    ]
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/workers/dlq")
+def workers_dlq(
+    task_name: str | None = None,
+    limit: int = 100,
+    _: User = Depends(require_permission("workers:read")),
+    session: Session = Depends(_db_session),
+) -> dict[str, Any]:
+    stmt = select(WorkerDeadLetter)
+    if task_name:
+        stmt = stmt.where(WorkerDeadLetter.task_name == task_name)
+    rows = session.scalars(
+        stmt.order_by(WorkerDeadLetter.id.desc()).limit(max(1, min(limit, 500)))
+    ).all()
+    items = [
+        {
+            "id": row.id,
+            "task_name": row.task_name,
+            "item_key": row.item_key,
+            "payload": row.payload,
+            "error_message": row.error_message,
+            "attempts": row.attempts,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/bot/overview")

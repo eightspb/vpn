@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
 import json
 import logging
 import urllib.error
@@ -17,9 +16,8 @@ from sqlalchemy.orm import Session, selectinload
 from backend.bot.fsm import BotState
 from backend.bot.router import BotReply, BotRouter
 from backend.core.config import get_settings
-from backend.integrations.test_payment_provider import TestPaymentProvider
 from backend.models.audit_log import AuditLog
-from backend.models.enums import RoleEnum, SubscriptionStatus
+from backend.models.enums import RoleEnum, SubscriptionStatus, TransactionStatus
 from backend.models.peer_device import PeerDevice
 from backend.models.plan import PlanOffer
 from backend.models.setting import Setting
@@ -27,6 +25,7 @@ from backend.models.subscription import Subscription, Transaction
 from backend.models.telegram_profile import TelegramProfile
 from backend.models.user import User
 from backend.services.audit_service import write_audit_event
+from backend.services.billing_service import BillingService, build_billing_service
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +60,7 @@ class TelegramGateway:
         chat_id: int,
         text: str,
         reply_markup: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         if not self._outbound_enabled:
             logger.info(
                 "BOT_OUTBOUND_DISABLED chat_id=%s text=%s reply_markup=%s",
@@ -69,10 +68,10 @@ class TelegramGateway:
                 text,
                 bool(reply_markup),
             )
-            return
+            return True
         if not self._token:
             logger.warning("TELEGRAM_BOT_TOKEN is empty, message dropped chat_id=%s", chat_id)
-            return
+            return False
         payload_obj: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if reply_markup is not None:
             payload_obj["reply_markup"] = reply_markup
@@ -87,18 +86,21 @@ class TelegramGateway:
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 response.read()
+            return True
         except urllib.error.HTTPError as exc:
             logger.error("Telegram send failed code=%s body=%s", exc.code, exc.read())
+            return False
         except Exception:
             logger.exception("Telegram send failed")
+            return False
 
 
 class BotService:
     """Обработчик telegram update + сценарии оплаты/подписки."""
 
-    def __init__(self, gateway: TelegramGateway, payment_provider: TestPaymentProvider):
+    def __init__(self, gateway: TelegramGateway, billing_service: BillingService):
         self._gateway = gateway
-        self._payment_provider = payment_provider
+        self._billing_service = billing_service
         self._router = self._build_router()
 
     def _build_router(self) -> BotRouter:
@@ -144,61 +146,46 @@ class BotService:
             reply_markup=reply.reply_markup,
         )
 
-    def confirm_payment(self, session: Session, external_id: str, ip_address: Optional[str], source: str) -> bool:
-        transaction = session.scalar(
-            select(Transaction).where(
-                Transaction.provider == self._payment_provider.provider_name,
-                Transaction.external_id == external_id,
-            )
+    def process_payment_webhook(
+        self,
+        session: Session,
+        provider: str,
+        payload: dict[str, Any],
+        ip_address: Optional[str],
+    ) -> bool:
+        result = self._billing_service.process_webhook(
+            session=session,
+            provider=provider,
+            payload=payload,
+            ip_address=ip_address,
         )
-        if transaction is None:
+        return result.found
+
+    def confirm_payment(
+        self,
+        session: Session,
+        external_id: str,
+        ip_address: Optional[str],
+        source: str,
+        provider: str = "test",
+    ) -> bool:
+        result = self._billing_service.confirm_payment(
+            session=session,
+            provider=provider,
+            external_id=external_id,
+            ip_address=ip_address,
+            source=source,
+        )
+        if not result.found:
             return False
-        if transaction.status == "completed":
+        transaction = session.get(Transaction, result.transaction_id) if result.transaction_id else None
+        if transaction is None or transaction.subscription_id is None:
             return True
-        transaction.status = "completed"
-
-        subscription = None
-        if transaction.subscription_id is not None:
-            subscription = session.get(Subscription, transaction.subscription_id)
+        subscription = session.get(Subscription, transaction.subscription_id)
         if subscription is None:
-            logger.error("transaction %s has no subscription", transaction.id)
             return True
-
-        offer = session.get(PlanOffer, subscription.plan_offer_id)
-        if offer is None:
-            logger.error("subscription %s has no offer", subscription.id)
-            return True
-
-        now = datetime.utcnow()
-        subscription.status = SubscriptionStatus.ACTIVE
-        subscription.started_at = now
-        subscription.expires_at = now + timedelta(days=offer.duration_days)
-
-        write_audit_event(
-            session=session,
-            action="payment_confirmed",
-            user_id=subscription.user_id,
-            target=f"transaction:{transaction.id}",
-            details={"provider": transaction.provider, "external_id": external_id, "source": source},
-            ip_address=ip_address,
-        )
-        write_audit_event(
-            session=session,
-            action="subscription_activated",
-            user_id=subscription.user_id,
-            target=f"subscription:{subscription.id}",
-            details={"transaction_id": transaction.id, "plan_offer_id": subscription.plan_offer_id},
-            ip_address=ip_address,
-        )
-        logger.info(
-            "event=subscription_activated subscription_id=%s user_id=%s transaction_id=%s",
-            subscription.id,
-            subscription.user_id,
-            transaction.id,
-        )
-
         profile = self._get_profile_by_user_id(session, subscription.user_id)
-        if profile:
+        if profile and transaction.status == TransactionStatus.COMPLETED:
             self._gateway.send_message(
                 profile.chat_id,
                 f"Оплата подтверждена. Подписка активна до {subscription.expires_at:%Y-%m-%d}.",
@@ -353,62 +340,37 @@ class BotService:
         if offer is None:
             return BotReply(text="Тариф не найден.")
 
-        now = datetime.utcnow()
-        subscription = Subscription(
-            user_id=profile.user_id,
-            plan_offer_id=offer.id,
-            status=SubscriptionStatus.PENDING,
-            started_at=now,
-            expires_at=now + timedelta(days=offer.duration_days),
-        )
-        session.add(subscription)
-        session.flush()
-
-        transaction = Transaction(
-            subscription_id=subscription.id,
-            amount=Decimal(str(offer.price)),
-            currency=offer.currency,
-            provider=self._payment_provider.provider_name,
-            status="pending",
-        )
-        session.add(transaction)
-        session.flush()
-
-        payment = self._payment_provider.create_payment(
-            transaction_id=transaction.id,
-            amount=str(transaction.amount),
-            currency=transaction.currency,
-        )
-        transaction.external_id = payment.external_id
-        profile.fsm_state = BotState.AWAITING_PAYMENT.value
-        profile.fsm_payload = json.dumps({"external_id": payment.external_id})
-        profile.updated_at = now
-
-        write_audit_event(
+        promocode = None
+        provider = self._get_runtime_setting(session, "BOT_PAYMENT_PROVIDER", "test").strip().lower() or "test"
+        raw_tail = message.get("text", "").strip().split()
+        if len(raw_tail) >= 3 and raw_tail[2].upper().startswith("PROMO="):
+            promocode = raw_tail[2][6:]
+        checkout = self._billing_service.create_checkout(
             session=session,
-            action="payment_created",
             user_id=profile.user_id,
-            target=f"transaction:{transaction.id}",
-            details={
-                "provider": transaction.provider,
-                "external_id": payment.external_id,
-                "subscription_id": subscription.id,
-            },
+            offer_id=offer.id,
+            provider=provider,
             ip_address=ip_address,
+            promocode_code=promocode,
+            trial=False,
         )
+        profile.fsm_state = BotState.AWAITING_PAYMENT.value
+        profile.fsm_payload = json.dumps({"external_id": checkout.external_id, "provider": checkout.provider})
+        profile.updated_at = datetime.utcnow()
+
         logger.info(
             "event=payment_created user_id=%s transaction_id=%s external_id=%s",
             profile.user_id,
-            transaction.id,
-            payment.external_id,
+            checkout.transaction_id,
+            checkout.external_id,
         )
 
         return BotReply(
             text=(
-                f"Покупка создана: transaction_id={transaction.id}, external_id={payment.external_id}\n"
-                f"Ссылка оплаты (test): {payment.payment_url}\n"
+                f"Покупка создана: transaction_id={checkout.transaction_id}, external_id={checkout.external_id}\n"
+                f"Ссылка оплаты ({checkout.provider}): {checkout.payment_url}\n"
                 "Для локальной проверки можно отправить POST на /payments/test/confirm/<external_id>.\n"
-                f"Или в чате: CONFIRM {payment.external_id}"
+                f"Или в чате: CONFIRM {checkout.external_id}"
             ),
             reply_markup=self._main_menu_keyboard(),
         )
@@ -511,20 +473,20 @@ class BotService:
         ) or 0
         total_transactions = session.scalar(select(func.count(Transaction.id))) or 0
         pending_transactions = session.scalar(
-            select(func.count(Transaction.id)).where(Transaction.status == "pending")
+            select(func.count(Transaction.id)).where(Transaction.status == TransactionStatus.PENDING)
         ) or 0
         completed_transactions = session.scalar(
-            select(func.count(Transaction.id)).where(Transaction.status == "completed")
+            select(func.count(Transaction.id)).where(Transaction.status == TransactionStatus.COMPLETED)
         ) or 0
         payments_24h = session.scalar(
             select(func.count(Transaction.id)).where(Transaction.created_at >= since_24h)
         ) or 0
         revenue_total = session.scalar(
-            select(func.coalesce(func.sum(Transaction.amount), 0)).where(Transaction.status == "completed")
+            select(func.coalesce(func.sum(Transaction.amount), 0)).where(Transaction.status == TransactionStatus.COMPLETED)
         ) or 0
         revenue_30d = session.scalar(
             select(func.coalesce(func.sum(Transaction.amount), 0)).where(
-                Transaction.status == "completed",
+                Transaction.status == TransactionStatus.COMPLETED,
                 Transaction.created_at >= since_30d,
             )
         ) or 0
@@ -662,5 +624,5 @@ def build_bot_service() -> BotService:
             token=settings.TELEGRAM_BOT_TOKEN,
             outbound_enabled=settings.BOT_OUTBOUND_ENABLED,
         ),
-        payment_provider=TestPaymentProvider(),
+        billing_service=build_billing_service(),
     )

@@ -43,6 +43,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
+SSH_BIN="${SSH_BIN:-ssh}"
+SCP_BIN="${SCP_BIN:-scp}"
+SSHPASS_BIN="${SSHPASS_BIN:-sshpass}"
+
 # ── Параметры по умолчанию ─────────────────────────────────────────────────
 VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
 VPS2_IP=""; VPS2_USER=""; VPS2_KEY=""; VPS2_PASS=""
@@ -111,36 +115,44 @@ trap cleanup_temp_keys EXIT
 run1() {
     local -a ssh_opts=(-T -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no)
     if [[ -n "$VPS1_KEY" ]]; then
-        ssh "${ssh_opts[@]}" -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1
+        "$SSH_BIN" "${ssh_opts[@]}" -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1
     else
-        sshpass -p "$VPS1_PASS" ssh "${ssh_opts[@]}" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1
+        "$SSHPASS_BIN" -p "$VPS1_PASS" "$SSH_BIN" "${ssh_opts[@]}" "${VPS1_USER}@${VPS1_IP}" "$@" 2>&1
     fi
 }
 
 run2() {
     local -a ssh_opts=(-T -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=no)
     if [[ -n "$VPS2_KEY" ]]; then
-        ssh "${ssh_opts[@]}" -i "$VPS2_KEY" "${VPS2_USER}@${VPS2_IP}" "$@" 2>&1
+        "$SSH_BIN" "${ssh_opts[@]}" -i "$VPS2_KEY" "${VPS2_USER}@${VPS2_IP}" "$@" 2>&1
     else
-        sshpass -p "$VPS2_PASS" ssh "${ssh_opts[@]}" "${VPS2_USER}@${VPS2_IP}" "$@" 2>&1
+        "$SSHPASS_BIN" -p "$VPS2_PASS" "$SSH_BIN" "${ssh_opts[@]}" "${VPS2_USER}@${VPS2_IP}" "$@" 2>&1
     fi
 }
 
 upload1() { local f=$1; local dst=${2:-/tmp/$(basename $f)}
     local -a scp_opts=(-o StrictHostKeyChecking=accept-new)
+    local src="$f"
+    if [[ "$SCP_BIN" == *".exe" ]]; then
+        src="$(_path_for_native_ssh "$f")"
+    fi
     if [[ -n "$VPS1_KEY" ]]; then
-        scp "${scp_opts[@]}" -i "$VPS1_KEY" "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        "$SCP_BIN" "${scp_opts[@]}" -i "$VPS1_KEY" "$src" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS1_PASS" scp "${scp_opts[@]}" "$f" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
+        "$SSHPASS_BIN" -p "$VPS1_PASS" "$SCP_BIN" "${scp_opts[@]}" "$src" "${VPS1_USER}@${VPS1_IP}:${dst}" 2>&1
     fi
 }
 
 upload2() { local f=$1; local dst=${2:-/tmp/$(basename $f)}
     local -a scp_opts=(-o StrictHostKeyChecking=accept-new)
+    local src="$f"
+    if [[ "$SCP_BIN" == *".exe" ]]; then
+        src="$(_path_for_native_ssh "$f")"
+    fi
     if [[ -n "$VPS2_KEY" ]]; then
-        scp "${scp_opts[@]}" -i "$VPS2_KEY" "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
+        "$SCP_BIN" "${scp_opts[@]}" -i "$VPS2_KEY" "$src" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
     else
-        sshpass -p "$VPS2_PASS" scp "${scp_opts[@]}" "$f" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
+        "$SSHPASS_BIN" -p "$VPS2_PASS" "$SCP_BIN" "${scp_opts[@]}" "$src" "${VPS2_USER}@${VPS2_IP}:${dst}" 2>&1
     fi
 }
 
@@ -204,9 +216,9 @@ log "Подключаюсь к VPS1..."
 VPS1_OS=$(run1 "cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'") || {
     echo -e "${RED}Детали SSH (VPS1):${NC}" >&2
     if [[ -n "$VPS1_KEY" ]]; then
-        ssh -v -o ConnectTimeout=10 -o BatchMode=yes -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "echo ok" 2>&1 | tail -20 >&2
+        "$SSH_BIN" -v -o ConnectTimeout=10 -o BatchMode=yes -i "$VPS1_KEY" "${VPS1_USER}@${VPS1_IP}" "echo ok" 2>&1 | tail -20 >&2
     else
-        sshpass -p "$VPS1_PASS" ssh -v -o ConnectTimeout=10 "${VPS1_USER}@${VPS1_IP}" "echo ok" 2>&1 | tail -20 >&2
+        "$SSHPASS_BIN" -p "$VPS1_PASS" "$SSH_BIN" -v -o ConnectTimeout=10 "${VPS1_USER}@${VPS1_IP}" "echo ok" 2>&1 | tail -20 >&2
     fi
     err "Не удалось подключиться к VPS1 (${VPS1_IP}). Проверьте: сеть, ключ (VPS1_KEY), пользователя (VPS1_USER), что sshd слушает порт 22."
 }
@@ -222,24 +234,24 @@ step "Шаг 2/8: Обновления безопасности на VPS1 и VPS
 
 log "Обновляю VPS1 (upgrade/dist-upgrade)..."
 upload1 "$SECURITY_UPDATE_SCRIPT" /tmp/security-update.sh >/dev/null
-run1 "sudo bash /tmp/security-update.sh" | tail -6
+run1 "sudo bash /tmp/security-update.sh"
 ok "Обновления безопасности применены на VPS1"
 
 log "Обновляю VPS2 (upgrade/dist-upgrade)..."
 upload2 "$SECURITY_UPDATE_SCRIPT" /tmp/security-update.sh >/dev/null
-run2 "sudo bash /tmp/security-update.sh" | tail -6
+run2 "sudo bash /tmp/security-update.sh"
 ok "Обновления безопасности применены на VPS2"
 
 step "Шаг 2.5/8: Security hardening на VPS1 и VPS2"
 
 log "Hardening VPS1..."
 upload1 "$SECURITY_HARDEN_SCRIPT" /tmp/security-harden.sh >/dev/null
-run1 "sudo bash /tmp/security-harden.sh --role vps1 --vpn-port ${VPS1_PORT_CLIENTS} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24" | tail -12
+run1 "sudo bash /tmp/security-harden.sh --role vps1 --vpn-port ${VPS1_PORT_CLIENTS} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24"
 ok "VPS1 hardening завершён"
 
 log "Hardening VPS2..."
 upload2 "$SECURITY_HARDEN_SCRIPT" /tmp/security-harden.sh >/dev/null
-run2 "sudo bash /tmp/security-harden.sh --role vps2 --vpn-port ${VPS2_PORT} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24 --adguard-bind ${TUN_NET}.2" | tail -12
+run2 "sudo bash /tmp/security-harden.sh --role vps2 --vpn-port ${VPS2_PORT} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24 --adguard-bind ${TUN_NET}.2"
 ok "VPS2 hardening завершён"
 
 # ── Шаг 3: Генерация ключей на VPS1 ───────────────────────────────────────
@@ -302,11 +314,11 @@ awg --version
 '
 
 log "Устанавливаю AmneziaWG на VPS1..."
-run_script1 "$INSTALL_AWG" | tail -3
+run_script1 "$INSTALL_AWG"
 ok "AmneziaWG установлен на VPS1"
 
 log "Устанавливаю AmneziaWG на VPS2..."
-run_script2 "$INSTALL_AWG" | tail -3
+run_script2 "$INSTALL_AWG"
 ok "AmneziaWG установлен на VPS2"
 
 # ── Шаг 5: Настройка VPS2 (точка выхода) ──────────────────────────────────
