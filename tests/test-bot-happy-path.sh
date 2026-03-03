@@ -125,6 +125,28 @@ with get_session() as session:
 confirm_resp = client.post(f"/payments/test/confirm/{external_id}?token=internal-token")
 assert confirm_resp.status_code == 200, confirm_resp.text
 
+overview_resp = client.get("/admin/bot/overview?token=internal-token")
+assert overview_resp.status_code == 200, overview_resp.text
+overview = overview_resp.json()
+assert overview["stats"]["telegram_users_total"] >= 1
+
+activity_resp = client.get("/admin/bot/activity?token=internal-token&limit=20")
+assert activity_resp.status_code == 200, activity_resp.text
+assert isinstance(activity_resp.json().get("items"), list)
+
+settings_put_resp = client.put(
+    "/admin/bot/settings?token=internal-token",
+    json={
+        "BOT_ENABLED": "false",
+        "BOT_SUPPORT_CONTACT": "@qa_support",
+        "BOT_MAINTENANCE_TEXT": "maintenance",
+    },
+)
+assert settings_put_resp.status_code == 200, settings_put_resp.text
+settings_get_resp = client.get("/admin/bot/settings?token=internal-token")
+assert settings_get_resp.status_code == 200, settings_get_resp.text
+assert settings_get_resp.json()["items"]["BOT_ENABLED"] == "false"
+
 with get_session() as session:
     subscription = session.scalar(select(Subscription).order_by(Subscription.id.desc()))
     assert subscription is not None
@@ -133,7 +155,7 @@ with get_session() as session:
     assert tx is not None and tx.status == "completed"
 
     actions = set(session.scalars(select(AuditLog.action)).all())
-    required = {"registration", "payment_created", "payment_confirmed", "subscription_activated"}
+    required = {"registration", "payment_created", "payment_confirmed", "subscription_activated", "bot_settings_updated"}
     missing = required - actions
     assert not missing, f"missing audit actions: {missing}"
 

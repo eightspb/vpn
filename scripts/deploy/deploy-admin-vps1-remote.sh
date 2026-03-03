@@ -10,6 +10,7 @@ CERT_DIR=/opt/vpn/scripts/admin/certs
 CERT_FILE=${CERT_DIR}/admin.crt
 KEY_FILE=${CERT_DIR}/admin.key
 ENV_FILE=/opt/vpn/.env
+ADMIN_PORT="${ADMIN_PORT//$'\r'/}"
 
 if [[ ! -d "$PROJECT_SRC" ]]; then
   echo "Source not found: $PROJECT_SRC" >&2
@@ -100,4 +101,4 @@ if sudo command -v iptables >/dev/null 2>&1; then
   fi
 fi
 
-curl -kfsS https://127.0.0.1:${ADMIN_PORT}/api/health
+curl -kfsS "https://127.0.0.1:${ADMIN_PORT}/api/health"

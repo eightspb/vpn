@@ -11,16 +11,18 @@ import urllib.error
 import urllib.request
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.bot.fsm import BotState
 from backend.bot.router import BotReply, BotRouter
 from backend.core.config import get_settings
 from backend.integrations.test_payment_provider import TestPaymentProvider
+from backend.models.audit_log import AuditLog
 from backend.models.enums import RoleEnum, SubscriptionStatus
 from backend.models.peer_device import PeerDevice
 from backend.models.plan import PlanOffer
+from backend.models.setting import Setting
 from backend.models.subscription import Subscription, Transaction
 from backend.models.telegram_profile import TelegramProfile
 from backend.models.user import User
@@ -120,6 +122,16 @@ class BotService:
             return
         identity = self._extract_identity(message)
         if identity is None:
+            return
+        if not self._is_bot_enabled(session):
+            self._gateway.send_message(
+                identity.chat_id,
+                self._get_runtime_setting(
+                    session,
+                    "BOT_MAINTENANCE_TEXT",
+                    "Бот временно отключен администратором. Попробуйте позже.",
+                ),
+            )
             return
         profile = self._get_profile_by_telegram_id(session, identity.telegram_id)
         reply = self._router.dispatch(
@@ -310,8 +322,10 @@ class BotService:
         )
 
     def _handle_support(self, _message: dict[str, Any], _context: dict[str, Any]) -> BotReply:
+        session: Session = _context["session"]
+        support_contact = self._get_runtime_setting(session, "BOT_SUPPORT_CONTACT", "@vpn_support")
         return BotReply(
-            text="Поддержка: напишите @vpn_support (MVP) или ответьте этим сообщением.",
+            text=f"Поддержка: напишите {support_contact} (MVP) или ответьте этим сообщением.",
             reply_markup=self._main_menu_keyboard(),
         )
 
@@ -469,6 +483,165 @@ class BotService:
             "resize_keyboard": True,
             "is_persistent": True,
         }
+
+    def _is_bot_enabled(self, session: Session) -> bool:
+        raw = self._get_runtime_setting(session, "BOT_ENABLED", "true")
+        return str(raw).strip().lower() not in {"0", "false", "off", "no"}
+
+    def _get_runtime_setting(self, session: Session, key: str, default: str) -> str:
+        value = session.scalar(select(Setting.value).where(Setting.key == key))
+        if value is None:
+            return default
+        return str(value)
+
+    def get_admin_overview(self, session: Session) -> dict[str, Any]:
+        now = datetime.utcnow()
+        since_24h = now - timedelta(hours=24)
+        since_30d = now - timedelta(days=30)
+
+        total_users = session.scalar(select(func.count(TelegramProfile.id))) or 0
+        new_users_24h = session.scalar(
+            select(func.count(TelegramProfile.id)).where(TelegramProfile.created_at >= since_24h)
+        ) or 0
+        active_subscriptions = session.scalar(
+            select(func.count(Subscription.id)).where(Subscription.status == SubscriptionStatus.ACTIVE)
+        ) or 0
+        pending_subscriptions = session.scalar(
+            select(func.count(Subscription.id)).where(Subscription.status == SubscriptionStatus.PENDING)
+        ) or 0
+        total_transactions = session.scalar(select(func.count(Transaction.id))) or 0
+        pending_transactions = session.scalar(
+            select(func.count(Transaction.id)).where(Transaction.status == "pending")
+        ) or 0
+        completed_transactions = session.scalar(
+            select(func.count(Transaction.id)).where(Transaction.status == "completed")
+        ) or 0
+        payments_24h = session.scalar(
+            select(func.count(Transaction.id)).where(Transaction.created_at >= since_24h)
+        ) or 0
+        revenue_total = session.scalar(
+            select(func.coalesce(func.sum(Transaction.amount), 0)).where(Transaction.status == "completed")
+        ) or 0
+        revenue_30d = session.scalar(
+            select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+                Transaction.status == "completed",
+                Transaction.created_at >= since_30d,
+            )
+        ) or 0
+
+        fsm_rows = session.execute(
+            select(TelegramProfile.fsm_state, func.count(TelegramProfile.id)).group_by(TelegramProfile.fsm_state)
+        ).all()
+        fsm_by_state = {str(state): int(count) for state, count in fsm_rows if state}
+
+        bot_actions = (
+            "registration",
+            "payment_created",
+            "payment_confirmed",
+            "subscription_activated",
+            "bot_settings_updated",
+        )
+        bot_events_24h = session.scalar(
+            select(func.count(AuditLog.id)).where(
+                AuditLog.action.in_(bot_actions),
+                AuditLog.created_at >= since_24h,
+            )
+        ) or 0
+
+        return {
+            "stats": {
+                "telegram_users_total": int(total_users),
+                "telegram_users_new_24h": int(new_users_24h),
+                "subscriptions_active": int(active_subscriptions),
+                "subscriptions_pending": int(pending_subscriptions),
+                "transactions_total": int(total_transactions),
+                "transactions_pending": int(pending_transactions),
+                "transactions_completed": int(completed_transactions),
+                "payments_created_24h": int(payments_24h),
+                "revenue_completed_total": str(revenue_total),
+                "revenue_completed_30d": str(revenue_30d),
+                "bot_events_24h": int(bot_events_24h or 0),
+                "fsm_by_state": fsm_by_state,
+            },
+            "runtime": {
+                "bot_enabled": self._is_bot_enabled(session),
+                "support_contact": self._get_runtime_setting(session, "BOT_SUPPORT_CONTACT", "@vpn_support"),
+                "outbound_enabled_env": bool(get_settings().BOT_OUTBOUND_ENABLED),
+                "telegram_token_configured": bool(get_settings().TELEGRAM_BOT_TOKEN),
+                "webhook_secret_configured": bool(get_settings().TELEGRAM_WEBHOOK_SECRET_TOKEN),
+                "internal_api_token_configured": bool(get_settings().BOT_INTERNAL_API_TOKEN),
+            },
+        }
+
+    def get_admin_activity(
+        self,
+        session: Session,
+        limit: int = 50,
+        action: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        actions = {"registration", "payment_created", "payment_confirmed", "subscription_activated", "bot_settings_updated"}
+
+        stmt = select(AuditLog).where(AuditLog.action.in_(tuple(actions)))
+        if action:
+            stmt = stmt.where(AuditLog.action == action)
+        stmt = stmt.order_by(AuditLog.id.desc()).limit(max(1, min(limit, 500)))
+        rows = session.scalars(stmt).all()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            result.append(
+                {
+                    "id": row.id,
+                    "action": row.action,
+                    "user_id": row.user_id,
+                    "target": row.target,
+                    "details": row.details,
+                    "ip_address": row.ip_address,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+            )
+        return result
+
+    def get_admin_settings(self, session: Session) -> dict[str, str]:
+        defaults = {
+            "BOT_ENABLED": "true",
+            "BOT_SUPPORT_CONTACT": "@vpn_support",
+            "BOT_MAINTENANCE_TEXT": "Бот временно отключен администратором. Попробуйте позже.",
+        }
+        rows = session.scalars(select(Setting).where(Setting.key.like("BOT_%"))).all()
+        result = defaults.copy()
+        for row in rows:
+            result[row.key] = row.value or ""
+        return result
+
+    def update_admin_settings(
+        self,
+        session: Session,
+        values: dict[str, Any],
+        ip_address: Optional[str],
+    ) -> dict[str, str]:
+        allowed = {"BOT_ENABLED", "BOT_SUPPORT_CONTACT", "BOT_MAINTENANCE_TEXT"}
+        updated: dict[str, str] = {}
+        for key, value in values.items():
+            if key not in allowed:
+                continue
+            val = str(value).strip()
+            if key == "BOT_ENABLED":
+                val = "true" if val.lower() in {"1", "true", "yes", "on"} else "false"
+            if key in {"BOT_SUPPORT_CONTACT", "BOT_MAINTENANCE_TEXT"} and not val:
+                continue
+            session.merge(Setting(key=key, value=val))
+            updated[key] = val
+        if updated:
+            write_audit_event(
+                session=session,
+                action="bot_settings_updated",
+                user_id=None,
+                target="bot_runtime",
+                details=updated,
+                ip_address=ip_address,
+            )
+            logger.info("event=bot_settings_updated keys=%s", ",".join(sorted(updated.keys())))
+        return self.get_admin_settings(session)
 
     def _tariffs_keyboard(self, offers: list[PlanOffer]) -> dict[str, Any]:
         rows: list[list[dict[str, str]]] = []

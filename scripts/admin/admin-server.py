@@ -31,6 +31,9 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -1007,8 +1010,23 @@ def auth_login():
         return jsonify({"error": "Too many login attempts. Try again later."}), 429
 
     data = request.get_json(silent=True) or {}
-    username = data.get("username", "").strip()
-    password = data.get("password", "")
+    if not isinstance(data, dict):
+        data = {}
+    if not data:
+        # Fallback for clients that submit form-encoded payloads.
+        data = request.form.to_dict(flat=True) if request.form else {}
+    if not data:
+        # Last-resort fallback for raw JSON body with incorrect/missing content-type.
+        try:
+            raw = (request.get_data(cache=False, as_text=True) or "").strip()
+            parsed = json.loads(raw) if raw else {}
+            if isinstance(parsed, dict):
+                data = parsed
+        except Exception:
+            data = {}
+
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
 
     if not username or not password:
         return jsonify({"error": "Username and password required"}), 400
@@ -2076,6 +2094,87 @@ def _ws_connect():
 @socketio.on("disconnect")
 def _ws_disconnect():
     pass
+
+
+# =============================================================================
+# API: Bot control proxy
+# =============================================================================
+
+
+def _bot_service_base_url() -> str:
+    explicit = (get_env("BOT_ADMIN_BASE_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    host = (get_env("BOT_SERVICE_HOST") or "127.0.0.1").strip()
+    port = (get_env("BOT_SERVICE_PORT") or "8010").strip()
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    return f"http://{host}:{port}"
+
+
+def _bot_service_request(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[Any, int]:
+    base_url = _bot_service_base_url()
+    url = f"{base_url}{path}"
+    token = (get_env("BOT_INTERNAL_API_TOKEN") or "").strip()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-Bot-Internal-Token"] = token
+    payload = None
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url=url, method=method, data=payload, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            data = json.loads(raw) if raw else {}
+            return data, int(resp.getcode() or 200)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            data = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            data = {"error": raw or str(exc)}
+        return data, int(exc.code)
+    except Exception as exc:
+        log.warning("bot proxy request failed %s %s: %s", method, url, exc)
+        return {"error": f"bot service unavailable: {exc}"}, 502
+
+
+@app.route("/api/bot/overview", methods=["GET"])
+@auth_required
+def bot_overview():
+    data, status = _bot_service_request("GET", "/admin/bot/overview")
+    return jsonify(data), status
+
+
+@app.route("/api/bot/activity", methods=["GET"])
+@auth_required
+def bot_activity():
+    params = urllib.parse.urlencode(
+        {
+            "limit": request.args.get("limit", "100"),
+            "action": request.args.get("action", ""),
+        }
+    )
+    data, status = _bot_service_request("GET", f"/admin/bot/activity?{params}")
+    return jsonify(data), status
+
+
+@app.route("/api/bot/settings", methods=["GET"])
+@auth_required
+def bot_settings_get():
+    data, status = _bot_service_request("GET", "/admin/bot/settings")
+    return jsonify(data), status
+
+
+@app.route("/api/bot/settings", methods=["PUT"])
+@auth_required
+def bot_settings_update():
+    payload = request.get_json(silent=True) or {}
+    data, status = _bot_service_request("PUT", "/admin/bot/settings", payload)
+    if status < 400:
+        audit("bot_settings_updated", "bot_runtime", payload)
+    return jsonify(data), status
 
 
 # =============================================================================

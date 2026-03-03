@@ -12,7 +12,10 @@ class PlanKind(str, enum.Enum):
 
 class RoleEnum(str, enum.Enum):
     """Роль пользователя."""
+    OWNER = "owner"
     ADMIN = "admin"
+    OPERATOR = "operator"
+    READONLY = "readonly"
     USER = "user"
     SUPPORT = "support"
 

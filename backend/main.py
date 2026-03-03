@@ -5,8 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from backend import __version__
+from backend.api.routes.admin_compat import router as admin_compat_router
 from backend.api.routes.health import router as health_router
+from backend.api.routes.v1.admin import router as admin_router
 from backend.api.routes.v1.meta import router as meta_router
+from backend.api.routes.v1.peers_monitoring import router as peers_monitoring_router
 from backend.core.config import get_settings
 
 
@@ -31,6 +34,11 @@ def create_app() -> FastAPI:
 
     # API v1
     app.include_router(meta_router, prefix="/api/v1")
+    app.include_router(admin_router, prefix="/api/v1")
+    app.include_router(peers_monitoring_router, prefix="/api/v1")
+
+    # Compatibility routes for existing admin.html
+    app.include_router(admin_compat_router)
 
     return app
 

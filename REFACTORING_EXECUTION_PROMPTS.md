@@ -519,3 +519,54 @@ Definition of Done:
 - `refactor/stage-4-billing-v2`
 - `refactor/stage-5-workers-notifications`
 - `refactor/stage-6-hardening-release`
+
+---
+
+## Stage 3 Completion Record (2026-03-03)
+
+Статус: `DONE` (этап закрыт как рабочий инкремент).
+
+Что подтверждено:
+1. Применены миграции до `head` (включая Stage 3):
+   - `004_stage3_rbac_roles_and_blocking`
+   - `005_stage3_peer_device_fields`
+2. Новый backend поднят отдельно от legacy admin backend.
+3. Реализован `Admin API v1` (`/api/v1/admin/*`) + RBAC роли:
+   - `owner`, `admin`, `operator`, `readonly`
+4. `peers/monitoring` работают через нативные endpoints нового backend.
+5. `scripts/admin/admin.html` переключён на `api/v1/admin` через слой маппинга URL.
+6. Аудит мутаций включён для ключевых admin-операций.
+7. Пройдены smoke-тесты:
+   - `tests/test-admin-v1-happy-path.sh`
+   - `tests/test-admin-rbac-smoke.sh`
+
+### Минимальный ручной UI smoke-чеклист (5-10 минут)
+
+1. Логин:
+   - production smoke: открыть `https://vpnrus.net/admin.html`,
+   - локальный smoke (опционально): `http://127.0.0.1:8081/admin.html`,
+   - войти под `owner/admin`.
+2. Dashboard:
+   - загрузились summary/cards без JS ошибок в консоли.
+3. Peers:
+   - открыть список пиров,
+   - создать тестовый peer,
+   - открыть edit modal и изменить `group/status`,
+   - скачать config.
+4. Settings:
+   - изменить `DNS` или `Jc`,
+   - перезагрузить страницу, убедиться что значение сохранилось.
+5. Monitoring:
+   - открываются `monitoring/data` и `monitoring/peers` в UI без 401/500.
+6. RBAC:
+   - под `readonly` убедиться, что записи доступны только read-only,
+   - попытка мутации возвращает запрет.
+7. Audit:
+   - в audit видны действия: login, peer update/create, settings update.
+
+### Rollback (оперативный fallback)
+
+Если найдена регрессия в прод-сценарии:
+1. Переключить frontend/backend на legacy admin backend.
+2. Оставить новый backend запущенным только для диагностики.
+3. Зафиксировать endpoint + payload, на котором воспроизводится регрессия.

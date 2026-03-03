@@ -1,5 +1,15 @@
 # VPN Схема: СПб → VPS1 (Москва) → VPS2 (США, Бруклин)
 
+## Production Endpoints
+
+- Основной боевой домен: `vpnrus.net`
+- Админка (prod): `https://vpnrus.net/admin.html`
+- Health (admin): `https://vpnrus.net/api/health`
+- Telegram webhook (prod): `https://vpnrus.net/webhook/telegram`
+
+Примечание: IP-адреса VPS используются как инфраструктурный fallback для SSH/диагностики.
+Для пользовательского доступа и smoke в production всегда используйте домен `vpnrus.net`.
+
 ## Quick Start — развернуть туннель за 5 минут
 
 ### Требования к серверам
@@ -622,7 +632,8 @@ bash scripts/monitor/monitor-web.sh
 
 Flask-бэкенд для управления VPN через веб-интерфейс. Хранит данные в SQLite, синхронизирует пиры с `vpn-output/peers.json`. **Все конфиги** хранятся в одной папке `vpn-output/` — оттуда они подгружаются для управления; вкладка **Peers** показывает все выданные пиры (из БД и из папки конфигов) с указанием статуса (active/disabled/from_config) и подключения (online/offline). Для каждого пира отображается состояние конфигурации: версия, число скачиваний, индикатор скачивания последней версии, а также runtime-статус конфига (`live`/`inactive`) по факту наличия пира на VPN-сервере. Это помогает сразу видеть неактивные (нерабочие) конфиги. Пиры, найденные только в папке конфигов, можно импортировать в БД прямо из UI и редактировать как обычные. Авторизация в UI работает только через HTTP-only сессию (`admin_sid`, cookie + `credentials: include`) — токен в `localStorage` больше не используется.
 
-**Адрес входа:** после запуска откройте в браузере **http://localhost:8081/** (или http://localhost:8081/admin.html).  
+**Адрес входа (локальный dev):** **http://localhost:8081/** (или http://localhost:8081/admin.html).  
+**Адрес входа (production):** **https://vpnrus.net/admin.html**.  
 Порт **8081** выбран специально, чтобы не конфликтовать с веб-дашбордом мониторинга (**monitor --web**), который занимает порт **8080**.
 Если запуск идёт в WSL через `manage.sh admin start`, сервис автоматически биндится на `0.0.0.0`, чтобы адрес `localhost:8081` был доступен из Windows-браузера.
 
@@ -650,6 +661,25 @@ python scripts/admin/admin-server.py --prod --cert cert.pem --key key.pem
 При первом запуске создаётся пользователь `admin` / `My-secure-admin-password` — **смените пароль сразу**.  
 Если пароль не подходит (например, меняли ранее или восстанавливали БД), сбросьте его:  
 `bash manage.sh admin reset-password` — пароль снова станет `My-secure-admin-password`.
+
+### Production (vpnrus.net)
+
+Для боевого обновления админки на VPS1 используйте:
+
+```bash
+bash scripts/deploy/redeploy-admin-vps1.sh \
+  --vps1-ip vpnrus.net \
+  --vps1-user slava \
+  --vps1-key .ssh/ssh-key-1772056840349
+```
+
+Проверка после выкладки:
+
+```bash
+ssh -i .ssh/ssh-key-1772056840349 slava@vpnrus.net "sudo systemctl status vpn-admin --no-pager"
+```
+
+Если из `bash` возникает `ssh/scp timeout`, а из PowerShell SSH работает, скрипт автоматически переключится на Windows OpenSSH (`ssh.exe/scp.exe`) как fallback.
 
 ### API
 
@@ -775,6 +805,40 @@ curl -X POST "http://127.0.0.1:8010/payments/test/confirm/<external_id>?token=${
 **Автотест happy path:**
 ```bash
 bash tests/test-bot-happy-path.sh
+```
+
+### Admin API v1 + compat (Stage 3)
+
+Новый backend теперь содержит Admin API в `api/v1/admin` и compat-слой для текущего `admin.html`:
+- `api/v1/admin/*`: auth, users, plans, offers, subscriptions, transactions, settings, audit
+- `api/v1/admin/peers*` и `api/v1/admin/monitoring*`: нативные endpoints нового backend
+- `api/*`: совместимые маршруты для текущего UI (без proxy в legacy для peers/monitoring)
+
+**Запуск:**
+```bash
+# 1) Поднять зависимости
+docker compose -f docker-compose.backend.yml up -d postgres redis
+
+# 2) Применить миграции (включая 004 users.is_blocked + roleenum)
+python -m alembic upgrade head
+
+# 3) Запустить новый backend
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Нужные env-переменные (fallback для rollback на legacy backend):**
+```bash
+LEGACY_ADMIN_BASE_URL=http://127.0.0.1:8081
+LEGACY_ADMIN_USERNAME=
+LEGACY_ADMIN_PASSWORD=
+```
+
+`LEGACY_ADMIN_*` сохранены как rollback-параметры и больше не требуются для нормальной работы Stage 3.
+
+**Happy-path тест Stage 3:**
+```bash
+bash tests/test-admin-v1-happy-path.sh
+bash tests/test-admin-rbac-smoke.sh
 ```
 
 ### Локальный стенд (зафиксировано)

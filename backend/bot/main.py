@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import logging
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 
 from backend.core.config import get_settings
 from backend.db.session import get_session
@@ -89,6 +89,64 @@ def internal_confirm_payment(external_id: str, token: str | None = None) -> dict
     if not found:
         raise HTTPException(status_code=404, detail="payment not found")
     return {"ok": True}
+
+
+def _require_internal_token(token: str | None, header_token: str | None) -> None:
+    expected = settings.BOT_INTERNAL_API_TOKEN
+    provided = (header_token or token or "").strip()
+    if expected and provided != expected:
+        raise HTTPException(status_code=403, detail="invalid internal token")
+
+
+@app.get("/admin/bot/overview")
+def admin_bot_overview(
+    token: str | None = Query(default=None),
+    x_bot_internal_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_internal_token(token=token, header_token=x_bot_internal_token)
+    with get_session() as session:
+        return bot_service.get_admin_overview(session)
+
+
+@app.get("/admin/bot/activity")
+def admin_bot_activity(
+    limit: int = Query(default=50, ge=1, le=500),
+    action: str | None = Query(default=None),
+    token: str | None = Query(default=None),
+    x_bot_internal_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_internal_token(token=token, header_token=x_bot_internal_token)
+    with get_session() as session:
+        items = bot_service.get_admin_activity(session, limit=limit, action=action)
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/admin/bot/settings")
+def admin_bot_settings(
+    token: str | None = Query(default=None),
+    x_bot_internal_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_internal_token(token=token, header_token=x_bot_internal_token)
+    with get_session() as session:
+        values = bot_service.get_admin_settings(session)
+    return {"items": values}
+
+
+@app.put("/admin/bot/settings")
+async def admin_bot_settings_update(
+    request: Request,
+    token: str | None = Query(default=None),
+    x_bot_internal_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_internal_token(token=token, header_token=x_bot_internal_token)
+    payload: dict[str, Any] = await request.json()
+    with get_session() as session:
+        values = bot_service.update_admin_settings(
+            session=session,
+            values=payload,
+            ip_address=request.client.host if request.client else None,
+        )
+    return {"items": values}
 
 
 if __name__ == "__main__":

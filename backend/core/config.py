@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     BOT_SERVICE_HOST: str = "0.0.0.0"
     BOT_SERVICE_PORT: int = 8010
     BOT_OUTBOUND_ENABLED: bool = True
+    LEGACY_ADMIN_BASE_URL: str = "http://127.0.0.1:8081"
+    LEGACY_ADMIN_USERNAME: Optional[str] = None
+    LEGACY_ADMIN_PASSWORD: Optional[str] = None
 
 
 @lru_cache

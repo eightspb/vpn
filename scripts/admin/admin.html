@@ -1074,6 +1074,9 @@ const state = {
   monitoring: null,
   monitoringPeers: [],
   settings: {},
+  botOverview: null,
+  botActivity: [],
+  botSettings: {},
   auditLog: { items: [], total: 0, page: 1, pages: 1 },
   currentPage: 'dashboard',
   theme: localStorage.getItem('admin_theme') || 'dark',
@@ -1138,6 +1141,7 @@ function toast(msg, type = 'success') {
 
 // ====== API helper ======
 async function api(method, path, body, retryOn401) {
+  const reqPath = mapApiPath(path);
   const opts = {
     method,
     headers: { 'Content-Type': 'application/json' },
@@ -1145,12 +1149,12 @@ async function api(method, path, body, retryOn401) {
   if (body !== undefined) opts.body = JSON.stringify(body);
   opts.credentials = 'include';
 
-  let res = await fetch(path, opts);
+  let res = await fetch(reqPath, opts);
   let data = await res.json().catch(() => ({}));
 
   if (res.status === 401 && retryOn401 !== false && state.user) {
     await new Promise(r => setTimeout(r, 400));
-    res = await fetch(path, opts);
+    res = await fetch(reqPath, opts);
     data = await res.json().catch(() => ({}));
   }
 
@@ -1161,6 +1165,17 @@ async function api(method, path, body, retryOn401) {
   }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+
+function mapApiPath(path) {
+  if (!path || typeof path !== 'string') return path;
+  if (path.startsWith('/api/v1/')) return path;
+  if (!path.startsWith('/api/')) return path;
+  // Production on vpnrus.net currently serves legacy Flask API under /api/*.
+  // Switch to v1 only when explicitly enabled.
+  const forceV1 = (window.ADMIN_API_MODE === 'v1') || (localStorage.getItem('admin_api_mode') === 'v1');
+  if (!forceV1) return path;
+  return '/api/v1/admin' + path.slice(4);
 }
 
 // ====== Formatting ======
@@ -1301,6 +1316,7 @@ function startAutoRefresh() {
   refreshTimer = setInterval(async () => {
     if (state.currentPage === 'dashboard') await loadDashboardData();
     if (state.currentPage === 'peers') await loadPeers();
+    if (state.currentPage === 'bot') await loadBotControl(true);
   }, 2000);
 }
 
@@ -1377,7 +1393,8 @@ async function loadPeers() {
 
 async function loadSettings() {
   try {
-    state.settings = await api('GET', '/api/settings');
+    const resp = await api('GET', '/api/settings');
+    state.settings = resp && resp.items ? resp.items : resp;
     if (state.currentPage === 'settings') renderSettingsContent();
   } catch (e) { /* silent */ }
 }
@@ -1390,6 +1407,24 @@ async function loadAudit(page = 1) {
     state.auditLog = await api('GET', '/api/audit?' + params.toString());
     if (state.currentPage === 'audit') renderAuditContent();
   } catch (e) { /* silent */ }
+}
+
+async function loadBotControl(silent = false) {
+  try {
+    const [overview, activityResp, settingsResp] = await Promise.all([
+      api('GET', '/api/bot/overview'),
+      api('GET', '/api/bot/activity?limit=100'),
+      api('GET', '/api/bot/settings'),
+    ]);
+    state.botOverview = overview || null;
+    state.botActivity = Array.isArray(activityResp?.items) ? activityResp.items : [];
+    state.botSettings = settingsResp?.items || {};
+    if (state.currentPage === 'bot') renderBotControlContent();
+  } catch (e) {
+    state.botOverview = { error: e.message };
+    if (state.currentPage === 'bot') renderBotControlContent();
+    if (!silent) toast(e.message, 'error');
+  }
 }
 
 // ====== Speed history & sparkline ======
@@ -1569,6 +1604,7 @@ function renderAppLayout() {
   const pages = [
     { id: 'dashboard', icon: '⬡', label: 'Dashboard' },
     { id: 'peers', icon: '⊞', label: 'Peers', badge: state.peers.length || '' },
+    { id: 'bot', icon: '✈', label: 'Bot Control' },
     { id: 'settings', icon: '⚙', label: 'Settings' },
     { id: 'audit', icon: '☰', label: 'Audit Log' },
   ];
@@ -1626,6 +1662,9 @@ function onPageLoad() {
       break;
     case 'settings':
       setTimeout(() => loadSettings(), 100);
+      break;
+    case 'bot':
+      setTimeout(() => loadBotControl(), 100);
       break;
     case 'audit':
       setTimeout(() => loadAudit(), 100);
@@ -2286,7 +2325,7 @@ async function togglePeer(id, action) {
 
 async function downloadConfig(id) {
   try {
-    const res = await fetch(`/api/peers/${id}/config`, {
+    const res = await fetch(mapApiPath(`/api/peers/${id}/config`), {
       credentials: 'include',
     });
     if (!res.ok) throw new Error('Failed to download');
@@ -2306,7 +2345,7 @@ async function downloadConfig(id) {
 async function downloadConfigByIp(ip) {
   try {
     const pathIp = ip.replace(/\./g, '_');
-    const res = await fetch(`/api/peers/by-ip/${pathIp}/config`, {
+    const res = await fetch(mapApiPath(`/api/peers/by-ip/${pathIp}/config`), {
       credentials: 'include',
     });
     if (!res.ok) throw new Error('Failed to download');
@@ -2698,6 +2737,125 @@ async function handleBatchAdd() {
   }
 }
 
+// ====== Bot Control ======
+function renderBotControlContent() {
+  const pc = document.getElementById('page-content');
+  if (!pc || state.currentPage !== 'bot') return;
+
+  const overview = state.botOverview || {};
+  if (overview.error) {
+    pc.innerHTML = `<div class="card"><div class="empty-state" style="padding:30px"><div class="empty-state-title">Bot service unavailable</div><div class="empty-state-text">${esc(overview.error)}</div><button class="btn btn-primary" onclick="loadBotControl()">Retry</button></div></div>`;
+    return;
+  }
+
+  const stats = overview.stats || {};
+  const runtime = overview.runtime || {};
+  const settings = state.botSettings || {};
+  const items = Array.isArray(state.botActivity) ? state.botActivity : [];
+  const activityRows = items.length
+    ? items.map(a => {
+      let details = a.details || '';
+      if (details && typeof details === 'string') {
+        try { details = JSON.stringify(JSON.parse(details)); } catch (_) {}
+      }
+      return `<tr>
+        <td style="font-size:12px;color:var(--text-secondary);white-space:nowrap">${fmtDate(a.created_at)}</td>
+        <td><span class="badge" style="background:var(--accent-glow2);color:var(--accent)">${esc(a.action)}</span></td>
+        <td>${esc(a.user_id || '—')}</td>
+        <td>${esc(a.target || '—')}</td>
+        <td class="audit-details" title="${esc(details)}">${esc(details || '—')}</td>
+      </tr>`;
+    }).join('')
+    : `<tr><td colspan="5"><div class="empty-state" style="padding:30px"><div class="empty-state-text">No bot activity yet</div></div></td></tr>`;
+
+  const boolBadge = (flag) => `<span class="badge ${flag ? 'badge-active' : 'badge-disabled'}"><span class="badge-dot"></span>${flag ? 'yes' : 'no'}</span>`;
+  const fsm = stats.fsm_by_state || {};
+  const fsmRows = Object.keys(fsm).length
+    ? Object.entries(fsm).map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')
+    : `<div style="color:var(--text-muted)">Нет данных по FSM.</div>`;
+
+  pc.innerHTML = `
+    <div class="summary-grid">
+      <div class="summary-card"><div class="summary-icon teal">👤</div><div class="summary-info"><div class="summary-value">${esc(stats.telegram_users_total || 0)}</div><div class="summary-label">Telegram users</div></div></div>
+      <div class="summary-card"><div class="summary-icon blue">🆕</div><div class="summary-info"><div class="summary-value">${esc(stats.telegram_users_new_24h || 0)}</div><div class="summary-label">New users / 24h</div></div></div>
+      <div class="summary-card"><div class="summary-icon teal">💳</div><div class="summary-info"><div class="summary-value">${esc(stats.transactions_completed || 0)}</div><div class="summary-label">Completed payments</div></div></div>
+      <div class="summary-card"><div class="summary-icon yellow">⏱</div><div class="summary-info"><div class="summary-value">${esc(stats.bot_events_24h || 0)}</div><div class="summary-label">Bot events / 24h</div></div></div>
+    </div>
+    <div class="settings-grid">
+      <div class="settings-section">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Bot Runtime</div></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div>Bot enabled: ${boolBadge(runtime.bot_enabled)}</div>
+            <div>Outbound enabled: ${boolBadge(runtime.outbound_enabled_env)}</div>
+            <div>Telegram token: ${boolBadge(runtime.telegram_token_configured)}</div>
+            <div>Webhook secret: ${boolBadge(runtime.webhook_secret_configured)}</div>
+            <div>Internal token: ${boolBadge(runtime.internal_api_token_configured)}</div>
+            <div>Active subscriptions: <strong>${esc(stats.subscriptions_active || 0)}</strong></div>
+          </div>
+          <div class="card-header" style="margin-top:14px"><div class="card-title">FSM States</div></div>
+          ${fsmRows}
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Bot Settings</div></div>
+          <div class="form-group">
+            <label class="form-label">BOT_ENABLED</label>
+            <select class="form-select" id="bot-set-enabled">
+              <option value="true" ${(String(settings.BOT_ENABLED || 'true') === 'true') ? 'selected' : ''}>true</option>
+              <option value="false" ${(String(settings.BOT_ENABLED || 'true') === 'false') ? 'selected' : ''}>false</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">BOT_SUPPORT_CONTACT</label>
+            <input class="form-input" id="bot-set-support" type="text" value="${esc(settings.BOT_SUPPORT_CONTACT || '@vpn_support')}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">BOT_MAINTENANCE_TEXT</label>
+            <textarea class="form-textarea" id="bot-set-maintenance">${esc(settings.BOT_MAINTENANCE_TEXT || '')}</textarea>
+          </div>
+          <button class="btn btn-primary" id="save-bot-settings-btn" onclick="handleSaveBotSettings()">Save Bot Settings</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap" style="margin-top:20px">
+      <div class="table-toolbar">
+        <div style="font-weight:600">Bot Activity</div>
+        <div class="toolbar-right">
+          <button class="btn btn-sm" onclick="loadBotControl()">Refresh</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Time</th><th>Action</th><th>User</th><th>Target</th><th>Details</th></tr></thead>
+          <tbody>${activityRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function handleSaveBotSettings() {
+  const btn = document.getElementById('save-bot-settings-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Saving...';
+  try {
+    const body = {
+      BOT_ENABLED: document.getElementById('bot-set-enabled').value,
+      BOT_SUPPORT_CONTACT: document.getElementById('bot-set-support').value.trim(),
+      BOT_MAINTENANCE_TEXT: document.getElementById('bot-set-maintenance').value.trim(),
+    };
+    const result = await api('PUT', '/api/bot/settings', body);
+    state.botSettings = result.items || {};
+    toast('Bot settings saved');
+    await loadBotControl(true);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Save Bot Settings';
+}
+
 // ====== Settings ======
 function renderSettingsContent() {
   const pc = document.getElementById('page-content');
@@ -2780,7 +2938,8 @@ async function handleSaveSettings() {
       S1: document.getElementById('set-s1').value,
       S2: document.getElementById('set-s2').value,
     };
-    state.settings = await api('PUT', '/api/settings', body);
+    const resp = await api('PUT', '/api/settings', body);
+    state.settings = resp && resp.items ? resp.items : resp;
     toast('Settings saved');
   } catch (e) { toast(e.message, 'error'); }
 
@@ -2932,7 +3091,7 @@ async function handleLogin(e) {
   errEl.classList.remove('show');
 
   try {
-    const data = await fetch('/api/auth/login', {
+    const data = await fetch(mapApiPath('/api/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: user, password: pass }),
@@ -2963,7 +3122,7 @@ async function handleLogout() {
 // ====== Init ======
 async function init() {
   try {
-    const meResp = await fetch('/api/auth/me', { method: 'GET', credentials: 'include' });
+    const meResp = await fetch(mapApiPath('/api/auth/me'), { method: 'GET', credentials: 'include' });
     if (meResp.ok) {
       state.user = await meResp.json().catch(() => null);
       const page = window.location.hash.slice(1) || 'dashboard';
