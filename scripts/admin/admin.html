@@ -1171,12 +1171,21 @@ function mapApiPath(path) {
   if (!path || typeof path !== 'string') return path;
   if (path.startsWith('/api/v1/')) return path;
   if (!path.startsWith('/api/')) return path;
-  // Production on vpnrus.net currently serves legacy Flask API under /api/*.
-  // Switch to v1 only when explicitly enabled.
-  const forceV1 = (window.ADMIN_API_MODE === 'v1') || (localStorage.getItem('admin_api_mode') === 'v1');
-  if (!forceV1) return path;
+  // V1 mapping is only valid when FastAPI backend is deployed.
+  // Auto-detect: probe /api/v1/health once; until confirmed, use legacy Flask paths.
+  if (!window._v1Available) return path;
   return '/api/v1/admin' + path.slice(4);
 }
+
+// Probe v1 backend availability once on load.
+// If /api/v1/health responds OK, enable v1 mapping; otherwise stay on legacy Flask.
+(function probeV1() {
+  const wantV1 = (window.ADMIN_API_MODE === 'v1') || (localStorage.getItem('admin_api_mode') === 'v1');
+  if (!wantV1) { window._v1Available = false; return; }
+  fetch('/api/v1/health', { method: 'GET', credentials: 'include' })
+    .then(r => { window._v1Available = r.ok; })
+    .catch(() => { window._v1Available = false; });
+})();
 
 // ====== Formatting ======
 function esc(s) {
@@ -1329,12 +1338,13 @@ async function loadDashboardData() {
   try {
     const [stats, monitoring, peersRes, monPeersRes] = await Promise.all([
       api('GET', '/api/peers/stats').catch(() => ({})),
-      api('GET', '/api/monitoring/data').catch(() => null),
+      api('GET', '/api/monitoring/data').catch(e => ({ _error: e.message })),
       api('GET', '/api/peers').catch(() => []),
       api('GET', '/api/monitoring/peers').catch(() => []),
     ]);
     state.peerStats = stats;
-    state.monitoring = monitoring;
+    state.monitoring = monitoring?._error ? null : monitoring;
+    state._monitorError = monitoring?._error || null;
     state.peers = Array.isArray(peersRes) ? peersRes : [];
     const thresholdPeer = (state.peers || []).find(p => Number(p?.connection_threshold_sec) > 0);
     state.peerOnlineThresholdSec = thresholdPeer ? Number(thresholdPeer.connection_threshold_sec) : PEER_ONLINE_HS_SEC;
@@ -1819,9 +1829,11 @@ function renderDashboardContent() {
         </div>
       </div>`;
   const monitorStale = mon._monitor_running === false;
+  const monitorError = state._monitorError || null;
   const trafficSummaryRow = `
     <div class="dashboard-section-title">Трафик и скорость</div>
-    ${monitorStale ? '<div style="font-size:12px;color:var(--warning,#f59e0b);background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:6px;padding:6px 10px;margin-bottom:8px">⚠ monitor-web.sh не запущен или данные устарели — скорость не обновляется</div>' : ''}
+    ${monitorError ? `<div style="font-size:12px;color:var(--danger,#ef4444);background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:6px 10px;margin-bottom:8px">&#x26D4; Не удалось получить данные мониторинга: ${esc(monitorError)}. Убедитесь что monitor-web.sh запущен (manage.sh monitor --web).</div>` : ''}
+    ${!monitorError && monitorStale ? '<div style="font-size:12px;color:var(--warning,#f59e0b);background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:6px;padding:6px 10px;margin-bottom:8px">&#x26A0; monitor-web.sh не запущен или данные устарели — скорость не обновляется</div>' : ''}
     ${dataTs ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">Данные мониторинга: ' + dataTs + (monitorStale ? ' (устарели)' : '') + ' · счётчики с последней перезагрузки серверов</div>' : ''}
     <div class="traffic-summary-row">
       <div class="traffic-mini-card">

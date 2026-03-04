@@ -7,7 +7,8 @@
       "Bash(wc -l /c/WORK_MICS/vpn/scripts/tools/*.sh)",
       "Bash(wc -l /c/WORK_MICS/vpn/*.sh)",
       "Bash(git -C /c/WORK_MICS/vpn log --oneline -20)",
-      "Bash(git -C /c/WORK_MICS/vpn status --short)"
+      "Bash(git -C /c/WORK_MICS/vpn status --short)",
+      "Bash(ls -lah c:/WORK_MICS/vpn/scripts/monitor/monweb_srv_*.py)"
     ]
   }
 }

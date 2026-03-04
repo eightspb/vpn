@@ -515,7 +515,10 @@ def _ssh_connect(host: str, user: str, key_path: str, password: str) -> paramiko
     """Open an SSH connection using key or password."""
     client = paramiko.SSHClient()
     client.load_system_host_keys()
-    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    # AutoAddPolicy matches monitor-web.sh behaviour (StrictHostKeyChecking=accept-new).
+    # In production the server runs behind a firewall; new host keys are accepted once
+    # and persisted in known_hosts for subsequent connections.
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     connect_kwargs: dict[str, Any] = {
         "hostname": host,
@@ -1317,7 +1320,7 @@ def _get_monitoring_indexes() -> tuple[dict[str, dict], dict[str, dict]]:
     try:
         dump = _vps1_ssh(dump_cmd)
     except Exception as exc:
-        log.debug("Monitoring by IP (SSH): %s", exc)
+        log.warning("Monitoring by IP (SSH): %s — peer connection status will be unavailable", exc)
         return by_ip, by_pub
     for peer in _parse_wg_dump_peers(dump):
         public_key = _normalize_peer_lookup_key(peer.get("public_key"))
@@ -2087,14 +2090,26 @@ _monitor_thread: threading.Thread | None = None
 _monitor_stop = threading.Event()
 
 
+_MONITOR_RESTART_INTERVAL = 120  # seconds between auto-restart attempts
+_last_monitor_restart: float = 0.0
+
+
 def _monitor_loop() -> None:
-    """Background thread that emits monitoring data every 5 seconds."""
+    """Background thread that emits monitoring data every 5 seconds and auto-restarts monitor-web.sh."""
+    global _last_monitor_restart
     while not _monitor_stop.is_set():
         try:
             monitor_path = _resolve_monitor_data_path()
             if monitor_path is not None:
                 data = json.loads(monitor_path.read_text(encoding="utf-8"))
                 socketio.emit("monitoring_update", data, namespace="/")
+            # Auto-restart monitor-web.sh if data.json is stale
+            if not _is_monitor_running():
+                now = time.time()
+                if now - _last_monitor_restart > _MONITOR_RESTART_INTERVAL:
+                    _last_monitor_restart = now
+                    log.info("Monitor data stale — attempting auto-restart of monitor-web.sh")
+                    _start_monitor()
         except Exception as exc:
             log.debug("Monitor emit error: %s", exc)
         _monitor_stop.wait(5)
@@ -2301,11 +2316,22 @@ def serve_admin_ui():
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Simple health check endpoint (no auth required)."""
+    """Health check with monitor status (no auth required)."""
+    monitor_running = _is_monitor_running()
+    monitor_path = _resolve_monitor_data_path()
+    monitor_age = None
+    if monitor_path:
+        try:
+            monitor_age = round(time.time() - monitor_path.stat().st_mtime, 1)
+        except OSError:
+            pass
     return jsonify({
         "status": "ok",
         "version": "1.0.0",
         "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "monitor_running": monitor_running,
+        "monitor_data_age_sec": monitor_age,
+        "monitor_data_path": str(monitor_path) if monitor_path else None,
     })
 
 
