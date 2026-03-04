@@ -72,6 +72,13 @@ if ! ssh_connect_check "$SSH_BIN"; then
   fi
 fi
 
+step "Pulling latest code from GitHub"
+if (cd "$PROJECT_ROOT" && git pull --ff-only 2>&1); then
+  ok "Code updated from remote"
+else
+  warn "git pull failed — deploying current local code"
+fi
+
 step "Packing project snapshot"
 mkdir -p "${PROJECT_ROOT}/vpn-output"
 rm -f "$ARCHIVE"

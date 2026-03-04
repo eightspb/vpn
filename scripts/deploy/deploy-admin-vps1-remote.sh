@@ -28,6 +28,13 @@ sudo mkdir -p "$PROJECT_DST"
 sudo rsync -a --delete "$PROJECT_SRC"/ "$PROJECT_DST"/
 sudo chown -R ${ADMIN_USER}:${ADMIN_USER} "$PROJECT_DST"
 
+# Fix SSH key permissions — SSH refuses keys with group/other access.
+if [[ -d "${PROJECT_DST}/.ssh" ]]; then
+  sudo chmod 700 "${PROJECT_DST}/.ssh"
+  sudo find "${PROJECT_DST}/.ssh" -type f -name '*.pub' -exec chmod 644 {} \;
+  sudo find "${PROJECT_DST}/.ssh" -type f ! -name '*.pub' -exec chmod 600 {} \;
+fi
+
 sudo -u "$ADMIN_USER" bash -lc "cd '$PROJECT_DST' && python3 -m venv scripts/admin/.venv"
 sudo -u "$ADMIN_USER" bash -lc "cd '$PROJECT_DST' && scripts/admin/.venv/bin/python -m pip install --upgrade pip >/dev/null"
 sudo -u "$ADMIN_USER" bash -lc "cd '$PROJECT_DST' && scripts/admin/.venv/bin/python -m pip install -r scripts/admin/requirements.txt >/dev/null"
