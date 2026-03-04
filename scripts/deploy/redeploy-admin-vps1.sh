@@ -91,9 +91,23 @@ step "Deploying admin service on VPS1"
 "$SSH_BIN" "${SSH_OPTS[@]}" "${VPS1_USER}@${VPS1_IP}" "set -e; rm -rf /tmp/vpn-deploy && mkdir -p /tmp/vpn-deploy && tar -xzf /tmp/vpn-deploy.tar.gz -C /tmp/vpn-deploy && sudo bash /tmp/vpn-deploy/scripts/deploy/deploy-admin-vps1-remote.sh"
 
 step "Updating bot service code and restarting vpn-bot"
-"$SCP_BIN" "${SSH_OPTS[@]}" "${PROJECT_ROOT}/backend/bot/main.py" "${VPS1_USER}@${VPS1_IP}:/tmp/vpn-bot-main.py"
-"$SCP_BIN" "${SSH_OPTS[@]}" "${PROJECT_ROOT}/backend/services/bot_service.py" "${VPS1_USER}@${VPS1_IP}:/tmp/vpn-bot-service.py"
-"$SSH_BIN" "${SSH_OPTS[@]}" "${VPS1_USER}@${VPS1_IP}" "set -e; cp /tmp/vpn-bot-main.py /home/slava/vpn-bot/backend/bot/main.py; cp /tmp/vpn-bot-service.py /home/slava/vpn-bot/backend/services/bot_service.py; sudo systemctl restart vpn-bot.service"
+"$SSH_BIN" "${SSH_OPTS[@]}" "${VPS1_USER}@${VPS1_IP}" "set -e; \
+if [[ ! -d /home/slava/vpn-bot/backend ]]; then \
+  echo 'Bot source dir missing: /home/slava/vpn-bot/backend' >&2; \
+  exit 1; \
+fi; \
+if [[ ! -d /opt/vpn/backend ]]; then \
+  echo 'Fresh backend source missing: /opt/vpn/backend' >&2; \
+  exit 1; \
+fi; \
+rsync -a /opt/vpn/backend/ /home/slava/vpn-bot/backend/; \
+sudo systemctl restart vpn-bot.service; \
+sleep 1; \
+if ! sudo systemctl is-active --quiet vpn-bot.service; then \
+  sudo systemctl --no-pager -l status vpn-bot.service || true; \
+  sudo journalctl -u vpn-bot.service -n 120 --no-pager || true; \
+  exit 1; \
+fi"
 
 if [[ -n "$ADMIN_PASSWORD" ]]; then
   step "Setting admin password"
@@ -113,9 +127,14 @@ fi
 step "Smoke checks"
 "$SSH_BIN" "${SSH_OPTS[@]}" "${VPS1_USER}@${VPS1_IP}" "set -e; \
 curl -k -fsS https://127.0.0.1:8443/api/health >/dev/null; \
-curl -k -fsS https://127.0.0.1:8443/admin.html | grep -q 'Bot Control'; \
+ADMIN_HTML=\$(curl -k -fsS https://127.0.0.1:8443/admin.html); \
+printf '%s' \"\$ADMIN_HTML\" | grep -q 'Bot Control'; \
 BOT_TOKEN=\$(grep -E '^BOT_INTERNAL_API_TOKEN=' /opt/vpn/.env | head -n1 | cut -d= -f2- | tr -d ' \r\n'); \
 [ -n \"\$BOT_TOKEN\" ]; \
-curl -fsS -H \"X-Bot-Internal-Token: \$BOT_TOKEN\" http://127.0.0.1:8010/admin/bot/overview >/dev/null"
+if ! curl -fsS -H \"X-Bot-Internal-Token: \$BOT_TOKEN\" http://127.0.0.1:8010/admin/bot/overview >/dev/null; then \
+  sudo systemctl --no-pager -l status vpn-bot.service || true; \
+  sudo journalctl -u vpn-bot.service -n 120 --no-pager || true; \
+  exit 1; \
+fi"
 
 ok "Redeploy completed: admin + bot are updated on VPS1"

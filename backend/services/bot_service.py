@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import enum
 import json
 import logging
 import urllib.error
@@ -17,7 +18,19 @@ from backend.bot.fsm import BotState
 from backend.bot.router import BotReply, BotRouter
 from backend.core.config import get_settings
 from backend.models.audit_log import AuditLog
-from backend.models.enums import RoleEnum, SubscriptionStatus, TransactionStatus
+try:
+    from backend.models.enums import RoleEnum, SubscriptionStatus, TransactionStatus
+except ImportError:
+    # Backward-compatibility for partially updated deployments where
+    # TransactionStatus is still defined outside backend.models.enums.
+    from backend.models.enums import RoleEnum, SubscriptionStatus
+
+    class TransactionStatus(str, enum.Enum):
+        PENDING = "pending"
+        COMPLETED = "completed"
+        CANCELED = "canceled"
+        FAILED = "failed"
+        REFUNDED = "refunded"
 from backend.models.peer_device import PeerDevice
 from backend.models.plan import PlanOffer
 from backend.models.setting import Setting
