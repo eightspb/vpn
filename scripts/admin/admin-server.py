@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import collections
 import datetime as dt
 import functools
 import hashlib
@@ -2128,6 +2129,216 @@ def _ws_connect():
 @socketio.on("disconnect")
 def _ws_disconnect():
     pass
+
+
+# =============================================================================
+# SSE: Real-time monitoring stream
+# =============================================================================
+
+_EVENTS_HISTORY: collections.deque[dict] = collections.deque(maxlen=200)
+_events_lock = threading.Lock()
+_CONNECTED_HS_THRESHOLD = 55   # seconds — peer is "connected" when handshake < this
+_DISCONNECTED_HS_THRESHOLD = 180  # seconds — peer is "disconnected" when handshake > this
+
+# Previous monitoring snapshot for diff detection (shared across SSE clients)
+_prev_monitor_snapshot: dict | None = None
+_prev_snapshot_lock = threading.Lock()
+
+
+def _detect_monitoring_events(prev: dict | None, curr: dict) -> list[dict]:
+    """Compare two monitoring snapshots and return a list of discrete events."""
+    if prev is None:
+        return []
+    events: list[dict] = []
+    now_ts = int(time.time())
+
+    for vps_key in ("vps1", "vps2"):
+        p = prev.get(vps_key, {})
+        c = curr.get(vps_key, {})
+        if not p or not c:
+            continue
+
+        # --- Online / Offline ---
+        p_online = p.get("online", False)
+        c_online = c.get("online", False)
+        if p_online and not c_online:
+            events.append({"ts": now_ts, "type": "vps_offline", "vps": vps_key})
+        elif not p_online and c_online:
+            events.append({"ts": now_ts, "type": "vps_online", "vps": vps_key})
+
+        # --- Service status changes ---
+        for svc_field in ("awg0", "awg1", "agh"):
+            p_val = p.get(svc_field, "")
+            c_val = c.get(svc_field, "")
+            if not p_val or not c_val:
+                continue
+            if p_val != c_val:
+                svc_up = c_val == "active"
+                events.append({
+                    "ts": now_ts,
+                    "type": "service_up" if svc_up else "service_down",
+                    "vps": vps_key,
+                    "service": svc_field,
+                    "status": c_val,
+                    "prev_status": p_val,
+                })
+
+        # --- Tunnel / WAN ping changes ---
+        for ping_field in ("tun_ping", "wan_ping"):
+            p_val = p.get(ping_field, "")
+            c_val = c.get(ping_field, "")
+            if not p_val or not c_val:
+                continue
+            if p_val != c_val:
+                events.append({
+                    "ts": now_ts,
+                    "type": "tunnel_up" if c_val == "ok" else "tunnel_down",
+                    "vps": vps_key,
+                    "field": ping_field,
+                    "status": c_val,
+                    "prev_status": p_val,
+                })
+
+        # --- Peer connect/disconnect (handshake-based) ---
+        # VPS1 has hs0_age (awg0 tunnel) and active_peers_awg1 (awg1 clients)
+        for hs_field in ("hs0_age", "hs1_age"):
+            p_hs = p.get(hs_field, -1)
+            c_hs = c.get(hs_field, -1)
+            if not isinstance(p_hs, (int, float)) or not isinstance(c_hs, (int, float)):
+                continue
+            # Connected: was disconnected/unknown, now has fresh handshake
+            was_disconnected = (p_hs < 0 or p_hs > _DISCONNECTED_HS_THRESHOLD)
+            is_connected = (0 <= c_hs <= _CONNECTED_HS_THRESHOLD)
+            if was_disconnected and is_connected:
+                events.append({
+                    "ts": now_ts,
+                    "type": "peer_connected",
+                    "vps": vps_key,
+                    "interface": hs_field.replace("_age", "").replace("hs", "awg"),
+                    "handshake_age": c_hs,
+                })
+            # Disconnected: was connected, now stale/gone
+            was_connected = (0 <= p_hs <= _CONNECTED_HS_THRESHOLD)
+            is_disconnected = (c_hs < 0 or c_hs > _DISCONNECTED_HS_THRESHOLD)
+            if was_connected and is_disconnected:
+                events.append({
+                    "ts": now_ts,
+                    "type": "peer_disconnected",
+                    "vps": vps_key,
+                    "interface": hs_field.replace("_age", "").replace("hs", "awg"),
+                    "handshake_age": c_hs,
+                })
+
+        # --- Active peers count change on awg1 ---
+        p_active = p.get("active_peers_awg1", 0)
+        c_active = c.get("active_peers_awg1", 0)
+        if isinstance(p_active, int) and isinstance(c_active, int) and p_active != c_active:
+            events.append({
+                "ts": now_ts,
+                "type": "active_peers_changed",
+                "vps": vps_key,
+                "count": c_active,
+                "prev_count": p_active,
+                "delta": c_active - p_active,
+            })
+
+    return events
+
+
+def _store_events(events: list[dict]) -> None:
+    """Append events to the shared history deque."""
+    with _events_lock:
+        for evt in events:
+            _EVENTS_HISTORY.append(evt)
+
+
+@app.route("/api/monitoring/events", methods=["GET"])
+@auth_required_or_local
+def monitoring_events():
+    """Return recent monitoring events (for initial page load)."""
+    limit = min(int(request.args.get("limit", "100")), 200)
+    with _events_lock:
+        items = list(_EVENTS_HISTORY)
+    return jsonify(items[-limit:])
+
+
+@app.route("/api/monitoring/stream")
+@auth_required_or_local
+def monitoring_stream():
+    """SSE endpoint: streams monitoring updates and events in real-time."""
+    global _prev_monitor_snapshot
+
+    def generate():
+        global _prev_monitor_snapshot
+        prev_mtime = 0.0
+        # Send initial snapshot immediately
+        path = _resolve_monitor_data_path()
+        if path is not None:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["_monitor_running"] = _is_monitor_running()
+                yield f"event: monitoring_update\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                prev_mtime = path.stat().st_mtime
+                with _prev_snapshot_lock:
+                    _prev_monitor_snapshot = data
+            except Exception:
+                pass
+
+        # Send event history for event log panel initialization
+        with _events_lock:
+            history = list(_EVENTS_HISTORY)
+        if history:
+            yield f"event: events_history\ndata: {json.dumps(history, ensure_ascii=False)}\n\n"
+
+        while True:
+            try:
+                path = _resolve_monitor_data_path()
+                if path is not None:
+                    try:
+                        mtime = path.stat().st_mtime
+                    except OSError:
+                        time.sleep(0.5)
+                        continue
+                    if mtime != prev_mtime:
+                        prev_mtime = mtime
+                        try:
+                            data = json.loads(path.read_text(encoding="utf-8"))
+                        except (json.JSONDecodeError, OSError):
+                            time.sleep(0.5)
+                            continue
+                        data["_monitor_running"] = _is_monitor_running()
+
+                        # Detect events by comparing with previous snapshot
+                        with _prev_snapshot_lock:
+                            events = _detect_monitoring_events(_prev_monitor_snapshot, data)
+                            _prev_monitor_snapshot = data
+
+                        # Store and emit events
+                        if events:
+                            _store_events(events)
+                            for evt in events:
+                                yield f"event: monitoring_event\ndata: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+                        # Emit full update
+                        yield f"event: monitoring_update\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+                # Keep-alive heartbeat every 15 seconds (via short sleep loop)
+                time.sleep(0.5)
+            except GeneratorExit:
+                return
+            except Exception as exc:
+                log.debug("SSE stream error: %s", exc)
+                time.sleep(1)
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # =============================================================================

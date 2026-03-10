@@ -944,6 +944,29 @@ td.mono { font-family: monospace; font-size: 12px; }
 .monitor-log-line.WARN { border-color: var(--warning); background: rgba(240,160,48,0.04); }
 .monitor-log-line.ERROR { border-color: var(--danger); background: rgba(232,64,87,0.06); }
 
+/* ====== SSE status indicator ====== */
+.sse-indicator {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-left: 8px; vertical-align: middle;
+  transition: background 0.3s;
+}
+.sse-connected { background: var(--success, #00d4aa); box-shadow: 0 0 4px var(--success, #00d4aa); }
+.sse-disconnected { background: var(--warning, #f59e0b); animation: sse-pulse 1.5s ease-in-out infinite; }
+@keyframes sse-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ====== Event log ====== */
+.event-log-wrap {
+  max-height: 260px; overflow-y: auto; font-family: monospace; font-size: 12px;
+}
+.event-row {
+  padding: 3px 12px; border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.06));
+  display: flex; align-items: center; gap: 6px; line-height: 1.6;
+}
+.event-row:last-child { border-bottom: none; }
+.event-row:hover { background: var(--bg-hover); }
+.event-time { color: var(--text-muted, #999); font-size: 11px; min-width: 60px; }
+.event-desc { color: var(--text-primary); }
+
 /* ====== Activity log on dashboard ====== */
 .activity-list { max-height: 320px; overflow-y: auto; }
 .activity-item {
@@ -1093,6 +1116,13 @@ let refreshTimer = null;
 const SPEED_HIST_MAX = 60;
 const PEER_SPEED_HIST_MAX = 40;
 const PEER_ONLINE_HS_SEC = 55;
+
+// ====== SSE Real-time Monitoring ======
+let sseSource = null;
+let sseReconnectTimer = null;
+let sseConnected = false;
+const SSE_EVENTS_MAX = 200;
+const monitoringEvents = [];  // event log history
 function normKey(v) {
   return String(v ?? '').trim();
 }
@@ -1137,6 +1167,153 @@ function toast(msg, type = 'success') {
   el.innerHTML = `<span class="toast-icon">${icons[type] || '•'}</span><span class="toast-msg">${esc(msg)}</span><button class="toast-close" onclick="this.parentElement.remove()">✕</button>`;
   container.appendChild(el);
   setTimeout(() => { el.classList.add('hiding'); setTimeout(() => el.remove(), 250); }, 4000);
+}
+
+// ====== SSE Real-time Monitoring ======
+function connectSSE() {
+  if (sseSource) { sseSource.close(); sseSource = null; }
+  if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
+
+  const url = mapApiPath('/api/monitoring/stream');
+  sseSource = new EventSource(url, { withCredentials: true });
+
+  sseSource.addEventListener('monitoring_update', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      state.monitoring = data._error ? null : data;
+      state._monitorError = data._error || null;
+      if (data && !data._error) pushSpeedHist(data);
+      if (state.currentPage === 'dashboard') renderDashboardContent();
+    } catch (err) { /* ignore parse errors */ }
+  });
+
+  sseSource.addEventListener('monitoring_event', (e) => {
+    try {
+      const evt = JSON.parse(e.data);
+      addMonitoringEvent(evt);
+      showEventToast(evt);
+      if (state.currentPage === 'dashboard') renderEventLog();
+    } catch (err) { /* ignore */ }
+  });
+
+  sseSource.addEventListener('events_history', (e) => {
+    try {
+      const history = JSON.parse(e.data);
+      if (Array.isArray(history)) {
+        monitoringEvents.length = 0;
+        history.forEach(evt => monitoringEvents.push(evt));
+        if (state.currentPage === 'dashboard') renderEventLog();
+      }
+    } catch (err) { /* ignore */ }
+  });
+
+  sseSource.onopen = () => {
+    sseConnected = true;
+    updateSSEIndicator();
+  };
+
+  sseSource.onerror = () => {
+    sseConnected = false;
+    updateSSEIndicator();
+    // EventSource reconnects automatically, but update indicator
+  };
+}
+
+function disconnectSSE() {
+  if (sseSource) { sseSource.close(); sseSource = null; }
+  if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
+  sseConnected = false;
+  updateSSEIndicator();
+}
+
+function addMonitoringEvent(evt) {
+  monitoringEvents.push(evt);
+  while (monitoringEvents.length > SSE_EVENTS_MAX) monitoringEvents.shift();
+}
+
+function showEventToast(evt) {
+  const labels = {
+    peer_connected: '[ Peer connected ]',
+    peer_disconnected: '[ Peer disconnected ]',
+    active_peers_changed: '[ Active peers ]',
+    service_up: '[ Service UP ]',
+    service_down: '[ Service DOWN ]',
+    tunnel_up: '[ Tunnel UP ]',
+    tunnel_down: '[ Tunnel DOWN ]',
+    vps_online: '[ VPS online ]',
+    vps_offline: '[ VPS offline ]',
+  };
+  const types = {
+    peer_connected: 'success', peer_disconnected: 'error',
+    active_peers_changed: 'info',
+    service_up: 'success', service_down: 'error',
+    tunnel_up: 'success', tunnel_down: 'error',
+    vps_online: 'success', vps_offline: 'error',
+  };
+  const label = labels[evt.type] || evt.type;
+  const vps = evt.vps ? ` ${evt.vps.toUpperCase()}` : '';
+  let detail = '';
+  if (evt.service) detail = ` ${evt.service}: ${evt.status}`;
+  else if (evt.interface) detail = ` ${evt.interface}`;
+  else if (evt.delta !== undefined) detail = ` ${evt.delta > 0 ? '+' : ''}${evt.delta} (total: ${evt.count})`;
+  else if (evt.field) detail = ` ${evt.field}: ${evt.status}`;
+  toast(`${label}${vps}${detail}`, types[evt.type] || 'info');
+}
+
+function updateSSEIndicator() {
+  const el = document.getElementById('sse-status');
+  if (!el) return;
+  el.className = 'sse-indicator ' + (sseConnected ? 'sse-connected' : 'sse-disconnected');
+  el.title = sseConnected ? 'Real-time: connected' : 'Real-time: reconnecting...';
+}
+
+function formatEventTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function renderEventLog() {
+  const container = document.getElementById('event-log-body');
+  if (!container) return;
+
+  const icons = {
+    peer_connected: '<span style="color:var(--clr-success)">&#9679;</span>',
+    peer_disconnected: '<span style="color:var(--clr-danger)">&#9675;</span>',
+    active_peers_changed: '<span style="color:var(--clr-info)">&#8644;</span>',
+    service_up: '<span style="color:var(--clr-success)">&#9650;</span>',
+    service_down: '<span style="color:var(--clr-danger)">&#9660;</span>',
+    tunnel_up: '<span style="color:var(--clr-success)">&#8599;</span>',
+    tunnel_down: '<span style="color:var(--clr-danger)">&#8600;</span>',
+    vps_online: '<span style="color:var(--clr-success)">&#9632;</span>',
+    vps_offline: '<span style="color:var(--clr-danger)">&#9633;</span>',
+  };
+
+  const descs = {
+    peer_connected: e => `Peer connected on ${e.interface || '?'} (${e.vps?.toUpperCase()})`,
+    peer_disconnected: e => `Peer disconnected on ${e.interface || '?'} (${e.vps?.toUpperCase()})`,
+    active_peers_changed: e => `Active peers: ${e.prev_count} → ${e.count} (${e.vps?.toUpperCase()})`,
+    service_up: e => `${e.service} started (${e.vps?.toUpperCase()})`,
+    service_down: e => `${e.service} stopped: ${e.status} (${e.vps?.toUpperCase()})`,
+    tunnel_up: e => `${e.field || 'tunnel'} OK (${e.vps?.toUpperCase()})`,
+    tunnel_down: e => `${e.field || 'tunnel'} FAIL (${e.vps?.toUpperCase()})`,
+    vps_online: e => `${e.vps?.toUpperCase()} came online`,
+    vps_offline: e => `${e.vps?.toUpperCase()} went offline`,
+  };
+
+  // Show last 30 events, newest first
+  const visible = monitoringEvents.slice(-30).reverse();
+  if (visible.length === 0) {
+    container.innerHTML = '<div style="opacity:0.5;text-align:center;padding:12px">No events yet</div>';
+    return;
+  }
+
+  container.innerHTML = visible.map(evt => {
+    const icon = icons[evt.type] || '•';
+    const desc = (descs[evt.type] || (e => e.type))(evt);
+    const time = formatEventTime(evt.ts);
+    return `<div class="event-row"><span class="event-time">${time}</span> ${icon} <span class="event-desc">${esc(desc)}</span></div>`;
+  }).join('');
 }
 
 // ====== API helper ======
@@ -1322,29 +1499,31 @@ window.addEventListener('hashchange', () => {
 // ====== Auto refresh ======
 function startAutoRefresh() {
   stopAutoRefresh();
+  // Connect SSE for real-time monitoring (replaces polling for monitoring/data)
+  connectSSE();
+  // Polling for non-monitoring data (peers stats, peers list, bot) at 5s
   refreshTimer = setInterval(async () => {
     if (state.currentPage === 'dashboard') await loadDashboardData();
     if (state.currentPage === 'peers') await loadPeers();
     if (state.currentPage === 'bot') await loadBotControl(true);
-  }, 2000);
+  }, 5000);
 }
 
 function stopAutoRefresh() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  disconnectSSE();
 }
 
 // ====== Data loading ======
 async function loadDashboardData() {
   try {
-    const [stats, monitoring, peersRes, monPeersRes] = await Promise.all([
+    // Monitoring data arrives via SSE — only fetch peers/stats here
+    const [stats, peersRes, monPeersRes] = await Promise.all([
       api('GET', '/api/peers/stats').catch(() => ({})),
-      api('GET', '/api/monitoring/data').catch(e => ({ _error: e.message })),
       api('GET', '/api/peers').catch(() => []),
       api('GET', '/api/monitoring/peers').catch(() => []),
     ]);
     state.peerStats = stats;
-    state.monitoring = monitoring?._error ? null : monitoring;
-    state._monitorError = monitoring?._error || null;
     state.peers = Array.isArray(peersRes) ? peersRes : [];
     const thresholdPeer = (state.peers || []).find(p => Number(p?.connection_threshold_sec) > 0);
     state.peerOnlineThresholdSec = thresholdPeer ? Number(thresholdPeer.connection_threshold_sec) : PEER_ONLINE_HS_SEC;
@@ -1360,7 +1539,6 @@ async function loadDashboardData() {
       const mp = mpMap[normKey(p.ip)] || mpMap[normKey(p.public_key)];
       updatePeerLiveStats(p, mp);
     });
-    if (monitoring) pushSpeedHist(monitoring);
     if (state.currentPage === 'dashboard') renderDashboardContent();
   } catch (e) { /* silent */ }
 }
@@ -1946,6 +2124,14 @@ function renderDashboardContent() {
     ${connectedBlock}
     ${monitoringPeersCard}
     ${trafficSummaryRow}
+    <div class="dashboard-section-title">События в реальном времени <span id="sse-status" class="sse-indicator ${sseConnected ? 'sse-connected' : 'sse-disconnected'}" title="${sseConnected ? 'Real-time: connected' : 'Real-time: reconnecting...'}"></span></div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header">
+        <div class="card-title">Event Log</div>
+        <span class="badge" style="background:var(--bg-input);color:var(--text-secondary)">${monitoringEvents.length} events</span>
+      </div>
+      <div class="event-log-wrap" id="event-log-body"></div>
+    </div>
     <div class="dashboard-section-title">Серверы VPS</div>
     <div class="servers-grid">
       ${renderServerCard('VPS1', v1, mon.ts)}
@@ -1961,6 +2147,7 @@ function renderDashboardContent() {
       <div class="activity-list" id="activity-list">${recentActivity}</div>
     </div>`;
 
+  renderEventLog();
   api('GET', '/api/audit?per_page=10').then(data => {
     state.auditLog = data;
     const list = document.getElementById('activity-list');

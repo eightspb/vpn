@@ -56,6 +56,13 @@ VPS1_FAIL_STREAK=0
 VPS2_FAIL_STREAK=0
 BACKOFF_MAX_INTERVAL=30
 LAST_SLEEP_INTERVAL=0
+# SSH ControlMaster sockets for persistent connections
+CONTROL_SOCKET_VPS1="/tmp/vpn-monitor-ssh-vps1-$$"
+CONTROL_SOCKET_VPS2="/tmp/vpn-monitor-ssh-vps2-$$"
+# Fast/slow polling cycle
+FAST_INTERVAL=2        # fast metrics every 2 seconds
+SLOW_INTERVAL=10       # slow metrics every 10 seconds
+SLOW_CYCLE_COUNTER=0   # tracks when to run slow cycle
 ALERT_LOAD_WARN_PCT=120
 ALERT_LOAD_CRIT_PCT=180
 ALERT_MEM_WARN_PCT=80
@@ -107,19 +114,103 @@ load_alert_thresholds() {
 cleanup_all() {
     rm -f "$PID_FILE" 2>/dev/null || true
     [[ -n "$HTTP_PID" ]] && kill "$HTTP_PID" 2>/dev/null || true
+    stop_ssh_masters
     cleanup_temp_keys
 }
 
 trap cleanup_all EXIT
 
+# ---------------------------------------------------------------------------
+# SSH ControlMaster: persistent connections for faster polling
+# ---------------------------------------------------------------------------
+
+_get_control_socket() {
+    local server="$1"
+    if [[ "$server" == "VPS1" ]]; then
+        echo "$CONTROL_SOCKET_VPS1"
+    else
+        echo "$CONTROL_SOCKET_VPS2"
+    fi
+}
+
+_is_master_alive() {
+    local socket="$1" ssh_bin="$2"
+    [[ -S "$socket" ]] && "$ssh_bin" -S "$socket" -O check placeholder 2>/dev/null
+}
+
+start_ssh_master() {
+    local server="$1" ip="$2" user="$3" key="$4" pass="$5"
+    local socket
+    socket="$(_get_control_socket "$server")"
+    ip="$(clean_value "$ip")"; user="$(clean_value "$user")"
+    key="$(expand_tilde "$key")"; pass="$(clean_value "$pass")"
+
+    local ssh_bin
+    if command -v ssh >/dev/null 2>&1; then
+        ssh_bin="ssh"
+    elif command -v ssh.exe >/dev/null 2>&1; then
+        ssh_bin="ssh.exe"
+    else
+        return 1
+    fi
+
+    # If master already alive, skip
+    if _is_master_alive "$socket" "$ssh_bin"; then
+        return 0
+    fi
+
+    # Clean stale socket
+    rm -f "$socket" 2>/dev/null
+
+    local ssh_opts=(-F /dev/null -o StrictHostKeyChecking=accept-new \
+                    -o BatchMode=no -o ConnectTimeout="$SSH_TIMEOUT" \
+                    -o AddressFamily=inet \
+                    -o ServerAliveInterval=3 -o ServerAliveCountMax=2 \
+                    -o ControlMaster=yes -o ControlPath="$socket" \
+                    -o ControlPersist=300 \
+                    -M -N -f)
+
+    if [[ -n "$key" ]]; then
+        "$ssh_bin" "${ssh_opts[@]}" -i "$key" "${user}@${ip}" 2>/dev/null
+    elif [[ -n "$pass" ]]; then
+        sshpass -p "$pass" "$ssh_bin" "${ssh_opts[@]}" "${user}@${ip}" 2>/dev/null
+    else
+        "$ssh_bin" "${ssh_opts[@]}" "${user}@${ip}" 2>/dev/null
+    fi
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        log_line "INFO" "$server SSH ControlMaster established -> ${user}@${ip}"
+    else
+        log_line "WARN" "$server SSH ControlMaster failed rc=$rc -> ${user}@${ip}"
+    fi
+    return $rc
+}
+
+stop_ssh_masters() {
+    local ssh_bin
+    if command -v ssh >/dev/null 2>&1; then ssh_bin="ssh"
+    elif command -v ssh.exe >/dev/null 2>&1; then ssh_bin="ssh.exe"
+    else return; fi
+    for sock in "$CONTROL_SOCKET_VPS1" "$CONTROL_SOCKET_VPS2"; do
+        [[ -S "$sock" ]] && "$ssh_bin" -S "$sock" -O exit placeholder 2>/dev/null
+        rm -f "$sock" 2>/dev/null
+    done
+}
+
 ssh_exec() {
     local server="$1" ip="$2" user="$3" key="$4" pass="$5" cmd="$6"
     # AddressFamily=inet: skip IPv6 lookup (avoids DNS hang when VPN is active)
     # ServerAliveInterval/CountMax: detect dead connections quickly
+    local socket
+    socket="$(_get_control_socket "$server")"
     local ssh_opts=(-F /dev/null -o StrictHostKeyChecking=accept-new \
                     -o BatchMode=no -o ConnectTimeout="$SSH_TIMEOUT" \
                     -o AddressFamily=inet \
                     -o ServerAliveInterval=3 -o ServerAliveCountMax=2)
+    # Use ControlMaster if socket exists
+    if [[ -S "$socket" ]]; then
+        ssh_opts+=(-o ControlPath="$socket")
+    fi
     local stderr_file rc out err
     # Hard timeout = SSH_TIMEOUT + 5s buffer for DNS + connection setup
     local hard_timeout=$(( SSH_TIMEOUT + 5 ))
@@ -150,6 +241,11 @@ ssh_exec() {
         [[ -z "$err" ]] && err="no stderr"
         set_last_error "$server" "rc=$rc ${err}"
         log_line "ERROR" "$server ssh failed rc=$rc target=${user}@${ip} err=${err}"
+        # If control socket was used and failed, try to restart master
+        if [[ -S "$socket" ]]; then
+            rm -f "$socket" 2>/dev/null
+            log_line "INFO" "$server ControlMaster socket invalidated, will reconnect"
+        fi
         return "$rc"
     fi
     set_last_error "$server" ""
@@ -366,6 +462,114 @@ parse_kv() {
     local data="$1" key="$2"
     printf "%s\n" "$data" | awk -v k="$key" \
         'BEGIN{n=length(k)} substr($0,1,n+1)==k"=" {print substr($0,n+2); exit}'
+}
+
+# ---------------------------------------------------------------------------
+# Fast-collect: only rapidly-changing metrics (handshakes, traffic, connections)
+# Used in fast-poll cycles (every 2s) between full polls
+# ---------------------------------------------------------------------------
+
+collect_vps1_fast() {
+    local remote_cmd
+    remote_cmd=$(cat <<EOF
+read_if_bytes() {
+  awk -v i="\$1" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]" "b[9]}}' /proc/net/dev 2>/dev/null | head -1
+}
+MAIN_IF=\$(ip route 2>/dev/null | awk '/default/ {print \$5; exit}')
+RX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]}}' /proc/net/dev 2>/dev/null | head -1)
+TX=\$(awk -v i="\$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split(\$0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
+AWG0_BYTES=\$(read_if_bytes awg0)
+AWG0_RX=\${AWG0_BYTES%% *}; AWG0_TX=\${AWG0_BYTES##* }
+AWG1_BYTES=\$(read_if_bytes awg1)
+AWG1_RX=\${AWG1_BYTES%% *}; AWG1_TX=\${AWG1_BYTES##* }
+VPN_RX=\$(( \${AWG0_RX:-0} + \${AWG1_RX:-0} ))
+VPN_TX=\$(( \${AWG0_TX:-0} + \${AWG1_TX:-0} ))
+TCP_EST=\$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
+UDP_CONN=\$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
+CT_COUNT=\$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+HS0=\$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0) print systime()-\$2; else print -1}')
+[[ -z "\$HS0" ]] && HS0=-1
+HS1=\$(sudo awg show awg1 latest-handshakes 2>/dev/null | awk 'NR==1 {if (\$2>0) print systime()-\$2; else print -1}')
+[[ -z "\$HS1" ]] && HS1=-1
+A1_ACTIVE=\$(sudo awg show awg1 latest-handshakes 2>/dev/null | awk '\$2>0 && (systime()-\$2)<=55 {c++} END {print c+0}')
+[[ -z "\$A1_ACTIVE" ]] && A1_ACTIVE=0
+echo "MAIN_IF=\${MAIN_IF:-n/a}"
+echo "RX=\${RX:-0}"
+echo "TX=\${TX:-0}"
+echo "RX_TOTAL=\${RX:-0}"
+echo "TX_TOTAL=\${TX:-0}"
+echo "VPN_RX=\${VPN_RX:-0}"
+echo "VPN_TX=\${VPN_TX:-0}"
+echo "VPN_RX_TOTAL=\${VPN_RX:-0}"
+echo "VPN_TX_TOTAL=\${VPN_TX:-0}"
+echo "TCP_EST=\${TCP_EST:-0}"
+echo "UDP_CONN=\${UDP_CONN:-0}"
+echo "CT_COUNT=\${CT_COUNT:-0}"
+echo "HS0=\$HS0"
+echo "HS1=\$HS1"
+echo "A1_ACTIVE=\$A1_ACTIVE"
+EOF
+)
+    ssh_exec "VPS1" "$CURRENT_VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS" "$remote_cmd"
+}
+
+collect_vps2_fast() {
+    local remote_cmd
+    remote_cmd=$(cat <<'EOF'
+read_if_bytes() {
+  awk -v i="$1" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]" "b[9]}}' /proc/net/dev 2>/dev/null | head -1
+}
+MAIN_IF=$(ip route 2>/dev/null | awk '/default/ {print $5; exit}')
+RX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[1]}}' /proc/net/dev 2>/dev/null | head -1)
+TX=$(awk -v i="$MAIN_IF" '{gsub(/^[[:space:]]+/,""); split($0,a,":"); if(a[1]==i){split(a[2],b," "); print b[9]}}' /proc/net/dev 2>/dev/null | head -1)
+AWG0_BYTES=$(read_if_bytes awg0)
+AWG0_RX=${AWG0_BYTES%% *}; AWG0_TX=${AWG0_BYTES##* }
+VPN_RX=${AWG0_RX:-0}
+VPN_TX=${AWG0_TX:-0}
+TCP_EST=$(ss -Htn state established 2>/dev/null | wc -l | tr -d ' ')
+UDP_CONN=$(ss -Hun 2>/dev/null | wc -l | tr -d ' ')
+CT_COUNT=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+HS0=$(sudo awg show awg0 latest-handshakes 2>/dev/null | awk 'NR==1 {if ($2>0) print systime()-$2; else print -1}')
+[[ -z "$HS0" ]] && HS0=-1
+echo "MAIN_IF=${MAIN_IF:-n/a}"
+echo "RX=${RX:-0}"
+echo "TX=${TX:-0}"
+echo "RX_TOTAL=${RX:-0}"
+echo "TX_TOTAL=${TX:-0}"
+echo "VPN_RX=${VPN_RX:-0}"
+echo "VPN_TX=${VPN_TX:-0}"
+echo "VPN_RX_TOTAL=${VPN_RX:-0}"
+echo "VPN_TX_TOTAL=${VPN_TX:-0}"
+echo "TCP_EST=${TCP_EST:-0}"
+echo "UDP_CONN=${UDP_CONN:-0}"
+echo "CT_COUNT=${CT_COUNT:-0}"
+echo "HS0=$HS0"
+EOF
+)
+    ssh_exec "VPS2" "$CURRENT_VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS" "$remote_cmd"
+}
+
+# Merge fast data into full data: overlay changed fields onto the last full snapshot
+# $1 = full data, $2 = fast data
+merge_fast_into_full() {
+    local full_data="$1" fast_data="$2"
+    if [[ -z "$fast_data" ]]; then
+        printf "%s" "$full_data"
+        return
+    fi
+    # For each KEY=VALUE in fast_data, update the same key in full_data
+    local merged="$full_data"
+    while IFS='=' read -r key val; do
+        [[ -z "$key" ]] && continue
+        # Replace existing line or append
+        if printf '%s' "$merged" | grep -q "^${key}="; then
+            merged="$(printf '%s' "$merged" | sed "s/^${key}=.*/${key}=${val}/")"
+        else
+            merged="${merged}
+${key}=${val}"
+        fi
+    done <<< "$fast_data"
+    printf "%s" "$merged"
 }
 
 # ---------------------------------------------------------------------------
@@ -1121,22 +1325,55 @@ kill_previous_instance
 start_http_server
 
 echo ""
-echo "  VPN Dashboard running"
+echo "  VPN Dashboard running (real-time mode)"
 echo "  Dashboard : http://127.0.0.1:${HTTP_PORT}/dashboard.html"
 echo "  Data JSON : http://127.0.0.1:${HTTP_PORT}/vpn-output/data.json"
-echo "  Interval  : ${INTERVAL}s  |  Ctrl+C to stop"
+echo "  Fast poll : ${FAST_INTERVAL}s  |  Full poll: ${SLOW_INTERVAL}s  |  Ctrl+C to stop"
 echo ""
+
+# Establish persistent SSH connections
+check_internal_ips
+log_line "INFO" "establishing SSH ControlMaster connections..."
+start_ssh_master "VPS1" "$CURRENT_VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS"
+start_ssh_master "VPS2" "$CURRENT_VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS"
+
+# Keep last full data for merging with fast updates
+LAST_FULL_VPS1_DATA=""
+LAST_FULL_VPS2_DATA=""
 
 while true; do
     check_internal_ips
+    SLOW_CYCLE_COUNTER=$(( SLOW_CYCLE_COUNTER + 1 ))
 
-    # Collect from both servers in parallel to avoid one blocking the other
+    # Ensure SSH ControlMaster connections are alive
+    start_ssh_master "VPS1" "$CURRENT_VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS"
+    start_ssh_master "VPS2" "$CURRENT_VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS"
+
+    # Decide: full collection or fast-only
+    SLOW_CYCLES=$(( SLOW_INTERVAL / FAST_INTERVAL ))
+    [[ $SLOW_CYCLES -le 0 ]] && SLOW_CYCLES=5
+    IS_FULL_CYCLE=0
+    if [[ $SLOW_CYCLE_COUNTER -ge $SLOW_CYCLES ]] || [[ -z "$LAST_FULL_VPS1_DATA" ]]; then
+        IS_FULL_CYCLE=1
+        SLOW_CYCLE_COUNTER=0
+    fi
+
     local_tmp1="$(mktemp)"
     local_tmp2="$(mktemp)"
-    collect_vps1 > "$local_tmp1" &
-    PID1=$!
-    collect_vps2 > "$local_tmp2" &
-    PID2=$!
+
+    if [[ $IS_FULL_CYCLE -eq 1 ]]; then
+        # Full collection (all metrics)
+        collect_vps1 > "$local_tmp1" &
+        PID1=$!
+        collect_vps2 > "$local_tmp2" &
+        PID2=$!
+    else
+        # Fast collection (traffic, handshakes, connections only)
+        collect_vps1_fast > "$local_tmp1" &
+        PID1=$!
+        collect_vps2_fast > "$local_tmp2" &
+        PID2=$!
+    fi
 
     # Wait with a hard cap: SSH_TIMEOUT + 10s
     local_deadline=$(( SSH_TIMEOUT + 10 ))
@@ -1150,19 +1387,41 @@ while true; do
     wait_deadline $PID1
     wait_deadline $PID2
 
-    VPS1_DATA="$(cat "$local_tmp1")"; rm -f "$local_tmp1"
-    VPS2_DATA="$(cat "$local_tmp2")"; rm -f "$local_tmp2"
+    RAW_VPS1="$(cat "$local_tmp1")"; rm -f "$local_tmp1"
+    RAW_VPS2="$(cat "$local_tmp2")"; rm -f "$local_tmp2"
+
+    if [[ $IS_FULL_CYCLE -eq 1 ]]; then
+        VPS1_DATA="$RAW_VPS1"
+        VPS2_DATA="$RAW_VPS2"
+        [[ -n "$VPS1_DATA" ]] && LAST_FULL_VPS1_DATA="$VPS1_DATA"
+        [[ -n "$VPS2_DATA" ]] && LAST_FULL_VPS2_DATA="$VPS2_DATA"
+    else
+        # Merge fast metrics into the last full snapshot
+        VPS1_DATA="$(merge_fast_into_full "$LAST_FULL_VPS1_DATA" "$RAW_VPS1")"
+        VPS2_DATA="$(merge_fast_into_full "$LAST_FULL_VPS2_DATA" "$RAW_VPS2")"
+    fi
 
     write_json "$VPS1_DATA" "$VPS2_DATA"
-    evaluate_server_alerts "VPS1" "$VPS1_DATA"
-    evaluate_server_alerts "VPS2" "$VPS2_DATA"
-    if [[ -n "$VPS1_DATA" ]]; then VPS1_FAIL_STREAK=0; else VPS1_FAIL_STREAK=$((VPS1_FAIL_STREAK + 1)); fi
-    if [[ -n "$VPS2_DATA" ]]; then VPS2_FAIL_STREAK=0; else VPS2_FAIL_STREAK=$((VPS2_FAIL_STREAK + 1)); fi
-    EFFECTIVE_INTERVAL="$(compute_effective_interval)"
-    if [[ "$EFFECTIVE_INTERVAL" -ne "$LAST_SLEEP_INTERVAL" ]]; then
-        log_line "INFO" "poll interval adapted: base=${INTERVAL}s effective=${EFFECTIVE_INTERVAL}s fail_streak_vps1=${VPS1_FAIL_STREAK} fail_streak_vps2=${VPS2_FAIL_STREAK}"
-        LAST_SLEEP_INTERVAL="$EFFECTIVE_INTERVAL"
+
+    if [[ $IS_FULL_CYCLE -eq 1 ]]; then
+        evaluate_server_alerts "VPS1" "$VPS1_DATA"
+        evaluate_server_alerts "VPS2" "$VPS2_DATA"
     fi
-    printf "\r  [%s] JSON updated  (next in %ss)" "$(date '+%H:%M:%S')" "$EFFECTIVE_INTERVAL"
-    sleep "$EFFECTIVE_INTERVAL"
+
+    if [[ -n "$RAW_VPS1" ]]; then VPS1_FAIL_STREAK=0; else VPS1_FAIL_STREAK=$((VPS1_FAIL_STREAK + 1)); fi
+    if [[ -n "$RAW_VPS2" ]]; then VPS2_FAIL_STREAK=0; else VPS2_FAIL_STREAK=$((VPS2_FAIL_STREAK + 1)); fi
+    EFFECTIVE_INTERVAL="$(compute_effective_interval)"
+    # Use fast interval as base, but respect backoff from failures
+    ACTUAL_SLEEP=$FAST_INTERVAL
+    if [[ "$EFFECTIVE_INTERVAL" -gt "$FAST_INTERVAL" ]]; then
+        ACTUAL_SLEEP="$EFFECTIVE_INTERVAL"
+    fi
+    if [[ "$ACTUAL_SLEEP" -ne "$LAST_SLEEP_INTERVAL" ]]; then
+        log_line "INFO" "poll interval: fast=${FAST_INTERVAL}s effective=${ACTUAL_SLEEP}s full_every=${SLOW_INTERVAL}s fail_streak_vps1=${VPS1_FAIL_STREAK} fail_streak_vps2=${VPS2_FAIL_STREAK}"
+        LAST_SLEEP_INTERVAL="$ACTUAL_SLEEP"
+    fi
+    local cycle_type="fast"
+    [[ $IS_FULL_CYCLE -eq 1 ]] && cycle_type="FULL"
+    printf "\r  [%s] %s JSON updated  (next in %ss)" "$(date '+%H:%M:%S')" "$cycle_type" "$ACTUAL_SLEEP"
+    sleep "$ACTUAL_SLEEP"
 done
