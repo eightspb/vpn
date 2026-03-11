@@ -95,20 +95,21 @@ _db_add() {
     _init_db
     local tmp="${PEERS_DB}.tmp"
     if command -v python3 &>/dev/null; then
-        python3 -c "
+        # Pass arguments via stdin/stdin to avoid shell interpolation issues
+        python3 << PYEOF
 import json, sys
 db = json.load(open('$PEERS_DB'))
 db.append({
-    'name': '$name',
-    'ip': '$ip',
-    'type': '$type',
-    'public_key': '$pub',
-    'private_key': '$priv',
-    'created': '$created',
-    'config_file': '$conf_file'
+    'name': '''$name''',
+    'ip': '''$ip''',
+    'type': '''$type''',
+    'public_key': '''$pub''',
+    'private_key': '''$priv''',
+    'created': '''$created''',
+    'config_file': '''$conf_file'''
 })
 json.dump(db, open('$tmp', 'w'), indent=2, ensure_ascii=False)
-"
+PYEOF
     else
         # fallback without python — append line-based
         local entry="{\"name\":\"$name\",\"ip\":\"$ip\",\"type\":\"$type\",\"public_key\":\"$pub\",\"private_key\":\"$priv\",\"created\":\"$created\",\"config_file\":\"$conf_file\"}"
@@ -125,12 +126,12 @@ _db_remove() {
     local field="$1" value="$2"
     [[ -f "$PEERS_DB" ]] || return
     if command -v python3 &>/dev/null; then
-        python3 -c "
+        python3 << PYEOF
 import json
 db = json.load(open('$PEERS_DB'))
-db = [p for p in db if p.get('$field') != '$value']
+db = [p for p in db if p.get('''$field''') != '''$value''']
 json.dump(db, open('$PEERS_DB', 'w'), indent=2, ensure_ascii=False)
-"
+PYEOF
     fi
 }
 
@@ -138,15 +139,15 @@ _db_find() {
     local field="$1" value="$2"
     [[ -f "$PEERS_DB" ]] || { echo ""; return; }
     if command -v python3 &>/dev/null; then
-        python3 -c "
+        python3 << PYEOF
 import json
 db = json.load(open('$PEERS_DB'))
 for p in db:
-    if p.get('$field') == '$value':
+    if p.get('''$field''') == '''$value''':
         for k,v in p.items():
             print(f'{k}={v}')
         break
-"
+PYEOF
     fi
 }
 
@@ -633,8 +634,8 @@ cmd_remove() {
     info "Удаление с сервера..."
     _ssh "sudo awg set awg1 peer '${pub_key}' remove 2>/dev/null || true"
 
-    _ssh "sudo python3 -c \"
-lines = open('/etc/amnezia/amneziawg/awg1.conf').read().split('\\n')
+    _ssh "sudo python3 << 'PYEOF'
+lines = open('/etc/amnezia/amneziawg/awg1.conf').read().split('\n')
 new_lines, skip = [], False
 for line in lines:
     if '${pub_key}' in line:
@@ -647,8 +648,9 @@ for line in lines:
         if line.strip() == '': skip = False; continue
         skip = False
     new_lines.append(line)
-open('/etc/amnezia/amneziawg/awg1.conf','w').write('\\n'.join(new_lines))
-\" 2>/dev/null || true"
+open('/etc/amnezia/amneziawg/awg1.conf','w').write('\n'.join(new_lines))
+PYEOF
+2>/dev/null || true"
 
     ok "Пир удалён с сервера"
 

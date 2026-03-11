@@ -51,6 +51,7 @@ server {
         proxy_set_header Connection \$connection_upgrade;
         proxy_read_timeout 3600;
         proxy_send_timeout 3600;
+        # Target is localhost/internal service — SSL verification disabled for self-signed cert
         proxy_ssl_verify off;
     }
 }

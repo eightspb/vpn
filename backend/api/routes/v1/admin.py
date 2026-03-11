@@ -46,10 +46,15 @@ _notification_service = NotificationsService(
 )
 broadcast_service = BroadcastService(_notification_service)
 
+# In-memory rate limiter for login: IP -> (attempt_count, window_start_timestamp)
+_login_rate_limiter: dict[str, tuple[int, float]] = {}
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_MAX_ATTEMPTS = 5  # max attempts per window
+
 try:
     import bcrypt  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency in dev env
-    bcrypt = None
+except ImportError as e:  # pragma: no cover
+    raise RuntimeError("bcrypt is required for password hashing") from e
 
 
 @dataclass
@@ -137,21 +142,17 @@ def _db_session() -> Session:
 
 
 def _verify_password(plain_password: str, stored_hash: str) -> bool:
-    # Imported users from legacy admin.db are bcrypt hashes.
+    # All stored hashes must be bcrypt hashes (no plaintext fallback)
     if not stored_hash:
         return False
-    if stored_hash.startswith("$2") and bcrypt is not None:
-        try:
-            return bcrypt.checkpw(plain_password.encode("utf-8"), stored_hash.encode("utf-8"))
-        except ValueError:
-            return False
-    return secrets.compare_digest(plain_password, stored_hash)
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), stored_hash.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def _hash_password(plain_password: str) -> str:
-    if bcrypt is not None:
-        return bcrypt.hashpw(plain_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    return plain_password
+    return bcrypt.hashpw(plain_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _user_payload(user: User) -> dict[str, Any]:
@@ -286,6 +287,21 @@ class BroadcastCreateRequest(BaseModel):
 
 @router.post("/auth/login")
 def login(payload: LoginRequest, request: Request, response: Response, session: Session = Depends(_db_session)) -> dict[str, Any]:
+    # Rate limiting by client IP
+    client_ip = request.client.host if request.client else "unknown"
+    now = datetime.utcnow().timestamp()
+
+    if client_ip in _login_rate_limiter:
+        attempt_count, window_start = _login_rate_limiter[client_ip]
+        if now - window_start < _RATE_LIMIT_WINDOW:
+            if attempt_count >= _RATE_LIMIT_MAX_ATTEMPTS:
+                raise HTTPException(status_code=429, detail="Too many login attempts")
+            _login_rate_limiter[client_ip] = (attempt_count + 1, window_start)
+        else:
+            _login_rate_limiter[client_ip] = (1, now)
+    else:
+        _login_rate_limiter[client_ip] = (1, now)
+
     user = session.scalar(select(User).where(User.username == payload.username))
     if user is None or not _verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
@@ -314,7 +330,7 @@ def login(payload: LoginRequest, request: Request, response: Response, session: 
         value=sid,
         httponly=True,
         secure=settings.APP_ENV != "development",
-        samesite="lax",
+        samesite="strict",
         max_age=SESSION_TTL_HOURS * 3600,
         path="/",
     )

@@ -161,8 +161,8 @@ CLIENT_PUB=$(get_key "client_spb_PUB")
 [[ -z "$VPS1_TUNNEL_PUB" ]] && err "Не удалось получить ключи. Установите AmneziaWG."
 ok "Ключи сгенерированы"
 
-H1=$((RANDOM * RANDOM + RANDOM)); H2=$((RANDOM * RANDOM + RANDOM + 1))
-H3=$((RANDOM * RANDOM + RANDOM + 2)); H4=$((RANDOM * RANDOM + RANDOM + 3))
+H1=$(od -An -tu4 -N4 /dev/urandom | tr -d ' '); H2=$(od -An -tu4 -N4 /dev/urandom | tr -d ' ')
+H3=$(od -An -tu4 -N4 /dev/urandom | tr -d ' '); H4=$(od -An -tu4 -N4 /dev/urandom | tr -d ' ')
 
 step "Шаг 4/5: Установка и настройка AmneziaWG на VPS1"
 INSTALL_AWG='

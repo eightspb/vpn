@@ -65,6 +65,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ── Validate port numbers ─────────────────────────────────────────────────────
+[[ "$SSH_PORT" =~ ^[0-9]+$ ]] || { echo "ERROR: SSH_PORT must be numeric"; exit 1; }
+[[ "$SSH_PORT" -ge 1 && "$SSH_PORT" -le 65535 ]] || { echo "ERROR: SSH_PORT out of range (1-65535)"; exit 1; }
+[[ "$VPN_PORT" =~ ^[0-9]+$ ]] || { echo "ERROR: VPN_PORT must be numeric"; exit 1; }
+[[ "$VPN_PORT" -ge 1 && "$VPN_PORT" -le 65535 ]] || { echo "ERROR: VPN_PORT out of range (1-65535)"; exit 1; }
+
 echo "[security-harden] Starting hardening (role=${ROLE:-any})..."
 
 # ── 0. Preflight: hostname + DNS ─────────────────────────────────────────────
@@ -195,13 +201,13 @@ apt-get "${APT_OPTS[@]}" install iptables-persistent >/dev/null 2>&1 || true
 
 MAIN_IF=$(ip route | grep default | awk '{print $5}' | head -1)
 
-iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i lo -j ACCEPT
+iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || iptables -A INPUT -i lo -j ACCEPT
 iptables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
-    iptables -I INPUT 2 -m state --state ESTABLISHED,RELATED -j ACCEPT
+    iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -C INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT 2>/dev/null || \
-    iptables -I INPUT 3 -p tcp --dport "$SSH_PORT" -j ACCEPT
+    iptables -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
 iptables -C INPUT -p udp --dport "$VPN_PORT" -j ACCEPT 2>/dev/null || \
-    iptables -I INPUT 4 -p udp --dport "$VPN_PORT" -j ACCEPT
+    iptables -A INPUT -p udp --dport "$VPN_PORT" -j ACCEPT
 
 if [[ "$ROLE" == "vps1" ]]; then
     VPN_PORT_TUNNEL="${VPN_PORT_TUNNEL:-51821}"

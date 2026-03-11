@@ -8,15 +8,31 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 
 from backend.core.config import get_settings
 from backend.db.session import get_session
-from backend.services.bot_service import build_bot_service
+from backend.services.bot_service import build_bot_service, mask_token
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 bot_service = build_bot_service()
 
 
+def _validate_required_tokens() -> None:
+    """Check that required security tokens are configured at startup."""
+    issues = []
+    if not settings.TELEGRAM_WEBHOOK_SECRET_TOKEN:
+        issues.append("TELEGRAM_WEBHOOK_SECRET_TOKEN")
+    if not settings.BOT_INTERNAL_API_TOKEN:
+        issues.append("BOT_INTERNAL_API_TOKEN")
+    if issues:
+        logger.warning(
+            "Security tokens not configured: %s. "
+            "Bot endpoints will return HTTP 500 until tokens are set.",
+            ", ".join(issues),
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _validate_required_tokens()
     logger.info("telegram bot service started")
     yield
     logger.info("telegram bot service stopped")
@@ -39,9 +55,11 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict[str, bool]:
-    if settings.TELEGRAM_WEBHOOK_SECRET_TOKEN:
-        if x_telegram_bot_api_secret_token != settings.TELEGRAM_WEBHOOK_SECRET_TOKEN:
-            raise HTTPException(status_code=403, detail="invalid webhook secret")
+    if not settings.TELEGRAM_WEBHOOK_SECRET_TOKEN:
+        logger.error("Server misconfigured: TELEGRAM_WEBHOOK_SECRET_TOKEN not set")
+        raise HTTPException(status_code=500, detail="Server misconfigured: security tokens not set")
+    if x_telegram_bot_api_secret_token != settings.TELEGRAM_WEBHOOK_SECRET_TOKEN:
+        raise HTTPException(status_code=403, detail="invalid webhook secret")
     payload: dict[str, Any] = await request.json()
     with get_session() as session:
         bot_service.process_update(
@@ -57,7 +75,10 @@ async def test_payment_webhook(
     request: Request,
     x_test_payment_secret: str | None = Header(default=None),
 ) -> dict[str, bool]:
-    if settings.TEST_PAYMENT_WEBHOOK_SECRET and x_test_payment_secret != settings.TEST_PAYMENT_WEBHOOK_SECRET:
+    if not settings.TEST_PAYMENT_WEBHOOK_SECRET:
+        logger.error("Server misconfigured: TEST_PAYMENT_WEBHOOK_SECRET not set")
+        raise HTTPException(status_code=500, detail="Server misconfigured: security tokens not set")
+    if x_test_payment_secret != settings.TEST_PAYMENT_WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="invalid payment secret")
     payload: dict[str, Any] = await request.json()
     try:
@@ -80,7 +101,10 @@ async def manual_payment_webhook(
     request: Request,
     x_test_payment_secret: str | None = Header(default=None),
 ) -> dict[str, bool]:
-    if settings.TEST_PAYMENT_WEBHOOK_SECRET and x_test_payment_secret != settings.TEST_PAYMENT_WEBHOOK_SECRET:
+    if not settings.TEST_PAYMENT_WEBHOOK_SECRET:
+        logger.error("Server misconfigured: TEST_PAYMENT_WEBHOOK_SECRET not set")
+        raise HTTPException(status_code=500, detail="Server misconfigured: security tokens not set")
+    if x_test_payment_secret != settings.TEST_PAYMENT_WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="invalid payment secret")
     payload: dict[str, Any] = await request.json()
     try:
@@ -100,7 +124,10 @@ async def manual_payment_webhook(
 
 @app.post("/payments/test/confirm/{external_id}")
 def internal_confirm_payment(external_id: str, token: str | None = None) -> dict[str, bool]:
-    if settings.BOT_INTERNAL_API_TOKEN and token != settings.BOT_INTERNAL_API_TOKEN:
+    if not settings.BOT_INTERNAL_API_TOKEN:
+        logger.error("Server misconfigured: BOT_INTERNAL_API_TOKEN not set")
+        raise HTTPException(status_code=500, detail="Server misconfigured: security tokens not set")
+    if token != settings.BOT_INTERNAL_API_TOKEN:
         raise HTTPException(status_code=403, detail="invalid internal token")
     with get_session() as session:
         found = bot_service.confirm_payment(
@@ -117,8 +144,11 @@ def internal_confirm_payment(external_id: str, token: str | None = None) -> dict
 
 def _require_internal_token(token: str | None, header_token: str | None) -> None:
     expected = settings.BOT_INTERNAL_API_TOKEN
+    if not expected:
+        logger.error("Server misconfigured: BOT_INTERNAL_API_TOKEN not set")
+        raise HTTPException(status_code=500, detail="Server misconfigured: security tokens not set")
     provided = (header_token or token or "").strip()
-    if expected and provided != expected:
+    if provided != expected:
         raise HTTPException(status_code=403, detail="invalid internal token")
 
 

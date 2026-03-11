@@ -261,7 +261,8 @@ prepare_key_for_ssh() {
         return
     fi
     if [[ "$key" == /mnt/* ]]; then
-        tmp_key="$(mktemp /tmp/vpn_key_XXXXXX)" || { printf "%s" "$key"; return; }
+        tmp_key="$(umask 077; mktemp /tmp/vpn_key_XXXXXX)" || { printf "%s" "$key"; return; }
+        [[ -z "$tmp_key" ]] && { printf "%s" "$key"; return; }
         cp "$key" "$tmp_key" 2>/dev/null || { rm -f "$tmp_key"; printf "%s" "$key"; return; }
         chmod 600 "$tmp_key" 2>/dev/null || true
         COMMON_TEMP_KEY_FILES+=("$tmp_key")
