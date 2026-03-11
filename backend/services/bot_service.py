@@ -11,17 +11,6 @@ import urllib.error
 import urllib.request
 from typing import Any, Optional
 
-
-def mask_token(token: str) -> str:
-    """Mask a security token for safe logging.
-
-    Shows only first 5 and last 4 characters.
-    Example: "83475123456B1w" -> "83475...B1w"
-    """
-    if not token or len(token) < 10:
-        return "***"
-    return f"{token[:5]}...{token[-4:]}"
-
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -100,7 +89,6 @@ class TelegramGateway:
         if reply_markup is not None:
             payload_obj["reply_markup"] = reply_markup
         payload = json.dumps(payload_obj).encode("utf-8")
-        masked_token = mask_token(self._token)
         url = f"https://api.telegram.org/bot{self._token}/sendMessage"
         request = urllib.request.Request(
             url=url,
@@ -113,10 +101,10 @@ class TelegramGateway:
                 response.read()
             return True
         except urllib.error.HTTPError as exc:
-            logger.error("Telegram send failed token=%s code=%s body=%s", masked_token, exc.code, exc.read())
+            logger.error("Telegram send failed code=%s body=%s", exc.code, exc.read())
             return False
         except Exception:
-            logger.exception("Telegram send failed token=%s", masked_token)
+            logger.exception("Telegram send failed")
             return False
 
 

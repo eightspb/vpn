@@ -56,17 +56,6 @@ def _safe_filename(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", name or "peer")
 
 
-def _validate_path_traversal(path: Path, allowed_base: Path) -> None:
-    """Validate that path doesn't escape allowed_base via path traversal attacks."""
-    resolved = path.resolve()
-    base_resolved = allowed_base.resolve()
-    if not str(resolved).startswith(str(base_resolved)):
-        raise HTTPException(
-            status_code=403,
-            detail="Path traversal detected",
-        )
-
-
 def _read_kv_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.is_file():
@@ -785,7 +774,6 @@ def peers_delete(
 
     config_path = Path(peer.config_file) if peer.config_file else None
     if config_path and config_path.exists():
-        _validate_path_traversal(config_path, CONFIGS_DIR)
         config_path.unlink(missing_ok=True)
 
     name = peer.name
@@ -864,7 +852,6 @@ def peers_config(
     content = None
     config_path = Path(peer.config_file) if peer.config_file else None
     if config_path and config_path.exists():
-        _validate_path_traversal(config_path, CONFIGS_DIR)
         content = config_path.read_text(encoding="utf-8", errors="replace")
     if not content or _config_has_placeholders(content):
         content = _build_config_content(peer, defaults=defaults, dns=dns_value)
@@ -903,7 +890,6 @@ def peers_config_by_ip(
     if not path.exists():
         raise HTTPException(status_code=404, detail="Config not found")
 
-    _validate_path_traversal(path, CONFIGS_DIR)
     content = path.read_text(encoding="utf-8", errors="replace")
     if _config_has_placeholders(content):
         raise HTTPException(status_code=422, detail="Config contains placeholder values (TODO_*).")

@@ -32,7 +32,6 @@ class Settings(BaseSettings):
     LEGACY_ADMIN_BASE_URL: str = "http://127.0.0.1:8081"
     LEGACY_ADMIN_USERNAME: Optional[str] = None
     LEGACY_ADMIN_PASSWORD: Optional[str] = None
-    CORS_ALLOWED_ORIGINS: str = ""
 
     WORKER_NOTIFY_3D_MINUTES: int = 60
     WORKER_NOTIFY_1D_MINUTES: int = 60

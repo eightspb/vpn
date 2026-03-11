@@ -294,8 +294,8 @@ log "VPS1 client pub: $VPS1_CLIENT_PUB"
 log "Client pub:      $CLIENT_PUB"
 
 # Генерируем случайные Junk параметры (H1-H4 должны быть уникальными uint32)
-H1=$(od -An -tu4 -N4 /dev/urandom | tr -d ' '); H2=$(od -An -tu4 -N4 /dev/urandom | tr -d ' ')
-H3=$(od -An -tu4 -N4 /dev/urandom | tr -d ' '); H4=$(od -An -tu4 -N4 /dev/urandom | tr -d ' ')
+H1=$((RANDOM * RANDOM + RANDOM)); H2=$((RANDOM * RANDOM + RANDOM + 1))
+H3=$((RANDOM * RANDOM + RANDOM + 2)); H4=$((RANDOM * RANDOM + RANDOM + 3))
 
 # ── Шаг 4: Установка AmneziaWG ─────────────────────────────────────────────
 step "Шаг 4/8: Установка AmneziaWG"

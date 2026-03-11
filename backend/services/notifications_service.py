@@ -242,8 +242,8 @@ class NotificationsService:
             data = json.loads(raw or "{}")
             if isinstance(data, dict):
                 return data
-        except Exception as e:
-            logger.warning(f"Failed to parse notification payload: {e}")
+        except Exception:
+            logger.exception("Invalid notification payload")
         return {}
 
     def _update_campaign_stats(

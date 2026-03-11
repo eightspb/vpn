@@ -2,10 +2,7 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from fastapi import FastAPI
 
 from backend import __version__
 from backend.api.routes.admin_compat import router as admin_compat_router
@@ -14,27 +11,6 @@ from backend.api.routes.v1.admin import router as admin_router
 from backend.api.routes.v1.meta import router as meta_router
 from backend.api.routes.v1.peers_monitoring import router as peers_monitoring_router
 from backend.core.config import get_settings
-
-
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Middleware to add security headers to all responses."""
-
-    async def dispatch(self, request: Request, call_next) -> Response:
-        response = await call_next(request)
-
-        # Security headers
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'"
-
-        # HSTS only in production (not in development)
-        settings = get_settings()
-        if settings.APP_ENV != "development":
-            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-
-        return response
 
 
 @asynccontextmanager
@@ -52,20 +28,6 @@ def create_app() -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
-
-    # Security headers middleware (add first to wrap all other middleware)
-    app.add_middleware(SecurityHeadersMiddleware)
-
-    # CORS configuration: parse from comma-separated environment variable
-    cors_origins = [o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
-    if cors_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=cors_origins,
-            allow_credentials=True,
-            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            allow_headers=["*"],
-        )
 
     # Health endpoints (root)
     app.include_router(health_router)

@@ -21,13 +21,11 @@ import datetime as dt
 import functools
 import hashlib
 import io
-import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
-import shlex
 import sqlite3
 import subprocess
 import sys
@@ -82,7 +80,6 @@ log = logging.getLogger("admin")
 # =============================================================================
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # 1MB limit
 DEFAULT_DEV_CORS_ORIGINS = [
     "http://localhost:8081",
     "http://127.0.0.1:8081",
@@ -123,12 +120,6 @@ _login_lock = threading.Lock()
 LOGIN_MAX_ATTEMPTS = 20
 LOGIN_WINDOW_SEC = 120
 
-# Rate limiting for peer creation
-_peer_creation_attempts: dict[str, list[float]] = {}
-_peer_creation_lock = threading.Lock()
-PEER_CREATION_MAX_ATTEMPTS = 10
-PEER_CREATION_WINDOW_SEC = 60
-
 
 def _clear_rate_limit(ip: str) -> None:
     """Clear rate limit for IP (after successful login)."""
@@ -143,18 +134,6 @@ def _check_rate_limit(ip: str) -> bool:
         attempts = _login_attempts.setdefault(ip, [])
         attempts[:] = [t for t in attempts if now - t < LOGIN_WINDOW_SEC]
         if len(attempts) >= LOGIN_MAX_ATTEMPTS:
-            return False
-        attempts.append(now)
-    return True
-
-
-def _check_peer_creation_rate_limit(ip: str) -> bool:
-    """Return True if peer creation is allowed, False if rate-limited."""
-    now = time.time()
-    with _peer_creation_lock:
-        attempts = _peer_creation_attempts.setdefault(ip, [])
-        attempts[:] = [t for t in attempts if now - t < PEER_CREATION_WINDOW_SEC]
-        if len(attempts) >= PEER_CREATION_MAX_ATTEMPTS:
             return False
         attempts.append(now)
     return True
@@ -333,27 +312,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
 }
 
 DEFAULT_ADMIN_USERNAME = "admin"
-
-
-def _generate_random_password() -> str:
-    """Generate a secure random password."""
-    return secrets.token_urlsafe(16)
-
-
-def _validate_password_complexity(password: str) -> tuple[bool, str]:
-    """
-    Validate password complexity.
-    Returns (is_valid, error_message).
-    """
-    if len(password) < 8:
-        return False, "Password must be at least 8 characters"
-    if not any(c.isupper() for c in password):
-        return False, "Password must contain at least one uppercase letter"
-    if not any(c.islower() for c in password):
-        return False, "Password must contain at least one lowercase letter"
-    if not any(c.isdigit() for c in password):
-        return False, "Password must contain at least one digit"
-    return True, ""
+DEFAULT_ADMIN_PASSWORD = "My-secure-admin-password"
 
 
 def _ensure_default_admin() -> None:
@@ -361,9 +320,7 @@ def _ensure_default_admin() -> None:
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
     count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if count == 0:
-        # Generate random password on first run
-        default_password = _generate_random_password()
-        pw_hash = bcrypt.hashpw(default_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode()
+        pw_hash = bcrypt.hashpw(DEFAULT_ADMIN_PASSWORD.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode()
         conn.execute(
             "INSERT INTO users (username, password_hash) VALUES (?, ?)",
             (DEFAULT_ADMIN_USERNAME, pw_hash),
@@ -376,10 +333,7 @@ def _ensure_default_admin() -> None:
             "║  Default admin created — username: admin                 ║"
         )
         log.warning(
-            "║  Password: ****                                          ║"
-        )
-        log.warning(
-            "║  Use /api/auth/change-password to set your own password  ║"
+            "║  Password: My-secure-admin-password                      ║"
         )
         log.warning(
             "╚═══════════════════════════════════════════════════════════╝"
@@ -587,62 +541,30 @@ def _ssh_connect(host: str, user: str, key_path: str, password: str) -> paramiko
 
 
 def _resolve_key_path(key_path: str) -> str | None:
-    """Try to resolve SSH key path: absolute, PROJECT_ROOT, or ~/.ssh/.
-
-    Validates that resolved path is within whitelist of allowed directories.
-    """
+    """Try to resolve SSH key path: absolute, PROJECT_ROOT, or ~/.ssh/."""
     if not key_path or not key_path.strip():
         return None
     key_path = key_path.strip()
-
-    # Whitelist of allowed directories for SSH keys
-    allowed_dirs = [
-        Path.home() / ".ssh",
-        PROJECT_ROOT,
-        Path("/etc/ssh"),
-    ]
-
-    def _is_within_whitelist(path: Path) -> bool:
-        """Check if path is within any of the allowed directories."""
-        try:
-            resolved = path.resolve()
-            # Reject paths with .. after resolution
-            if ".." in str(path):
-                return False
-            for allowed_dir in allowed_dirs:
-                try:
-                    resolved.relative_to(allowed_dir.resolve())
-                    return True
-                except ValueError:
-                    continue
-            return False
-        except Exception:
-            return False
-
     # 1) Absolute path or path with ~
     expanded = os.path.expanduser(key_path)
     p = Path(expanded)
-    if p.is_file() and _is_within_whitelist(p):
+    if p.is_file():
         return str(p)
-
     # 2) PROJECT_ROOT / key_path (e.g. .ssh/key)
     candidate = PROJECT_ROOT / key_path
-    if candidate.is_file() and _is_within_whitelist(candidate):
+    if candidate.is_file():
         return str(candidate)
-
     # 3) ~/.ssh/ for paths like .ssh/key (without ~)
     normalized = key_path.replace("\\", "/").strip()
     if normalized.startswith(".ssh/"):
         name = Path(normalized).name
     else:
         name = Path(key_path).name
-
     if name:
         home_key = Path.home() / ".ssh" / name
-        if home_key.is_file() and _is_within_whitelist(home_key):
+        if home_key.is_file():
             return str(home_key)
-
-    return None
+    return key_path
 
 
 def ssh_exec(host: str, user: str, key_path: str, password: str, command: str) -> str:
@@ -696,13 +618,7 @@ def _create_token(user_id: int, username: str) -> tuple[str, str]:
     ttl = app.config["JWT_TTL_HOURS"]
     exp = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=ttl)
     # PyJWT validates `sub` as a string in newer versions.
-    payload = {
-        "sub": str(user_id),
-        "usr": username,
-        "exp": exp,
-        "iss": "vpn-admin",
-        "aud": "vpn-admin-panel",
-    }
+    payload = {"sub": str(user_id), "usr": username, "exp": exp}
     raw = jwt.encode(payload, app.config["SECRET_KEY"], algorithm="HS256")
     token = raw if isinstance(raw, str) else raw.decode("utf-8")
     return token, exp.isoformat()
@@ -710,13 +626,7 @@ def _create_token(user_id: int, username: str) -> tuple[str, str]:
 
 def _decode_token(token: str) -> dict | None:
     try:
-        return jwt.decode(
-            token,
-            app.config["SECRET_KEY"],
-            algorithms=["HS256"],
-            issuer="vpn-admin",
-            audience="vpn-admin-panel",
-        )
+        return jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         log.debug("JWT expired")
         return None
@@ -728,23 +638,9 @@ def _decode_token(token: str) -> dict | None:
 def _store_session(token: str) -> str:
     """Store server-side session and return a new session ID."""
     sid = secrets.token_hex(24)
-    csrf_token = secrets.token_hex(32)
     with _sessions_lock:
-        _sessions[sid] = {
-            "token": token,
-            "created_at": time.time(),
-            "csrf_token": csrf_token,
-        }
+        _sessions[sid] = {"token": token, "created_at": time.time()}
     return sid
-
-
-def _get_csrf_token(sid: str) -> str | None:
-    """Return CSRF token for the given session ID."""
-    with _sessions_lock:
-        item = _sessions.get(sid)
-        if not item:
-            return None
-        return item.get("csrf_token")
 
 
 def _get_session_token(sid: str) -> str | None:
@@ -782,25 +678,8 @@ def _is_local_request() -> bool:
     return addr in ("127.0.0.1", "::1", "localhost", "")
 
 
-def _verify_csrf(sid: str | None) -> tuple[bool, str]:
-    """Verify CSRF token for state-changing requests. Returns (ok, error_msg)."""
-    if request.method in ("GET", "HEAD", "OPTIONS"):
-        return True, ""
-    if not sid:
-        return False, "CSRF validation failed: no session"
-    expected = _get_csrf_token(sid)
-    if not expected:
-        return False, "CSRF validation failed: no token in session"
-    provided = request.headers.get("X-CSRF-Token", "").strip()
-    if not provided:
-        return False, "CSRF validation failed: missing X-CSRF-Token header"
-    if not secrets.compare_digest(provided, expected):
-        return False, "CSRF validation failed: token mismatch"
-    return True, ""
-
-
 def auth_required(fn):
-    """Decorator: require valid JWT (header or cookie) + CSRF for mutations."""
+    """Decorator: require valid JWT (header or cookie)."""
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         token = _get_token_from_request()
@@ -818,12 +697,6 @@ def auth_required(fn):
             return jsonify({"error": "Invalid token subject"}), 401
         g.username = payload["usr"]
         g.token = token
-        # CSRF check for state-changing requests (POST/PUT/DELETE)
-        sid = request.cookies.get(SESSION_COOKIE_NAME)
-        csrf_ok, csrf_err = _verify_csrf(sid)
-        if not csrf_ok:
-            log.warning("CSRF check failed for %s %s: %s", request.method, request.path, csrf_err)
-            return jsonify({"error": csrf_err}), 403
         return fn(*args, **kwargs)
     return wrapper
 
@@ -955,16 +828,6 @@ def _get_server_info() -> dict[str, str]:
     return info
 
 
-def _validate_peer_ip(ip: str) -> bool:
-    """Validate that IP is within the expected VPN subnet (10.9.0.0/24)."""
-    try:
-        ip_obj = ipaddress.ip_address(ip)
-        subnet = ipaddress.ip_network("10.9.0.0/24", strict=False)
-        return ip_obj in subnet
-    except ValueError:
-        return False
-
-
 def _allocate_ip(db: sqlite3.Connection) -> str | None:
     """Find the next available IP in 10.9.0.3-254."""
     used = {row[0] for row in db.execute("SELECT ip FROM peers").fetchall()}
@@ -1027,15 +890,10 @@ def _build_config(
 
 def _add_peer_to_server(public_key: str, preshared_key: str, peer_ip: str) -> None:
     """Register a peer on VPS1 via SSH (awg set + config append)."""
-    # Safely escape user-supplied values to prevent command injection
-    safe_psk = shlex.quote(preshared_key)
-    safe_public_key = shlex.quote(public_key)
-    safe_peer_ip = shlex.quote(peer_ip)
-
     _vps1_ssh(
-        f"printf '%s' {safe_psk} > /tmp/psk && "
-        f"(sudo -n awg set awg1 peer {safe_public_key} preshared-key /tmp/psk allowed-ips {safe_peer_ip}/32 || "
-        f"awg set awg1 peer {safe_public_key} preshared-key /tmp/psk allowed-ips {safe_peer_ip}/32) && "
+        f"printf '%s' '{preshared_key}' > /tmp/psk && "
+        f"(sudo -n awg set awg1 peer '{public_key}' preshared-key /tmp/psk allowed-ips '{peer_ip}/32' || "
+        f"awg set awg1 peer '{public_key}' preshared-key /tmp/psk allowed-ips '{peer_ip}/32') && "
         f"rm -f /tmp/psk"
     )
 
@@ -1043,9 +901,7 @@ def _add_peer_to_server(public_key: str, preshared_key: str, peer_ip: str) -> No
 def _remove_peer_from_server(public_key: str) -> None:
     """Remove a peer from VPS1 via SSH."""
     if public_key:
-        # Safely escape user-supplied value to prevent command injection
-        safe_public_key = shlex.quote(public_key)
-        _vps1_ssh(f"sudo -n awg set awg1 peer {safe_public_key} remove || awg set awg1 peer {safe_public_key} remove")
+        _vps1_ssh(f"sudo -n awg set awg1 peer '{public_key}' remove || awg set awg1 peer '{public_key}' remove")
 
 
 def _get_all_settings(db: sqlite3.Connection) -> dict[str, str]:
@@ -1220,13 +1076,7 @@ def auth_login():
     }
     token_str = (token if isinstance(token, str) else str(token)).strip()
     sid = _store_session(token_str)
-    csrf_token = _get_csrf_token(sid)
-    resp = jsonify({
-        "token": token_str,
-        "expires_at": expires_at,
-        "user": user_info,
-        "csrf_token": csrf_token,
-    })
+    resp = jsonify({"token": token_str, "expires_at": expires_at, "user": user_info})
     resp.set_cookie(
         SESSION_COOKIE_NAME,
         sid,
@@ -1237,21 +1087,6 @@ def auth_login():
         max_age=SESSION_TTL_SEC,
     )
     return resp
-
-
-@app.route("/api/auth/csrf-token", methods=["GET"])
-def auth_csrf_token():
-    """Return current CSRF token for the session (for page refresh without re-login)."""
-    sid = request.cookies.get(SESSION_COOKIE_NAME)
-    if not sid:
-        return jsonify({"error": "No session"}), 401
-    token = _get_session_token(sid)
-    if not token:
-        return jsonify({"error": "Session expired"}), 401
-    csrf = _get_csrf_token(sid)
-    if not csrf:
-        return jsonify({"error": "No CSRF token"}), 500
-    return jsonify({"csrf_token": csrf})
 
 
 @app.route("/api/auth/logout", methods=["POST"])
@@ -1280,11 +1115,8 @@ def auth_change_password():
 
     if not old_pw or not new_pw:
         return jsonify({"error": "old_password and new_password required"}), 400
-
-    # Validate password complexity
-    is_valid, error_msg = _validate_password_complexity(new_pw)
-    if not is_valid:
-        return jsonify({"error": error_msg}), 400
+    if len(new_pw) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
 
     db = get_db()
     user = db.execute(
@@ -1626,11 +1458,6 @@ def peers_list():
 @auth_required
 def peers_create():
     """Create a new peer: generate keys, allocate IP, register on server."""
-    # Rate limit peer creation per IP
-    ip = request.remote_addr or "unknown"
-    if not _check_peer_creation_rate_limit(ip):
-        return jsonify({"error": "Too many peer creation requests. Try again later."}), 429
-
     data = request.get_json(silent=True) or {}
     name = data.get("name", "").strip()
     device_type = data.get("type", "phone").strip().lower()

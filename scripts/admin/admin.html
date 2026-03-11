@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
 <title>AmneziaWG Admin</title>
 <style>
 /* ====== Theme variables ====== */
@@ -1110,7 +1109,6 @@ const state = {
   groups: [],
   peersRenderLockUntil: 0,
   peerOnlineThresholdSec: 55,
-  csrfToken: null,
 };
 
 const PEERS_PER_PAGE = 50;
@@ -1321,14 +1319,9 @@ function renderEventLog() {
 // ====== API helper ======
 async function api(method, path, body, retryOn401) {
   const reqPath = mapApiPath(path);
-  const hdrs = { 'Content-Type': 'application/json' };
-  // Add CSRF token for state-changing requests
-  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS' && state.csrfToken) {
-    hdrs['X-CSRF-Token'] = state.csrfToken;
-  }
   const opts = {
     method,
-    headers: hdrs,
+    headers: { 'Content-Type': 'application/json' },
   };
   if (body !== undefined) opts.body = JSON.stringify(body);
   opts.credentials = 'include';
@@ -1344,7 +1337,6 @@ async function api(method, path, body, retryOn401) {
 
   if (res.status === 401) {
     state.user = null;
-    state.csrfToken = null;
     navigate('login');
     throw new Error('Session expired');
   }
@@ -1375,7 +1367,7 @@ function mapApiPath(path) {
 // ====== Formatting ======
 function esc(s) {
   if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function fmtDate(d) {
@@ -2635,7 +2627,7 @@ async function deletePeer(id) {
 
 // ====== Add Peer Modal ======
 function openAddPeerModal() {
-  const groupList = state.groups.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+  const groupList = state.groups.map(g => `<option value="${esc(g)}">`).join('');
   openModal('add-peer-modal', `<div class="modal">
     <div class="modal-header">
       <div class="modal-title">Add New Peer</div>
@@ -2734,7 +2726,7 @@ async function handleAddPeer() {
 async function openEditPeerModal(id) {
   try {
     const peer = await api('GET', `/api/peers/${id}`);
-    const groupList = state.groups.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+    const groupList = state.groups.map(g => `<option value="${esc(g)}">`).join('');
     openModal('edit-peer-modal', `<div class="modal">
       <div class="modal-header">
         <div class="modal-title">Edit Peer</div>
@@ -3309,7 +3301,6 @@ async function handleLogin(e) {
       return d;
     });
 
-    state.csrfToken = data.csrf_token || null;
     state.user = data.user || { username: user };
     navigate('dashboard');
   } catch (err) {
@@ -3323,7 +3314,6 @@ async function handleLogin(e) {
 async function handleLogout() {
   try { await api('POST', '/api/auth/logout'); } catch (_) {}
   state.user = null;
-  state.csrfToken = null;
   stopAutoRefresh();
   navigate('login');
 }
@@ -3334,14 +3324,6 @@ async function init() {
     const meResp = await fetch(mapApiPath('/api/auth/me'), { method: 'GET', credentials: 'include' });
     if (meResp.ok) {
       state.user = await meResp.json().catch(() => null);
-      // Restore CSRF token for existing session (page refresh)
-      try {
-        const csrfResp = await fetch(mapApiPath('/api/auth/csrf-token'), { method: 'GET', credentials: 'include' });
-        if (csrfResp.ok) {
-          const csrfData = await csrfResp.json();
-          state.csrfToken = csrfData.csrf_token || null;
-        }
-      } catch (_) {}
       const page = window.location.hash.slice(1) || 'dashboard';
       navigate(page);
       return;
