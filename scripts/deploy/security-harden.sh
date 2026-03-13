@@ -65,6 +65,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ── Validate port numbers ─────────────────────────────────────────────────────
+[[ "$SSH_PORT" =~ ^[0-9]+$ ]] || { echo "ERROR: SSH_PORT must be numeric"; exit 1; }
+[[ "$SSH_PORT" -ge 1 && "$SSH_PORT" -le 65535 ]] || { echo "ERROR: SSH_PORT out of range (1-65535)"; exit 1; }
+[[ "$VPN_PORT" =~ ^[0-9]+$ ]] || { echo "ERROR: VPN_PORT must be numeric"; exit 1; }
+[[ "$VPN_PORT" -ge 1 && "$VPN_PORT" -le 65535 ]] || { echo "ERROR: VPN_PORT out of range (1-65535)"; exit 1; }
+
 echo "[security-harden] Starting hardening (role=${ROLE:-any})..."
 
 # ── 0. Preflight: hostname + DNS ─────────────────────────────────────────────

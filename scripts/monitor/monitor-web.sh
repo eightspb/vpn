@@ -386,7 +386,15 @@ elif systemctl is-active adguardhome >/dev/null 2>&1; then
 else
   AGH=inactive
 fi
-if ss -lunt 2>/dev/null | grep -qE ':53[[:space:]]'; then DNS53=up; else DNS53=down; fi
+if ss -lunt 2>/dev/null | grep -qE ':53[[:space:]]'; then
+  if getent ahostsv4 youtubei.googleapis.com >/dev/null 2>&1 || getent hosts youtubei.googleapis.com >/dev/null 2>&1; then
+    DNS53=up
+  else
+    DNS53=degraded
+  fi
+else
+  DNS53=down
+fi
 if ss -lnt 2>/dev/null | grep -qE ':3000[[:space:]]'; then WEB3000=up; else WEB3000=down; fi
 if ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; then WAN_PING=ok; else WAN_PING=fail; fi
 CPUS=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)

@@ -4,6 +4,8 @@
 services:
   postgres:
     image: postgres:16-alpine
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_USER: vpn
       POSTGRES_PASSWORD: secret
@@ -15,9 +17,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
 
   redis:
     image: redis:7-alpine
+    security_opt:
+      - no-new-privileges:true
+    user: "999:999"
     ports:
       - "6379:6379"
     healthcheck:
@@ -25,11 +32,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
 
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - .env
     environment:
@@ -44,11 +55,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - backend
 
   bot:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - .env
     environment:
@@ -65,11 +80,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - backend
 
   worker:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - .env
     environment:
@@ -82,3 +101,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge

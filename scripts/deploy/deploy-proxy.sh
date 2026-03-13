@@ -60,11 +60,11 @@ require_vars "deploy-proxy.sh" VPS2_IP
 
 # Формируем SSH/SCP команды с учётом ключа или пароля
 if [[ -n "$VPS2_KEY" ]]; then
-    SSH="$SSH_BIN -i $VPS2_KEY -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
-    SCP="$SCP_BIN -i $VPS2_KEY -o StrictHostKeyChecking=accept-new"
+    SSH="$SSH_BIN -i \"$VPS2_KEY\" -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
+    SCP="$SCP_BIN -i \"$VPS2_KEY\" -o StrictHostKeyChecking=accept-new"
 elif [[ -n "$VPS2_PASS" ]]; then
-    SSH="$SSHPASS_BIN -p '$VPS2_PASS' $SSH_BIN -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
-    SCP="$SSHPASS_BIN -p '$VPS2_PASS' $SCP_BIN -o StrictHostKeyChecking=accept-new"
+    SSH="$SSHPASS_BIN -p \"$VPS2_PASS\" $SSH_BIN -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
+    SCP="$SSHPASS_BIN -p \"$VPS2_PASS\" $SCP_BIN -o StrictHostKeyChecking=accept-new"
 else
     SSH="$SSH_BIN -o StrictHostKeyChecking=accept-new ${VPS2_USER}@$VPS2_IP"
     SCP="$SCP_BIN -o StrictHostKeyChecking=accept-new"

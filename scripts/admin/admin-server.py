@@ -21,11 +21,13 @@ import datetime as dt
 import functools
 import hashlib
 import io
+import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -80,6 +82,7 @@ log = logging.getLogger("admin")
 # =============================================================================
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # 1MB limit
 DEFAULT_DEV_CORS_ORIGINS = [
     "http://localhost:8081",
     "http://127.0.0.1:8081",
@@ -120,6 +123,12 @@ _login_lock = threading.Lock()
 LOGIN_MAX_ATTEMPTS = 20
 LOGIN_WINDOW_SEC = 120
 
+# Rate limiting for peer creation
+_peer_creation_attempts: dict[str, list[float]] = {}
+_peer_creation_lock = threading.Lock()
+PEER_CREATION_MAX_ATTEMPTS = 10
+PEER_CREATION_WINDOW_SEC = 60
+
 
 def _clear_rate_limit(ip: str) -> None:
     """Clear rate limit for IP (after successful login)."""
@@ -134,6 +143,18 @@ def _check_rate_limit(ip: str) -> bool:
         attempts = _login_attempts.setdefault(ip, [])
         attempts[:] = [t for t in attempts if now - t < LOGIN_WINDOW_SEC]
         if len(attempts) >= LOGIN_MAX_ATTEMPTS:
+            return False
+        attempts.append(now)
+    return True
+
+
+def _check_peer_creation_rate_limit(ip: str) -> bool:
+    """Return True if peer creation is allowed, False if rate-limited."""
+    now = time.time()
+    with _peer_creation_lock:
+        attempts = _peer_creation_attempts.setdefault(ip, [])
+        attempts[:] = [t for t in attempts if now - t < PEER_CREATION_WINDOW_SEC]
+        if len(attempts) >= PEER_CREATION_MAX_ATTEMPTS:
             return False
         attempts.append(now)
     return True
@@ -828,6 +849,16 @@ def _get_server_info() -> dict[str, str]:
     return info
 
 
+def _validate_peer_ip(ip: str) -> bool:
+    """Validate that IP is within the expected VPN subnet (10.9.0.0/24)."""
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        subnet = ipaddress.ip_network("10.9.0.0/24", strict=False)
+        return ip_obj in subnet
+    except ValueError:
+        return False
+
+
 def _allocate_ip(db: sqlite3.Connection) -> str | None:
     """Find the next available IP in 10.9.0.3-254."""
     used = {row[0] for row in db.execute("SELECT ip FROM peers").fetchall()}
@@ -890,10 +921,14 @@ def _build_config(
 
 def _add_peer_to_server(public_key: str, preshared_key: str, peer_ip: str) -> None:
     """Register a peer on VPS1 via SSH (awg set + config append)."""
+    safe_psk = shlex.quote(preshared_key)
+    safe_public_key = shlex.quote(public_key)
+    safe_peer_ip = shlex.quote(peer_ip)
+
     _vps1_ssh(
-        f"printf '%s' '{preshared_key}' > /tmp/psk && "
-        f"(sudo -n awg set awg1 peer '{public_key}' preshared-key /tmp/psk allowed-ips '{peer_ip}/32' || "
-        f"awg set awg1 peer '{public_key}' preshared-key /tmp/psk allowed-ips '{peer_ip}/32') && "
+        f"printf '%s' {safe_psk} > /tmp/psk && "
+        f"(sudo -n awg set awg1 peer {safe_public_key} preshared-key /tmp/psk allowed-ips {safe_peer_ip}/32 || "
+        f"awg set awg1 peer {safe_public_key} preshared-key /tmp/psk allowed-ips {safe_peer_ip}/32) && "
         f"rm -f /tmp/psk"
     )
 
@@ -901,7 +936,8 @@ def _add_peer_to_server(public_key: str, preshared_key: str, peer_ip: str) -> No
 def _remove_peer_from_server(public_key: str) -> None:
     """Remove a peer from VPS1 via SSH."""
     if public_key:
-        _vps1_ssh(f"sudo -n awg set awg1 peer '{public_key}' remove || awg set awg1 peer '{public_key}' remove")
+        safe_public_key = shlex.quote(public_key)
+        _vps1_ssh(f"sudo -n awg set awg1 peer {safe_public_key} remove || awg set awg1 peer {safe_public_key} remove")
 
 
 def _get_all_settings(db: sqlite3.Connection) -> dict[str, str]:
@@ -1458,6 +1494,11 @@ def peers_list():
 @auth_required
 def peers_create():
     """Create a new peer: generate keys, allocate IP, register on server."""
+    # Rate limit peer creation per IP
+    ip = request.remote_addr or "unknown"
+    if not _check_peer_creation_rate_limit(ip):
+        return jsonify({"error": "Too many peer creation requests. Try again later."}), 429
+
     data = request.get_json(silent=True) or {}
     name = data.get("name", "").strip()
     device_type = data.get("type", "phone").strip().lower()

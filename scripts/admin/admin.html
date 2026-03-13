@@ -1367,7 +1367,7 @@ function mapApiPath(path) {
 // ====== Formatting ======
 function esc(s) {
   if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function fmtDate(d) {
@@ -2627,7 +2627,7 @@ async function deletePeer(id) {
 
 // ====== Add Peer Modal ======
 function openAddPeerModal() {
-  const groupList = state.groups.map(g => `<option value="${esc(g)}">`).join('');
+  const groupList = state.groups.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
   openModal('add-peer-modal', `<div class="modal">
     <div class="modal-header">
       <div class="modal-title">Add New Peer</div>
@@ -2726,7 +2726,7 @@ async function handleAddPeer() {
 async function openEditPeerModal(id) {
   try {
     const peer = await api('GET', `/api/peers/${id}`);
-    const groupList = state.groups.map(g => `<option value="${esc(g)}">`).join('');
+    const groupList = state.groups.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
     openModal('edit-peer-modal', `<div class="modal">
       <div class="modal-header">
         <div class="modal-title">Edit Peer</div>
