@@ -81,7 +81,7 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { color: var(--accent-hover); }
 
 /* ====== Sidebar ====== */
-.app-layout { display: flex; min-height: 100vh; }
+.app-layout { display: flex; min-height: 100vh; overflow-x: hidden; }
 .sidebar {
   width: 240px;
   background: var(--bg-secondary);
@@ -165,10 +165,12 @@ a:hover { color: var(--accent-hover); }
 /* ====== Main content ====== */
 .main-content {
   flex: 1;
+  min-width: 0;
   margin-left: 240px;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
 }
 .topbar {
   height: 56px;
