@@ -1023,23 +1023,44 @@ td.mono { font-family: monospace; font-size: 12px; }
   font-size: 22px;
   cursor: pointer;
   padding: 4px;
+  line-height: 1;
 }
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 99;
+}
+.sidebar-overlay.open { display: block; }
 @media (max-width: 900px) {
   .sidebar { transform: translateX(-100%); }
   .sidebar.open { transform: translateX(0); }
   .main-content { margin-left: 0; }
   .sidebar-toggle { display: block; }
+  .topbar { padding: 0 12px; }
   .server-metrics { grid-template-columns: repeat(2, 1fr); }
   .form-row { grid-template-columns: 1fr; }
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 600px) {
-  .page-content { padding: 16px; }
+  .page-content { padding: 12px; }
   .summary-grid { grid-template-columns: 1fr; }
   .servers-grid { grid-template-columns: 1fr; }
+  .settings-grid { grid-template-columns: 1fr; }
   .table-toolbar { flex-direction: column; align-items: stretch; }
   .search-input { max-width: 100%; }
   .toolbar-right { margin-left: 0; justify-content: flex-end; }
+  .pagination { flex-wrap: wrap; gap: 8px; }
+  .pagination-info { width: 100%; text-align: center; }
+  .modal-footer { flex-wrap: wrap; }
+  .modal-footer .btn { flex: 1 1 auto; justify-content: center; }
+  .toast-container { right: 10px; left: 10px; }
+  .toast { min-width: auto; max-width: 100%; }
+  .summary-value { font-size: 22px; }
+  .card { padding: 14px; }
+  .server-body { padding: 12px 14px; }
+  .server-header { padding: 10px 14px; }
 }
 
 /* ====== Theme toggle ====== */
@@ -1482,11 +1503,28 @@ function connectionBadge(status, handshakeAgeSec) {
   return `<span class="badge ${cls}" style="margin-left:4px" title="${esc(hs)}">${label}</span>`;
 }
 
+// ====== Sidebar mobile helpers ======
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (!sidebar) return;
+  const isOpen = sidebar.classList.contains('open');
+  sidebar.classList.toggle('open', !isOpen);
+  if (overlay) overlay.classList.toggle('open', !isOpen);
+}
+function closeSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (sidebar) sidebar.classList.remove('open');
+  if (overlay) overlay.classList.remove('open');
+}
+
 // ====== Router ======
 function navigate(page) {
   if (!state.user && page !== 'login') { page = 'login'; }
   state.currentPage = page;
   window.location.hash = '#' + page;
+  closeSidebar();
   render();
   if (page !== 'login') startAutoRefresh();
 }
@@ -1803,6 +1841,7 @@ function renderAppLayout() {
   ).join('');
 
   return `<div class="app-layout">
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-logo">
@@ -1825,7 +1864,7 @@ function renderAppLayout() {
     </aside>
     <main class="main-content">
       <div class="topbar">
-        <button class="sidebar-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+        <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
         <div class="topbar-title">${pages.find(p => p.id === state.currentPage)?.label || 'Dashboard'}</div>
         <div class="topbar-actions">
           <div class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
