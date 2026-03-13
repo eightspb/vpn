@@ -20,13 +20,31 @@ fi
 sudo apt-get update -qq
 sudo apt-get install -y -qq python3 python3-venv python3-pip openssl curl rsync >/dev/null
 
+# Preserve persistent data (database, certs, .env) across deploys
+ADMIN_DB="${PROJECT_DST}/scripts/admin/admin.db"
+PRESERVE_DIR="/tmp/vpn-preserve-$$"
 if [[ -d "$PROJECT_DST" ]]; then
+  mkdir -p "$PRESERVE_DIR"
+  # Save files that must survive redeploy
+  [[ -f "$ADMIN_DB" ]] && cp -p "$ADMIN_DB" "$PRESERVE_DIR/admin.db"
+  [[ -d "${PROJECT_DST}/scripts/admin/certs" ]] && cp -rp "${PROJECT_DST}/scripts/admin/certs" "$PRESERVE_DIR/certs"
+  [[ -f "${PROJECT_DST}/.env" ]] && cp -p "${PROJECT_DST}/.env" "$PRESERVE_DIR/.env"
+
   ts=$(date +%Y%m%d-%H%M%S)
   sudo mv "$PROJECT_DST" "${PROJECT_DST}.backup-${ts}"
 fi
 sudo mkdir -p "$PROJECT_DST"
 sudo rsync -a --delete "$PROJECT_SRC"/ "$PROJECT_DST"/
 sudo chown -R ${ADMIN_USER}:${ADMIN_USER} "$PROJECT_DST"
+
+# Restore preserved data
+if [[ -d "$PRESERVE_DIR" ]]; then
+  [[ -f "$PRESERVE_DIR/admin.db" ]] && cp -p "$PRESERVE_DIR/admin.db" "$ADMIN_DB"
+  [[ -d "$PRESERVE_DIR/certs" ]] && cp -rp "$PRESERVE_DIR/certs" "${PROJECT_DST}/scripts/admin/certs"
+  [[ -f "$PRESERVE_DIR/.env" ]] && cp -p "$PRESERVE_DIR/.env" "${PROJECT_DST}/.env"
+  sudo chown -R ${ADMIN_USER}:${ADMIN_USER} "$PROJECT_DST"
+  rm -rf "$PRESERVE_DIR"
+fi
 
 # Fix SSH key permissions — SSH refuses keys with group/other access.
 if [[ -d "${PROJECT_DST}/.ssh" ]]; then
