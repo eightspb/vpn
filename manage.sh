@@ -6,30 +6,21 @@
 #   bash manage.sh <команда> [опции]
 #
 # Команды:
-#   deploy      Деплой VPN (полный или по частям)
-#   monitor     Мониторинг серверов (реалтайм или веб-дашборд)
-#   admin       Админ-панель (start/stop/status/setup/restart/logs)
-#   add-peer    Добавить новый WireGuard-пир на VPS1
+#   deploy      Деплой (--admin для админки, без флага — полный VPN)
+#   monitor     Мониторинг серверов (реалтайм / --web)
+#   admin       Локальная админ-панель (start/stop/status/setup/restart/logs)
 #   peers       Управление пирами (add/batch/list/remove/export/info)
 #   check       Проверить связность VPN-цепочки
 #   audit       Аудит безопасности и эффективности (read-only)
 #   help        Показать эту справку
 #
 # Примеры:
-#   bash manage.sh deploy --vps1-ip 1.2.3.4 --vps1-key .ssh/id_rsa \
-#                         --vps2-ip 5.6.7.8 --vps2-key .ssh/id_rsa
-#   bash manage.sh deploy --vps1 --vps1-ip 1.2.3.4 --vps1-key .ssh/id_rsa --vps2-ip 5.6.7.8
-#   bash manage.sh deploy --vps2 --vps2-ip 5.6.7.8 --vps2-key .ssh/id_rsa
-#   bash manage.sh deploy --proxy --vps2-ip 5.6.7.8 --vps2-key .ssh/id_rsa
-#   bash manage.sh monitor
-#   bash manage.sh monitor --web
-#   bash manage.sh add-peer
-#   bash manage.sh add-peer --peer-name tablet --peer-ip 10.9.0.5
-#   bash manage.sh peers add --name laptop --type pc --qr
-#   bash manage.sh peers batch --prefix user --count 50
-#   bash manage.sh peers list
-#   bash manage.sh check
-#   bash manage.sh audit
+#   bash manage.sh deploy --admin                    # обновить админку
+#   bash manage.sh deploy                            # полный деплой VPN
+#   bash manage.sh admin start                       # запустить локально
+#   bash manage.sh peers list                        # список пиров
+#   bash manage.sh monitor --web                     # веб-мониторинг
+#   bash manage.sh check                             # проверить связность
 # =============================================================================
 
 set -euo pipefail
@@ -49,34 +40,49 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 usage_main() {
     cat <<'EOF'
-manage.sh — управление VPN-инфраструктурой (AmneziaWG + YouTube Proxy)
+manage.sh — управление VPN-инфраструктурой (AmneziaWG)
 
 Использование:
   bash manage.sh <команда> [опции]
 
 Команды:
-  deploy      Деплой VPN (полный или по частям)
-  monitor     Мониторинг серверов
-  admin       Админ-панель (start/stop/status/setup/restart/logs)
-  add-peer    Добавить новый WireGuard-пир (legacy)
+  deploy      Деплой (--admin для админки, без флага — полный VPN)
+  monitor     Мониторинг серверов (реалтайм / --web)
+  admin       Локальная админ-панель (start/stop/status/setup/restart/logs)
   peers       Управление пирами (add/batch/list/remove/export/info)
   check       Проверить связность VPN-цепочки
   audit       Аудит безопасности и эффективности (read-only)
   help        Показать эту справку
 
-Запустите "bash manage.sh <команда> --help" для подробной справки по команде.
+Частые сценарии:
+  bash manage.sh deploy --admin          # обновить админку (VPN не трогает)
+  bash manage.sh deploy                  # полный деплой VPN с нуля
+  bash manage.sh admin start             # запустить админку локально
+  bash manage.sh peers list              # список пиров
+
+Запустите "bash manage.sh <команда> --help" для подробной справки.
 EOF
 }
 
 usage_deploy() {
     cat <<'EOF'
-manage.sh deploy — деплой VPN
+manage.sh deploy — деплой компонентов VPN-инфраструктуры
 
-Режимы (по умолчанию — полный деплой обоих серверов):
-  (без флага)   Полный деплой: VPS1 + VPS2 (через deploy.sh)
-  --vps1        Только VPS1 (через deploy-vps1.sh)
-  --vps2        Только VPS2 (через deploy-vps2.sh, требует --keys-file)
-  --proxy       Только YouTube Ad Proxy на VPS2 (через deploy-proxy.sh)
+Режимы:
+  --admin       ★ Только админ-панель + бот на VPS1 (БЕЗ изменения VPN)
+                  Обновляет код, перезапускает admin-server и vpn-bot.
+                  Безопасно: VPN-тоннели и конфиги не затрагиваются.
+
+  (без флага)   Полный деплой: VPS1 + VPS2 (VPN + всё остальное)
+  --vps1        Только VPS1 (VPN-конфиги + AmneziaWG)
+  --vps2        Только VPS2 (требует --keys-file от deploy-vps1)
+  --proxy       YouTube Ad Proxy на VPS2 (⚠ проект неактивен)
+
+Опции для --admin:
+  --vps1-ip IP          IP VPS1 (или из .env)
+  --vps1-user USER      SSH-пользователь VPS1 (default: из .env)
+  --vps1-key PATH       SSH-ключ VPS1 (или из .env)
+  --admin-password PASS Установить пароль admin (опционально)
 
 Опции для полного деплоя:
   --vps1-ip IP          IP VPS1
@@ -88,30 +94,25 @@ manage.sh deploy — деплой VPN
   --vps2-key PATH       SSH-ключ VPS2
   --vps2-pass PASS      SSH-пароль VPS2
   --client-ip IP        IP клиента в VPN (default: 10.9.0.2)
-  --adguard-pass PASS   Пароль AdGuard Home (default: admin123)
+  --adguard-pass PASS   Пароль AdGuard Home
   --output-dir DIR      Куда сохранить конфиги (default: ./vpn-output)
-  --with-proxy          Задеплоить YouTube Proxy на VPS2
+  --with-proxy          Задеплоить YouTube Proxy на VPS2 (⚠ неактивен)
   --remove-adguard      Удалить AdGuard Home (только с --with-proxy)
-  --regen-configs       После полного деплоя пересобрать все клиентские конфиги (client/phone)
-
-Для --vps1: те же опции без vps2-* (кроме --vps2-ip для туннеля)
-Для --vps2: --vps2-ip, --vps2-key/--vps2-pass, --keys-file
-Для --proxy: --vps2-ip, --vps2-key, [--remove-adguard]
+  --regen-configs       Пересобрать клиентские конфиги после деплоя
 
 Примеры:
+  # ★ Обновить только админку (самый частый случай):
+  bash manage.sh deploy --admin
+
+  # Полный деплой VPN с нуля:
   bash manage.sh deploy \
-    --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
-    --vps2-ip 38.135.122.81 --vps2-key .ssh/ssh-key-1772056840349 \
-    --with-proxy --remove-adguard
+    --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/key \
+    --vps2-ip 38.135.122.81 --vps2-key .ssh/key \
+    --adguard-pass "Strong-Password-123"
 
-  # Полный ре-деплой + перегенерация client/phone конфигов
-  bash manage.sh deploy --regen-configs
-
+  # Только VPS1 (первый этап двухфазного деплоя):
   bash manage.sh deploy --vps1 \
-    --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 --vps2-ip 38.135.122.81
-
-  bash manage.sh deploy --proxy \
-    --vps2-ip 38.135.122.81 --vps2-key .ssh/id_rsa --remove-adguard
+    --vps1-ip 130.193.41.13 --vps1-key .ssh/key --vps2-ip 38.135.122.81
 EOF
 }
 
@@ -206,7 +207,9 @@ cmd_deploy() {
     local regen_configs=false
 
     # Разбираем первый аргумент — режим
-    if [[ "${1:-}" == "--vps1" ]]; then
+    if [[ "${1:-}" == "--admin" ]]; then
+        mode="admin"; shift
+    elif [[ "${1:-}" == "--vps1" ]]; then
         mode="vps1"; shift
     elif [[ "${1:-}" == "--vps2" ]]; then
         mode="vps2"; shift
@@ -232,6 +235,11 @@ cmd_deploy() {
     done
 
     case "$mode" in
+        admin)
+            [[ "$regen_configs" == "true" ]] && err "--regen-configs недоступен для --admin"
+            log "Деплой админ-панели + бота на VPS1 (VPN не затрагивается)..."
+            bash "${SCRIPT_DIR}/scripts/deploy/redeploy-admin-vps1.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            ;;
         full)
             log "Запуск полного деплоя (deploy.sh)..."
             bash "${SCRIPT_DIR}/scripts/deploy/deploy.sh" "${extra_args[@]+"${extra_args[@]}"}"
@@ -246,18 +254,19 @@ cmd_deploy() {
             fi
             ;;
         vps1)
-            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя (без --vps1/--vps2/--proxy)"
+            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя"
             log "Запуск деплоя VPS1 (deploy-vps1.sh)..."
             bash "${SCRIPT_DIR}/scripts/deploy/deploy-vps1.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         vps2)
-            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя (без --vps1/--vps2/--proxy)"
+            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя"
             log "Запуск деплоя VPS2 (deploy-vps2.sh)..."
             bash "${SCRIPT_DIR}/scripts/deploy/deploy-vps2.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
         proxy)
-            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя (без --vps1/--vps2/--proxy)"
+            [[ "$regen_configs" == "true" ]] && err "--regen-configs доступен только для полного деплоя"
             log "Запуск деплоя YouTube Proxy (deploy-proxy.sh)..."
+            warn "⚠ YouTube Proxy — неактивный проект. Убедитесь, что это нужно."
             bash "${SCRIPT_DIR}/scripts/deploy/deploy-proxy.sh" "${extra_args[@]+"${extra_args[@]}"}"
             ;;
     esac
