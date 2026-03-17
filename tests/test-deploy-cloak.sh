@@ -230,6 +230,145 @@ else
 fi
 
 echo ""
+echo "=== Тест: Авторотация доменов Cloak ==="
+echo ""
+
+# ── 21. Серверный скрипт ротации существует ──────────────────────────────
+if [[ -f scripts/deploy/cloak-rotate-domain.sh ]]; then
+  ok "cloak-rotate-domain.sh существует"
+else
+  fail "cloak-rotate-domain.sh не найден"
+fi
+
+if [[ -x scripts/deploy/cloak-rotate-domain.sh ]]; then
+  ok "cloak-rotate-domain.sh исполняемый"
+else
+  fail "cloak-rotate-domain.sh не исполняемый"
+fi
+
+if bash -n scripts/deploy/cloak-rotate-domain.sh 2>/dev/null; then
+  ok "cloak-rotate-domain.sh: bash syntax OK"
+else
+  fail "cloak-rotate-domain.sh: синтаксическая ошибка"
+fi
+
+# ── 22. Клиентский скрипт ротации существует ─────────────────────────────
+if [[ -f scripts/deploy/cloak-rotate-client.sh ]]; then
+  ok "cloak-rotate-client.sh существует"
+else
+  fail "cloak-rotate-client.sh не найден"
+fi
+
+if [[ -x scripts/deploy/cloak-rotate-client.sh ]]; then
+  ok "cloak-rotate-client.sh исполняемый"
+else
+  fail "cloak-rotate-client.sh не исполняемый"
+fi
+
+if bash -n scripts/deploy/cloak-rotate-client.sh 2>/dev/null; then
+  ok "cloak-rotate-client.sh: bash syntax OK"
+else
+  fail "cloak-rotate-client.sh: синтаксическая ошибка"
+fi
+
+# ── 23. Список доменов содержит популярные сайты ─────────────────────────
+for domain in yandex.ru mail.ru vk.com ok.ru dzen.ru avito.ru ozon.ru; do
+  if grep -q "$domain" scripts/deploy/cloak-rotate-domain.sh; then
+    ok "Серверная ротация содержит $domain"
+  else
+    fail "Серверная ротация не содержит $domain"
+  fi
+done
+
+# ── 24. Списки доменов совпадают (сервер и клиент) ───────────────────────
+server_domains=$(grep -oP '^\s+"[a-z0-9.-]+\.[a-z]+"' scripts/deploy/cloak-rotate-domain.sh | sort)
+client_domains=$(grep -oP '^\s+"[a-z0-9.-]+\.[a-z]+"' scripts/deploy/cloak-rotate-client.sh | sort)
+if [[ "$server_domains" == "$client_domains" ]]; then
+  ok "Списки доменов сервера и клиента совпадают"
+else
+  fail "Списки доменов сервера и клиента НЕ совпадают"
+fi
+
+# ── 25. Серверный скрипт обновляет RedirAddr ─────────────────────────────
+if grep -q 'RedirAddr' scripts/deploy/cloak-rotate-domain.sh; then
+  ok "cloak-rotate-domain.sh: обновляет RedirAddr"
+else
+  fail "cloak-rotate-domain.sh: нет обновления RedirAddr"
+fi
+
+# ── 26. Клиентский скрипт обновляет ServerName ───────────────────────────
+if grep -q 'ServerName' scripts/deploy/cloak-rotate-client.sh; then
+  ok "cloak-rotate-client.sh: обновляет ServerName"
+else
+  fail "cloak-rotate-client.sh: нет обновления ServerName"
+fi
+
+# ── 27. Серверный скрипт перезапускает ck-server ─────────────────────────
+if grep -q 'systemctl restart.*cloak-server\|CK_SERVICE' scripts/deploy/cloak-rotate-domain.sh; then
+  ok "cloak-rotate-domain.sh: перезапускает ck-server"
+else
+  fail "cloak-rotate-domain.sh: нет перезапуска ck-server"
+fi
+
+# ── 28. Серверный скрипт делает откат при ошибке ─────────────────────────
+if grep -q 'откат\|rollback\|Откат' scripts/deploy/cloak-rotate-domain.sh; then
+  ok "cloak-rotate-domain.sh: откат при ошибке запуска"
+else
+  fail "cloak-rotate-domain.sh: нет отката при ошибке"
+fi
+
+# ── 29. Серверный скрипт выбирает домен, отличный от текущего ────────────
+if grep -q 'current\|attempts' scripts/deploy/cloak-rotate-domain.sh; then
+  ok "cloak-rotate-domain.sh: избегает повторения текущего домена"
+else
+  fail "cloak-rotate-domain.sh: может выбрать тот же домен"
+fi
+
+# ── 30. Атомарная замена конфига (через tmpfile + mv) ────────────────────
+if grep -q 'mktemp.*CK_CONFIG\|mktemp.*ckserver' scripts/deploy/cloak-rotate-domain.sh; then
+  ok "cloak-rotate-domain.sh: атомарная замена конфига (tmpfile+mv)"
+else
+  fail "cloak-rotate-domain.sh: нет атомарной замены"
+fi
+
+# ── 31. deploy-cloak.sh устанавливает cron для ротации ───────────────────
+if grep -q 'crontab\|cron' scripts/deploy/deploy-cloak.sh; then
+  ok "deploy-cloak.sh: устанавливает cron для ротации"
+else
+  fail "deploy-cloak.sh: нет установки cron"
+fi
+
+# ── 32. deploy-cloak.sh загружает скрипт ротации на VPS1 ────────────────
+if grep -q 'cloak-rotate-domain.sh' scripts/deploy/deploy-cloak.sh; then
+  ok "deploy-cloak.sh: загружает скрипт ротации на VPS1"
+else
+  fail "deploy-cloak.sh: не загружает скрипт ротации"
+fi
+
+# ── 33. Поддержка --list, --current, --set ───────────────────────────────
+for flag in "--list" "--current" "--set"; do
+  if grep -q -- "$flag" scripts/deploy/cloak-rotate-domain.sh; then
+    ok "cloak-rotate-domain.sh: поддерживает $flag"
+  else
+    fail "cloak-rotate-domain.sh: нет поддержки $flag"
+  fi
+done
+
+# ── 34. Клиентский скрипт поддерживает --config ──────────────────────────
+if grep -q '\-\-config' scripts/deploy/cloak-rotate-client.sh; then
+  ok "cloak-rotate-client.sh: поддерживает --config"
+else
+  fail "cloak-rotate-client.sh: нет --config"
+fi
+
+# ── 35. Cron идемпотентный (grep -v + echo) ─────────────────────────────
+if grep -q 'grep -v.*cloak-rotate' scripts/deploy/deploy-cloak.sh; then
+  ok "deploy-cloak.sh: cron идемпотентный (удаляет старую запись)"
+else
+  fail "deploy-cloak.sh: cron не идемпотентный"
+fi
+
+echo ""
 echo "Результат: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]] && echo "OK — все проверки прошли" && exit 0
 echo "FAIL — есть ошибки" && exit 1

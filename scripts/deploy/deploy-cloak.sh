@@ -144,13 +144,13 @@ echo ""
 mkdir -p "$OUTPUT_DIR"
 
 # ── Шаг 1: Проверка SSH ───────────────────────────────────────────────────
-step "Шаг 1/4: Проверка SSH к VPS1"
+step "Шаг 1/5: Проверка SSH к VPS1"
 VPS1_OS=$(run1 "cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'") \
     || err "Не удалось подключиться к VPS1 (${VPS1_IP})"
 ok "VPS1: $VPS1_OS"
 
 # ── Шаг 2: Установка и настройка Cloak сервера ────────────────────────────
-step "Шаг 2/4: Установка Cloak сервера на VPS1"
+step "Шаг 2/5: Установка Cloak сервера на VPS1"
 
 log "Устанавливаю ck-server v${CLOAK_VERSION}..."
 CK_KEYS=$(run_script1 "
@@ -255,7 +255,7 @@ log "Cloak PublicKey: $CK_PUB"
 log "Cloak UID: $CK_UID"
 
 # ── Шаг 3: Генерация клиентского конфига Cloak ────────────────────────────
-step "Шаг 3/4: Генерация клиентских конфигов"
+step "Шаг 3/5: Генерация клиентских конфигов"
 
 # Конфиг ck-client
 CK_CLIENT_CONF="${OUTPUT_DIR}/ck-client.json"
@@ -364,8 +364,39 @@ CLOAK_PORT=${CLOAK_PORT}
 EOF
 chmod 600 "$CK_KEYS_FILE"
 
-# ── Шаг 4: Верификация ────────────────────────────────────────────────────
-step "Шаг 4/4: Проверка работоспособности"
+# ── Шаг 4: Авторотация доменов ─────────────────────────────────────────────
+step "Шаг 4/5: Настройка авторотации доменов"
+
+ROTATE_SCRIPT="${SCRIPT_DIR}/cloak-rotate-domain.sh"
+if [[ ! -f "$ROTATE_SCRIPT" ]]; then
+    warn "Скрипт ротации не найден: $ROTATE_SCRIPT"
+else
+    log "Устанавливаю скрипт ротации доменов на VPS1..."
+    upload1 "$ROTATE_SCRIPT" /tmp/cloak-rotate-domain.sh
+    run1 "sudo mv /tmp/cloak-rotate-domain.sh /etc/cloak/cloak-rotate-domain.sh && \
+          sudo chmod +x /etc/cloak/cloak-rotate-domain.sh"
+
+    # Устанавливаем cron (каждые 6 часов, идемпотентно)
+    CRON_LINE="0 */6 * * * /etc/cloak/cloak-rotate-domain.sh >> /var/log/cloak-rotate.log 2>&1"
+    run1 "( sudo crontab -l 2>/dev/null | grep -v 'cloak-rotate-domain'; echo '${CRON_LINE}' ) | sudo crontab -"
+    ok "Авторотация: каждые 6 часов (cron)"
+
+    # Показываем текущий домен
+    CURRENT=$(run1 "grep -oP '\"RedirAddr\"\\s*:\\s*\"\\K[^\"]+' /etc/cloak/ckserver.json 2>/dev/null || echo 'N/A'")
+    log "Текущий маскировочный домен: ${BOLD}${CURRENT}${NC}"
+    log "Список: yandex.ru, mail.ru, vk.com, ok.ru, dzen.ru, avito.ru, ozon.ru..."
+fi
+
+# Копируем клиентский скрипт ротации в output
+CLIENT_ROTATE="${SCRIPT_DIR}/cloak-rotate-client.sh"
+if [[ -f "$CLIENT_ROTATE" ]]; then
+    cp "$CLIENT_ROTATE" "${OUTPUT_DIR}/cloak-rotate-client.sh"
+    chmod +x "${OUTPUT_DIR}/cloak-rotate-client.sh"
+    ok "Клиентский скрипт ротации: ${BOLD}${OUTPUT_DIR}/cloak-rotate-client.sh${NC}"
+fi
+
+# ── Шаг 5: Верификация ────────────────────────────────────────────────────
+step "Шаг 5/5: Проверка работоспособности"
 
 VERIFY=$(run1 "
 # Проверяем что ck-server слушает порт
@@ -413,6 +444,11 @@ echo -e "  Cloak конфиг:   ${BOLD}${CK_CLIENT_CONF}${NC}"
 [[ -f "${OUTPUT_DIR}/client-cloak.conf" ]] && \
 echo -e "  AmneziaWG conf: ${BOLD}${OUTPUT_DIR}/client-cloak.conf${NC}"
 echo -e "  Инструкция:     ${BOLD}${CK_README}${NC}"
+echo ""
+echo -e "  ${GREEN}Авторотация доменов:${NC}"
+echo -e "  Сервер: cron каждые 6 часов (RedirAddr)"
+echo -e "  Клиент: ${BOLD}bash cloak-rotate-client.sh${NC} (ServerName)"
+echo -e "  Домены: yandex.ru, mail.ru, vk.com, ok.ru, dzen.ru, avito.ru, ..."
 echo ""
 echo -e "  ${GREEN}Запуск на клиенте:${NC}"
 echo -e "  ${BOLD}ck-client -c ck-client.json -s ${VPS1_IP} -p ${CLOAK_PORT} -l 127.0.0.1:1984 -u${NC}"
