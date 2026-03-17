@@ -369,6 +369,83 @@ else
 fi
 
 echo ""
+echo "=== Тест: Безопасный деплой ротации (deploy-cloak-rotation.sh) ==="
+echo ""
+
+# ── 36. Скрипт существует и исполняемый ──────────────────────────────────
+if [[ -f scripts/deploy/deploy-cloak-rotation.sh ]]; then
+  ok "deploy-cloak-rotation.sh существует"
+else
+  fail "deploy-cloak-rotation.sh не найден"
+fi
+
+if [[ -x scripts/deploy/deploy-cloak-rotation.sh ]]; then
+  ok "deploy-cloak-rotation.sh исполняемый"
+else
+  fail "deploy-cloak-rotation.sh не исполняемый"
+fi
+
+if bash -n scripts/deploy/deploy-cloak-rotation.sh 2>/dev/null; then
+  ok "deploy-cloak-rotation.sh: bash syntax OK"
+else
+  fail "deploy-cloak-rotation.sh: синтаксическая ошибка"
+fi
+
+# ── 37. НЕ генерирует ключи (безопасность) ──────────────────────────────
+if ! grep -q 'ck-server -key' scripts/deploy/deploy-cloak-rotation.sh; then
+  ok "deploy-cloak-rotation.sh: НЕ генерирует ключи (безопасно)"
+else
+  fail "deploy-cloak-rotation.sh: генерирует ключи — ОПАСНО для существующих клиентов"
+fi
+
+if ! grep -q 'ck-server -uid' scripts/deploy/deploy-cloak-rotation.sh; then
+  ok "deploy-cloak-rotation.sh: НЕ генерирует UID (безопасно)"
+else
+  fail "deploy-cloak-rotation.sh: генерирует UID — ОПАСНО"
+fi
+
+# ── 38. НЕ перезаписывает ckserver.json ──────────────────────────────────
+if ! grep -q 'cat > /etc/cloak/ckserver.json\|cat >.*ckserver.json' scripts/deploy/deploy-cloak-rotation.sh; then
+  ok "deploy-cloak-rotation.sh: НЕ перезаписывает ckserver.json (безопасно)"
+else
+  fail "deploy-cloak-rotation.sh: перезаписывает ckserver.json — ОПАСНО"
+fi
+
+# ── 39. Pre-check: проверяет что Cloak уже работает ──────────────────────
+if grep -q 'systemctl is-active.*cloak-server\|CK_ACTIVE' scripts/deploy/deploy-cloak-rotation.sh; then
+  ok "deploy-cloak-rotation.sh: pre-check — проверяет что Cloak работает"
+else
+  fail "deploy-cloak-rotation.sh: нет pre-check"
+fi
+
+if grep -q 'ckserver.json' scripts/deploy/deploy-cloak-rotation.sh; then
+  ok "deploy-cloak-rotation.sh: pre-check — проверяет наличие конфига"
+else
+  fail "deploy-cloak-rotation.sh: нет проверки конфига"
+fi
+
+# ── 40. Поддерживает --rotate-now ────────────────────────────────────────
+if grep -q '\-\-rotate-now' scripts/deploy/deploy-cloak-rotation.sh; then
+  ok "deploy-cloak-rotation.sh: поддерживает --rotate-now"
+else
+  fail "deploy-cloak-rotation.sh: нет --rotate-now"
+fi
+
+# ── 41. Поддерживает --interval ──────────────────────────────────────────
+if grep -q '\-\-interval' scripts/deploy/deploy-cloak-rotation.sh; then
+  ok "deploy-cloak-rotation.sh: поддерживает --interval"
+else
+  fail "deploy-cloak-rotation.sh: нет --interval"
+fi
+
+# ── 42. Подключает lib/common.sh ────────────────────────────────────────
+if grep -q 'source.*lib/common.sh' scripts/deploy/deploy-cloak-rotation.sh; then
+  ok "deploy-cloak-rotation.sh: подключает lib/common.sh"
+else
+  fail "deploy-cloak-rotation.sh: не подключает lib/common.sh"
+fi
+
+echo ""
 echo "Результат: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]] && echo "OK — все проверки прошли" && exit 0
 echo "FAIL — есть ошибки" && exit 1

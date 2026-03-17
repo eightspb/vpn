@@ -55,6 +55,9 @@ python scripts/admin/admin-server.py
 | `scripts/deploy/deploy-vps2.sh` | Деплой только VPS2 |
 | `scripts/deploy/deploy-proxy.sh` | Деплой youtube-proxy |
 | `scripts/deploy/deploy-cloak.sh` | Деплой Cloak TLS-маскировки (SNI yandex.ru) |
+| `scripts/deploy/deploy-cloak-rotation.sh` | Безопасная установка авторотации доменов на работающий Cloak |
+| `scripts/deploy/cloak-rotate-domain.sh` | Серверный скрипт ротации RedirAddr (ставится на VPS1 через cron) |
+| `scripts/deploy/cloak-rotate-client.sh` | Клиентский скрипт ротации ServerName |
 | `backend/main.py` | Entry point FastAPI |
 | `.env` | Конфиг (IP серверов, SSH ключи) — **не коммитить** |
 
@@ -65,6 +68,7 @@ python scripts/admin/admin-server.py
 - **Счётчики трафика**: сбрасываются при перезагрузке VPS — метки говорят "с последней перезагрузки", не за всё время
 - **Cloak TLS-маскировка**: опционально оборачивает AmneziaWG в TLS с SNI=yandex.ru. Провайдер видит обычный HTTPS. Клиенту нужен ck-client + Endpoint=127.0.0.1:1984. Порт 443 TCP на VPS1
 - **Cloak vs AmneziaWG Junk**: Junk обфусцирует пакеты (DPI не распознаёт WG), Cloak маскирует весь трафик под HTTPS. Можно использовать оба одновременно
+- **Cloak авторотация доменов**: cron на VPS1 каждые 6ч меняет RedirAddr среди 16 популярных РУ-доменов (yandex.ru, mail.ru, vk.com, ...). Клиент может ротировать ServerName независимо. Для установки на существующий Cloak: `bash deploy-cloak-rotation.sh` (безопасно, ключи не трогает)
 
 ## Правила проекта
 
