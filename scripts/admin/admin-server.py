@@ -63,6 +63,7 @@ MONITOR_DATA_PATH = PROJECT_ROOT / "scripts" / "monitor" / "vpn-output" / "data.
 MONITOR_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "monitor" / "monitor-web.sh"
 MONITOR_DATA_FALLBACK_PATH = PROJECT_ROOT / "vpn-output" / "data.json"
 CLOAK_KEYS_ENV_PATH = PROJECT_ROOT / "vpn-output" / "cloak-keys.env"
+XRAY_KEYS_ENV_PATH = PROJECT_ROOT / "vpn-output" / "xray-keys.env"
 # Единая папка конфигов пиров — все .conf файлы хранятся и загружаются отсюда
 CONFIGS_DIR = PROJECT_ROOT / "vpn-output"
 MONITOR_STALE_SEC = int(os.environ.get("ADMIN_MONITOR_STALE_SEC", "90"))
@@ -314,6 +315,8 @@ def _ensure_db_migrations() -> None:
             conn.execute("ALTER TABLE peers ADD COLUMN last_downloaded_config_version INTEGER")
         if not _column_exists(conn, "peers", "cloak_uid"):
             conn.execute("ALTER TABLE peers ADD COLUMN cloak_uid TEXT")
+        if not _column_exists(conn, "peers", "xray_uuid"):
+            conn.execute("ALTER TABLE peers ADD COLUMN xray_uuid TEXT")
         conn.execute("UPDATE peers SET config_version = 1 WHERE config_version IS NULL")
         conn.execute("UPDATE peers SET config_download_count = 0 WHERE config_download_count IS NULL")
         conn.commit()
@@ -2282,6 +2285,194 @@ def peers_cloak_awg_config(peer_id: int):
         mimetype="text/plain",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}-cloak.conf"'},
     )
+
+
+# =============================================================================
+# API: XRAY Reality (per-user VLESS+Reality masking)
+# =============================================================================
+
+
+def _get_xray_keys() -> dict[str, str]:
+    """Read XRAY keys from vpn-output/xray-keys.env."""
+    keys: dict[str, str] = {}
+    if XRAY_KEYS_ENV_PATH.is_file():
+        for line in XRAY_KEYS_ENV_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                k, _, v = line.partition("=")
+                keys[k.strip()] = v.strip()
+    return keys
+
+
+def _xray_available() -> bool:
+    """Check if XRAY is deployed (keys file exists and has public key)."""
+    keys = _get_xray_keys()
+    return bool(keys.get("XRAY_PUB"))
+
+
+def _generate_xray_uuid_ssh() -> str:
+    """Generate a new UUID via XRAY on VPS1."""
+    out = _vps1_ssh("/usr/local/bin/xray uuid 2>&1")
+    uid = out.strip()
+    if not uid:
+        raise RuntimeError("xray uuid returned empty result")
+    return uid
+
+
+def _add_xray_client_ssh(uuid: str) -> None:
+    """Add a client UUID to XRAY config on VPS1 and reload."""
+    cmd = (
+        f"python3 -c \""
+        f"import json; "
+        f"c = json.load(open('/etc/xray/config.json')); "
+        f"clients = c['inbounds'][0]['settings']['clients']; "
+        f"ids = [x['id'] for x in clients]; "
+        f"uuid = '{uuid}'; "
+        f"exec('if uuid not in ids:\\n clients.append(dict(id=uuid, flow=\\\"xtls-rprx-vision\\\"))'); "
+        f"json.dump(c, open('/etc/xray/config.json', 'w'), indent=2); "
+        f"\" && systemctl reload xray 2>/dev/null || systemctl restart xray"
+    )
+    _vps1_ssh(cmd)
+
+
+def _remove_xray_client_ssh(uuid: str) -> None:
+    """Remove a client UUID from XRAY config on VPS1 and reload."""
+    cmd = (
+        f"python3 -c \""
+        f"import json; "
+        f"c = json.load(open('/etc/xray/config.json')); "
+        f"c['inbounds'][0]['settings']['clients'] = "
+        f"[x for x in c['inbounds'][0]['settings']['clients'] if x['id'] != '{uuid}']; "
+        f"json.dump(c, open('/etc/xray/config.json', 'w'), indent=2); "
+        f"\" && systemctl reload xray 2>/dev/null || systemctl restart xray"
+    )
+    _vps1_ssh(cmd)
+
+
+def _get_xray_status_ssh() -> dict[str, Any]:
+    """Check XRAY server status on VPS1."""
+    out = _vps1_ssh(
+        "echo STATUS=$(systemctl is-active xray 2>/dev/null || echo inactive); "
+        "if [ -f /etc/xray/config.json ]; then echo CONFIG=present; "
+        "python3 -c \"import json; d=json.load(open('/etc/xray/config.json')); "
+        "rs=d['inbounds'][0]['streamSettings'].get('realitySettings',{}); "
+        "print('DEST=' + rs.get('dest','')); "
+        "print('PORT=' + str(d['inbounds'][0].get('port',''))); "
+        "print('CLIENTS=' + str(len(d['inbounds'][0]['settings']['clients'])))\" 2>/dev/null || true; "
+        "else echo CONFIG=missing; fi"
+    )
+    info: dict[str, Any] = {"active": False, "config": False}
+    for line in out.strip().splitlines():
+        if line.startswith("STATUS="):
+            info["active"] = line.split("=", 1)[1] == "active"
+        elif line.startswith("CONFIG="):
+            info["config"] = line.split("=", 1)[1] == "present"
+        elif line.startswith("DEST="):
+            info["dest"] = line.split("=", 1)[1]
+        elif line.startswith("PORT="):
+            info["port"] = line.split("=", 1)[1]
+        elif line.startswith("CLIENTS="):
+            info["clients_count"] = int(line.split("=", 1)[1])
+    return info
+
+
+def _build_xray_vless_url(uuid: str) -> str:
+    """Build VLESS URL for a peer."""
+    keys = _get_xray_keys()
+    server_ip = (get_env("VPS1_IP") or "").strip()
+    port = keys.get("XRAY_PORT", "443")
+    pub = keys.get("XRAY_PUB", "")
+    domain = keys.get("DEST_DOMAIN", "yahoo.com")
+    sid = keys.get("XRAY_SHORT_ID", "")
+    return (
+        f"vless://{uuid}@{server_ip}:{port}"
+        f"?type=tcp&security=reality&pbk={pub}"
+        f"&fp=chrome&sni={domain}&sid={sid}"
+        f"&flow=xtls-rprx-vision#VPN-XRAY"
+    )
+
+
+@app.route("/api/xray/status", methods=["GET"])
+@auth_required
+def xray_status():
+    """Check if XRAY is available and running."""
+    keys = _get_xray_keys()
+    available = bool(keys.get("XRAY_PUB"))
+    result: dict[str, Any] = {
+        "available": available,
+        "server_ip": (get_env("VPS1_IP") or "").strip(),
+        "dest_domain": keys.get("DEST_DOMAIN", ""),
+        "xray_port": keys.get("XRAY_PORT", "443"),
+    }
+    if available:
+        try:
+            server = _get_xray_status_ssh()
+            result["server"] = server
+        except Exception as exc:
+            result["server"] = {"error": str(exc)}
+    return jsonify(result)
+
+
+@app.route("/api/peers/<int:peer_id>/xray", methods=["POST"])
+@auth_required
+def peers_xray_enable(peer_id: int):
+    """Generate XRAY UUID for a peer (enable XRAY Reality)."""
+    if not _xray_available():
+        return jsonify({"error": "XRAY is not deployed. Run deploy-xray.sh first."}), 400
+    db = get_db()
+    peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
+    if peer is None:
+        return jsonify({"error": "Peer not found"}), 404
+    if peer["xray_uuid"]:
+        return jsonify({"error": "XRAY already enabled for this peer", "xray_uuid": peer["xray_uuid"]}), 409
+    try:
+        uuid = _generate_xray_uuid_ssh()
+        _add_xray_client_ssh(uuid)
+    except Exception as exc:
+        log.error("Failed to enable XRAY: %s", exc)
+        return jsonify({"error": f"Failed to enable XRAY: {exc}"}), 502
+    db.execute("UPDATE peers SET xray_uuid = ?, updated_at = datetime('now') WHERE id = ?", (uuid, peer_id))
+    db.commit()
+    audit("xray_enabled", peer["name"], {"peer_id": peer_id, "xray_uuid": uuid})
+    return jsonify({"xray_uuid": uuid, "vless_url": _build_xray_vless_url(uuid)}), 201
+
+
+@app.route("/api/peers/<int:peer_id>/xray", methods=["DELETE"])
+@auth_required
+def peers_xray_disable(peer_id: int):
+    """Remove XRAY UUID from a peer (disable XRAY Reality)."""
+    db = get_db()
+    peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
+    if peer is None:
+        return jsonify({"error": "Peer not found"}), 404
+    if peer["xray_uuid"]:
+        try:
+            _remove_xray_client_ssh(peer["xray_uuid"])
+        except Exception as exc:
+            log.warning("Failed to remove XRAY client from server: %s", exc)
+    db.execute("UPDATE peers SET xray_uuid = NULL, updated_at = datetime('now') WHERE id = ?", (peer_id,))
+    db.commit()
+    audit("xray_disabled", peer["name"], {"peer_id": peer_id})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/peers/<int:peer_id>/xray/url", methods=["GET"])
+@auth_required
+def peers_xray_url(peer_id: int):
+    """Get VLESS URL for a peer."""
+    if not _xray_available():
+        return jsonify({"error": "XRAY is not deployed"}), 400
+    db = get_db()
+    peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
+    if peer is None:
+        return jsonify({"error": "Peer not found"}), 404
+    if not peer["xray_uuid"]:
+        return jsonify({"error": "XRAY not enabled for this peer. POST /api/peers/<id>/xray first."}), 400
+    vless_url = _build_xray_vless_url(peer["xray_uuid"])
+    audit("xray_url_requested", peer["name"], {"peer_id": peer_id})
+    return jsonify({"vless_url": vless_url, "xray_uuid": peer["xray_uuid"]})
 
 
 # =============================================================================

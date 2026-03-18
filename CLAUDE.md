@@ -6,8 +6,9 @@
 
 ## Архитектура
 
-- **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты) + Cloak (опц.)
+- **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты) + XRAY Reality (опц.) или Cloak (опц.)
 - **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1)
+- **XRAY Reality** (опционально): VLESS+Reality маскировка на VPS1, провайдер видит TLS к yahoo.com. Работает на iOS (Streisand), Android (v2rayNG), desktop
 - **Cloak** (опционально): TLS-маскировка трафика на VPS1, провайдер видит HTTPS к yandex.ru
 - **Admin panel**: `scripts/admin/admin-server.py` (Flask, port 8081) + `scripts/admin/admin.html` (SPA)
 - **Monitor**: `scripts/monitor/monitor-web.sh` (SSH polling → `vpn-output/data.json` каждые 5с)
@@ -30,8 +31,10 @@
 # Деплой (с управляющего компьютера)
 bash manage.sh deploy               # развернуть VPN на VPS1 + VPS2
 bash manage.sh deploy --with-proxy  # + youtube-proxy
+bash manage.sh deploy --with-xray   # + XRAY Reality (VLESS+Reality, iOS/Android/desktop)
 bash manage.sh deploy --with-cloak  # + TLS-маскировка (Cloak, SNI=yandex.ru)
 bash manage.sh deploy --with-cloak --fake-domain mail.ru  # маскировка под другой домен
+bash scripts/deploy/deploy-xray.sh --vps1-ip IP --vps1-key KEY   # только XRAY Reality
 bash scripts/deploy/deploy-cloak.sh --vps1-ip IP --vps1-key KEY  # только Cloak
 
 # Тесты
@@ -54,6 +57,7 @@ python scripts/admin/admin-server.py
 | `scripts/deploy/deploy-vps1.sh` | Деплой только VPS1 |
 | `scripts/deploy/deploy-vps2.sh` | Деплой только VPS2 |
 | `scripts/deploy/deploy-proxy.sh` | Деплой youtube-proxy |
+| `scripts/deploy/deploy-xray.sh` | Деплой XRAY Reality (VLESS+Reality, iOS/Android/desktop) |
 | `scripts/deploy/deploy-cloak.sh` | Деплой Cloak TLS-маскировки (SNI yandex.ru) |
 | `scripts/deploy/deploy-cloak-rotation.sh` | Безопасная установка авторотации доменов на работающий Cloak |
 | `scripts/deploy/cloak-rotate-domain.sh` | Серверный скрипт ротации RedirAddr (ставится на VPS1 через cron) |
@@ -66,6 +70,7 @@ python scripts/admin/admin-server.py
 - **Traffic double-counting**: VPS1 awg0 + VPS2 awg0 измеряют один и тот же тоннель — суммировать нельзя, показывать раздельно по серверам
 - **Monitor autostart**: если `data.json` устарел (>30с), `admin-server.py` запускает monitor автоматически при старте
 - **Счётчики трафика**: сбрасываются при перезагрузке VPS — метки говорят "с последней перезагрузки", не за всё время
+- **XRAY Reality**: VLESS+Reality прокси на VPS1:443. Провайдер видит TLS к yahoo.com. Каждому пользователю — уникальный UUID. Клиент получает VLESS URL для импорта. iOS: Streisand/V2Box, Android: v2rayNG, desktop: v2rayN/Nekoray. Трафик выходит из VPS1
 - **Cloak TLS-маскировка**: опционально оборачивает AmneziaWG в TLS с SNI=yandex.ru. Провайдер видит обычный HTTPS. Клиенту нужен ck-client + Endpoint=127.0.0.1:1984. Порт 443 TCP на VPS1
 - **Cloak vs AmneziaWG Junk**: Junk обфусцирует пакеты (DPI не распознаёт WG), Cloak маскирует весь трафик под HTTPS. Можно использовать оба одновременно
 - **Cloak авторотация доменов**: cron на VPS1 каждые 6ч меняет RedirAddr среди 16 популярных РУ-доменов (yandex.ru, mail.ru, vk.com, ...). Клиент может ротировать ServerName независимо. Для установки на существующий Cloak: `bash deploy-cloak-rotation.sh` (безопасно, ключи не трогает)
