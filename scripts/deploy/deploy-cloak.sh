@@ -230,36 +230,25 @@ iptables -C INPUT -p tcp --dport ${CLOAK_PORT} -j ACCEPT 2>/dev/null || \
 # Освобождаем порт ${CLOAK_PORT} если занят (nginx и т.п.)
 if ss -tlnp | grep -q ':${CLOAK_PORT} '; then
     echo \"PORT_CONFLICT=true\"
-    # Определяем что занимает порт
     BLOCKING_PROC=\$(ss -tlnp | grep ':${CLOAK_PORT} ' | grep -oP '\"\\K[^\"]+' | head -1)
     echo \"PORT_BLOCKED_BY=\${BLOCKING_PROC}\"
     if [[ \"\$BLOCKING_PROC\" == \"nginx\" ]]; then
-        # Отключаем nginx на 443: убираем listen 443 из конфигов
-        # Сохраняем бэкап и останавливаем nginx
-        if nginx -t 2>/dev/null; then
-            # Удаляем конфиги слушающие 443
-            for f in /etc/nginx/sites-enabled/*; do
-                if [[ -f \"\$f\" ]] && grep -q 'listen.*443' \"\$f\"; then
-                    rm -f \"\$f\"
-                    echo \"NGINX_DISABLED_SITE=\$(basename \$f)\"
-                fi
-            done
-            # Если после удаления конфигов nginx не нужен — останавливаем
-            if [[ -z \"\$(ls /etc/nginx/sites-enabled/ 2>/dev/null)\" ]]; then
-                systemctl stop nginx
-                systemctl disable nginx
-                echo \"NGINX_STOPPED=true\"
-            else
-                systemctl reload nginx 2>/dev/null || systemctl restart nginx
-                echo \"NGINX_RELOADED=true\"
-            fi
+        # nginx использовался как reverse-proxy для админки (443 → 8443).
+        # Cloak забирает порт 443; админка продолжит работать напрямую на 8443.
+
+        # Открываем прямой доступ к админке на 8443 (idempotent)
+        iptables -C INPUT -p tcp --dport 8443 -j ACCEPT 2>/dev/null || \
+            iptables -I INPUT 5 -p tcp --dport 8443 -j ACCEPT
+        # Сохраняем правила
+        if command -v netfilter-persistent >/dev/null 2>&1; then
+            netfilter-persistent save 2>/dev/null || true
         fi
-        # Если порт всё ещё занят — принудительно останавливаем nginx
-        if ss -tlnp | grep -q ':${CLOAK_PORT} '; then
-            systemctl stop nginx
-            systemctl disable nginx
-            echo \"NGINX_FORCE_STOPPED=true\"
-        fi
+        echo \"ADMIN_PORT_8443_OPENED=true\"
+
+        # Останавливаем nginx — он больше не нужен на 443
+        systemctl stop nginx
+        systemctl disable nginx
+        echo \"NGINX_STOPPED=true\"
     else
         echo \"PORT_CONFLICT_UNRESOLVED=true\"
     fi
@@ -495,3 +484,11 @@ echo -e "  ${GREEN}Запуск на клиенте:${NC}"
 echo -e "  ${BOLD}ck-client -c ck-client.json -s ${VPS1_IP} -p ${CLOAK_PORT} -l 127.0.0.1:1984 -u${NC}"
 echo -e "  Затем в AmneziaWG: Endpoint = 127.0.0.1:1984"
 echo ""
+
+# Показываем предупреждение если nginx был остановлен
+NGINX_WAS_STOPPED=$(echo "${CK_KEYS:-}" | grep -c "NGINX_STOPPED=true" || true)
+if [[ "$NGINX_WAS_STOPPED" -gt 0 ]]; then
+    echo -e "  ${YELLOW}⚠ nginx остановлен и отключён (был reverse-proxy на 443)${NC}"
+    echo -e "  ${YELLOW}  Админка доступна напрямую: ${BOLD}https://${VPS1_IP}:8443${NC}"
+    echo ""
+fi
