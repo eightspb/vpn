@@ -2435,7 +2435,8 @@ function renderPeersContent() {
       const cfgRuntimeBadge = cfgRuntimeActive
         ? `<span class="badge badge-active" style="font-size:10px" title="${esc(cfgRuntimeHint)}">live</span>`
         : `<span class="badge badge-inactive" style="font-size:10px" title="${esc(cfgRuntimeHint)}">inactive</span>`;
-      const cfgMeta = `${cfgRuntimeBadge}${cfgStatus}<span style="margin-left:6px;color:var(--text-secondary)">v${esc(p.config_version ?? 1)} / ↓${cfgCount}</span>`;
+      const cloakBadge = p.cloak_uid ? '<span class="badge badge-active" style="font-size:10px;margin-right:4px" title="Cloak TLS enabled">cloak</span>' : '';
+      const cfgMeta = `${cloakBadge}${cfgRuntimeBadge}${cfgStatus}<span style="margin-left:6px;color:var(--text-secondary)">v${esc(p.config_version ?? 1)} / ↓${cfgCount}</span>`;
       return `<tr>
         <td><strong>${esc(p.name)}</strong></td>
         <td class="mono">${esc(p.ip)}</td>
@@ -2599,6 +2600,60 @@ async function downloadConfigByIp(ip) {
     URL.revokeObjectURL(url);
     toast('Config downloaded');
     await loadPeers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ====== Cloak (TLS masking) ======
+async function enableCloak(peerId) {
+  try {
+    const data = await api('POST', `/api/peers/${peerId}/cloak`);
+    toast('Cloak enabled — UID generated');
+    loadPeers();
+    return data;
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function disableCloak(peerId) {
+  try {
+    await api('DELETE', `/api/peers/${peerId}/cloak`);
+    toast('Cloak disabled');
+    loadPeers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function downloadCloakConfig(peerId) {
+  try {
+    const res = await fetch(mapApiPath(`/api/peers/${peerId}/cloak/config`), {
+      credentials: 'include',
+    });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed'); }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="?(.+?)"?$/);
+    const filename = match ? match[1] : `ck-client-${peerId}.json`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    toast('Cloak config (ck-client.json) downloaded');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function downloadCloakAwgConfig(peerId) {
+  try {
+    const res = await fetch(mapApiPath(`/api/peers/${peerId}/cloak/awg-config`), {
+      credentials: 'include',
+    });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed'); }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="?(.+?)"?$/);
+    const filename = match ? match[1] : `peer-cloak-${peerId}.conf`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    toast('AmneziaWG config for Cloak downloaded (Endpoint=127.0.0.1:1984)');
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -2823,6 +2878,25 @@ async function openEditPeerModal(id) {
         <div class="form-group">
           <label class="form-label">Preshared Key</label>
           <input class="form-input mono" id="edit-preshared-key" type="text" value="${esc(peer.preshared_key || '')}" placeholder="Optional">
+        </div>
+        <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border)">
+          <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px">Cloak (TLS masking)</div>
+          ${peer.cloak_uid
+            ? `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">
+                <span class="badge badge-active" style="font-size:10px">enabled</span>
+                UID: <code style="font-size:11px">${esc(peer.cloak_uid)}</code>
+              </div>
+              <div class="btn-group" style="gap:6px">
+                <button class="btn" style="font-size:12px;padding:4px 10px" onclick="downloadCloakConfig(${id})">ck-client.json</button>
+                <button class="btn" style="font-size:12px;padding:4px 10px" onclick="downloadCloakAwgConfig(${id})">AWG config (Cloak)</button>
+                <button class="btn" style="font-size:12px;padding:4px 10px;color:var(--danger)" onclick="disableCloak(${id});closeModal('edit-peer-modal')">Disable Cloak</button>
+              </div>`
+            : `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">
+                <span class="badge badge-disabled" style="font-size:10px">disabled</span>
+                Cloak wraps VPN traffic in TLS (provider sees HTTPS to yandex.ru)
+              </div>
+              <button class="btn btn-primary" style="font-size:12px;padding:4px 10px" onclick="enableCloak(${id});closeModal('edit-peer-modal')">Enable Cloak</button>`
+          }
         </div>
         <div style="margin-top:8px;padding:10px;background:var(--bg-input);border-radius:8px;font-size:12px;color:var(--text-secondary)">
           <div>IP: <strong style="color:var(--text-primary)">${esc(peer.ip)}</strong></div>

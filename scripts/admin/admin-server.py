@@ -62,6 +62,7 @@ PEERS_JSON_PATH = PROJECT_ROOT / "vpn-output" / "peers.json"
 MONITOR_DATA_PATH = PROJECT_ROOT / "scripts" / "monitor" / "vpn-output" / "data.json"
 MONITOR_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "monitor" / "monitor-web.sh"
 MONITOR_DATA_FALLBACK_PATH = PROJECT_ROOT / "vpn-output" / "data.json"
+CLOAK_KEYS_ENV_PATH = PROJECT_ROOT / "vpn-output" / "cloak-keys.env"
 # Единая папка конфигов пиров — все .conf файлы хранятся и загружаются отсюда
 CONFIGS_DIR = PROJECT_ROOT / "vpn-output"
 MONITOR_STALE_SEC = int(os.environ.get("ADMIN_MONITOR_STALE_SEC", "90"))
@@ -311,6 +312,8 @@ def _ensure_db_migrations() -> None:
             conn.execute("ALTER TABLE peers ADD COLUMN last_config_downloaded_at TEXT")
         if not _column_exists(conn, "peers", "last_downloaded_config_version"):
             conn.execute("ALTER TABLE peers ADD COLUMN last_downloaded_config_version INTEGER")
+        if not _column_exists(conn, "peers", "cloak_uid"):
+            conn.execute("ALTER TABLE peers ADD COLUMN cloak_uid TEXT")
         conn.execute("UPDATE peers SET config_version = 1 WHERE config_version IS NULL")
         conn.execute("UPDATE peers SET config_download_count = 0 WHERE config_download_count IS NULL")
         conn.commit()
@@ -2087,6 +2090,197 @@ def peers_stats():
         "by_status": {r["status"]: r["cnt"] for r in by_status},
         "by_type": {r["type"]: r["cnt"] for r in by_type},
     })
+
+
+# =============================================================================
+# API: Cloak (per-user TLS masking)
+# =============================================================================
+
+
+def _get_cloak_keys() -> dict[str, str]:
+    """Read Cloak keys from vpn-output/cloak-keys.env."""
+    keys: dict[str, str] = {}
+    if CLOAK_KEYS_ENV_PATH.is_file():
+        for line in CLOAK_KEYS_ENV_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                k, _, v = line.partition("=")
+                keys[k.strip()] = v.strip()
+    return keys
+
+
+def _cloak_available() -> bool:
+    """Check if Cloak is deployed (keys file exists and has public key)."""
+    keys = _get_cloak_keys()
+    return bool(keys.get("CK_PUB"))
+
+
+def _generate_cloak_uid_ssh() -> str:
+    """Generate a new Cloak UID via SSH on VPS1."""
+    out = _vps1_ssh("/usr/local/bin/ck-server -uid 2>&1 | awk '{print $NF}'")
+    uid = out.strip()
+    if not uid:
+        raise RuntimeError("ck-server -uid returned empty result")
+    return uid
+
+
+def _get_cloak_status_ssh() -> dict[str, Any]:
+    """Check Cloak server status on VPS1."""
+    out = _vps1_ssh(
+        "echo STATUS=$(systemctl is-active cloak-server 2>/dev/null || echo inactive); "
+        "if [ -f /etc/cloak/ckserver.json ]; then echo CONFIG=present; "
+        "cat /etc/cloak/ckserver.json 2>/dev/null | "
+        "python3 -c \"import sys,json; d=json.load(sys.stdin); "
+        "print('REDIR=' + d.get('RedirAddr','')); "
+        "print('PORT=' + str(d.get('BindAddr',[''])[0]))\" 2>/dev/null || true; "
+        "else echo CONFIG=missing; fi"
+    )
+    info: dict[str, Any] = {"active": False, "config": False}
+    for line in out.strip().splitlines():
+        if line.startswith("STATUS="):
+            info["active"] = line.split("=", 1)[1] == "active"
+        elif line.startswith("CONFIG="):
+            info["config"] = line.split("=", 1)[1] == "present"
+        elif line.startswith("REDIR="):
+            info["redir_addr"] = line.split("=", 1)[1]
+        elif line.startswith("PORT="):
+            info["port"] = line.split("=", 1)[1]
+    return info
+
+
+def _build_cloak_client_config(uid: str) -> dict[str, Any]:
+    """Build ck-client.json content for a peer."""
+    keys = _get_cloak_keys()
+    return {
+        "Transport": "direct",
+        "ProxyMethod": "awg",
+        "EncryptionMethod": "aes-gcm",
+        "UID": uid,
+        "PublicKey": keys.get("CK_PUB", ""),
+        "ServerName": keys.get("FAKE_DOMAIN", "yandex.ru"),
+        "NumConn": 4,
+        "BrowserSig": "chrome",
+        "StreamTimeout": 300,
+    }
+
+
+@app.route("/api/cloak/status", methods=["GET"])
+@auth_required
+def cloak_status():
+    """Check if Cloak is available and running."""
+    keys = _get_cloak_keys()
+    available = bool(keys.get("CK_PUB"))
+    result: dict[str, Any] = {
+        "available": available,
+        "fake_domain": keys.get("FAKE_DOMAIN", ""),
+        "cloak_port": keys.get("CLOAK_PORT", "443"),
+    }
+    if available:
+        try:
+            server = _get_cloak_status_ssh()
+            result["server"] = server
+        except Exception as exc:
+            result["server"] = {"error": str(exc)}
+    return jsonify(result)
+
+
+@app.route("/api/peers/<int:peer_id>/cloak", methods=["POST"])
+@auth_required
+def peers_cloak_enable(peer_id: int):
+    """Generate Cloak UID for a peer (enable Cloak)."""
+    if not _cloak_available():
+        return jsonify({"error": "Cloak is not deployed. Run deploy-cloak.sh first."}), 400
+    db = get_db()
+    peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
+    if peer is None:
+        return jsonify({"error": "Peer not found"}), 404
+    if peer["cloak_uid"]:
+        return jsonify({"error": "Cloak already enabled for this peer", "cloak_uid": peer["cloak_uid"]}), 409
+    try:
+        uid = _generate_cloak_uid_ssh()
+    except Exception as exc:
+        log.error("Failed to generate Cloak UID: %s", exc)
+        return jsonify({"error": f"Failed to generate Cloak UID: {exc}"}), 502
+    db.execute("UPDATE peers SET cloak_uid = ?, updated_at = datetime('now') WHERE id = ?", (uid, peer_id))
+    db.commit()
+    audit("cloak_enabled", peer["name"], {"peer_id": peer_id, "cloak_uid": uid})
+    return jsonify({"cloak_uid": uid, "ck_client_config": _build_cloak_client_config(uid)}), 201
+
+
+@app.route("/api/peers/<int:peer_id>/cloak", methods=["DELETE"])
+@auth_required
+def peers_cloak_disable(peer_id: int):
+    """Remove Cloak UID from a peer (disable Cloak)."""
+    db = get_db()
+    peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
+    if peer is None:
+        return jsonify({"error": "Peer not found"}), 404
+    db.execute("UPDATE peers SET cloak_uid = NULL, updated_at = datetime('now') WHERE id = ?", (peer_id,))
+    db.commit()
+    audit("cloak_disabled", peer["name"], {"peer_id": peer_id})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/peers/<int:peer_id>/cloak/config", methods=["GET"])
+@auth_required
+def peers_cloak_config(peer_id: int):
+    """Download ck-client.json for a peer."""
+    if not _cloak_available():
+        return jsonify({"error": "Cloak is not deployed"}), 400
+    db = get_db()
+    peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
+    if peer is None:
+        return jsonify({"error": "Peer not found"}), 404
+    if not peer["cloak_uid"]:
+        return jsonify({"error": "Cloak not enabled for this peer. POST /api/peers/<id>/cloak first."}), 400
+    config = _build_cloak_client_config(peer["cloak_uid"])
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", peer["name"])
+    content = json.dumps(config, indent=2, ensure_ascii=False)
+    audit("cloak_config_downloaded", peer["name"], {"peer_id": peer_id})
+    return Response(
+        content,
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="ck-client-{safe_name}.json"'},
+    )
+
+
+@app.route("/api/peers/<int:peer_id>/cloak/awg-config", methods=["GET"])
+@auth_required
+def peers_cloak_awg_config(peer_id: int):
+    """Download AmneziaWG .conf modified for Cloak (Endpoint=127.0.0.1:1984)."""
+    db = get_db()
+    peer = db.execute("SELECT * FROM peers WHERE id = ?", (peer_id,)).fetchone()
+    if peer is None:
+        return jsonify({"error": "Peer not found"}), 404
+    if not peer["cloak_uid"]:
+        return jsonify({"error": "Cloak not enabled for this peer"}), 400
+    if not peer["private_key"]:
+        return jsonify({"error": "Peer has no private key"}), 400
+    settings = _get_all_settings(db)
+    try:
+        server_info = _get_server_info()
+        content = _build_config(
+            peer["private_key"], peer["ip"], peer["preshared_key"] or "",
+            peer["type"], settings, server_info,
+        )
+    except Exception as exc:
+        return jsonify({"error": f"Failed to build config: {exc}"}), 500
+    # Replace Endpoint with localhost for Cloak tunnel
+    content = re.sub(
+        r"^Endpoint\s*=\s*.*$",
+        "Endpoint = 127.0.0.1:1984",
+        content,
+        flags=re.MULTILINE,
+    )
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", peer["name"])
+    audit("cloak_awg_config_downloaded", peer["name"], {"peer_id": peer_id})
+    return Response(
+        content,
+        mimetype="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}-cloak.conf"'},
+    )
 
 
 # =============================================================================
