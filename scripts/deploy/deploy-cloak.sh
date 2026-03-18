@@ -171,15 +171,18 @@ chmod +x /usr/local/bin/ck-server
 # Генерируем ключи (keypair для шифрования Cloak)
 mkdir -p /etc/cloak
 CK_KEYPAIR=\$(/usr/local/bin/ck-server -key 2>&1)
-# Формат: '  priv=...\\n  pub=...'
-CK_PRIV=\$(echo \"\$CK_KEYPAIR\" | grep -oP '(?<=priv=)\\S+' | head -1)
-CK_PUB=\$(echo \"\$CK_KEYPAIR\" | grep -oP '(?<=pub=)\\S+' | head -1)
+# Формат вывода ck-server -key (v2.7+):
+#   Your PUBLIC key is:                      <base64>
+#   Your PRIVATE key is (keep it secret):    <base64>
+CK_PUB=\$(echo \"\$CK_KEYPAIR\" | grep 'PUBLIC' | awk '{print \$NF}')
+CK_PRIV=\$(echo \"\$CK_KEYPAIR\" | grep 'PRIVATE' | awk '{print \$NF}')
 
 # Генерируем UID для клиента
-CK_UID=\$(/usr/local/bin/ck-server -uid 2>&1 | tr -d '[:space:]')
+# Формат вывода: Your UID is: <base64>
+CK_UID=\$(/usr/local/bin/ck-server -uid 2>&1 | awk '{print \$NF}')
 
 # Генерируем admin UID
-CK_ADMIN_UID=\$(/usr/local/bin/ck-server -uid 2>&1 | tr -d '[:space:]')
+CK_ADMIN_UID=\$(/usr/local/bin/ck-server -uid 2>&1 | awk '{print \$NF}')
 
 echo \"CK_PRIV=\${CK_PRIV}\"
 echo \"CK_PUB=\${CK_PUB}\"

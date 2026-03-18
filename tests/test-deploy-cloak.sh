@@ -71,6 +71,29 @@ else
   fail "deploy-cloak.sh: нет генерации UID"
 fi
 
+# ── 6b. Парсинг вывода ck-server v2.7+ ────────────────────────────────────
+# ck-server -key выводит: "Your PUBLIC key is:  <base64>" / "Your PRIVATE key is (keep it secret):  <base64>"
+# ck-server -uid выводит: "Your UID is: <base64>"
+# Скрипт должен использовать awk '{print $NF}', а не grep -oP '(?<=priv=)'
+if grep -q "grep.*'(?<=priv=)" scripts/deploy/deploy-cloak.sh; then
+  fail "deploy-cloak.sh: использует устаревший парсинг ck-server (priv=...)"
+else
+  ok "deploy-cloak.sh: парсинг ck-server НЕ использует устаревший формат priv=..."
+fi
+
+if grep -q "awk.*print.*NF" scripts/deploy/deploy-cloak.sh; then
+  ok "deploy-cloak.sh: парсит ключи через awk '{print \$NF}' (формат v2.7+)"
+else
+  fail "deploy-cloak.sh: нет парсинга через awk NF"
+fi
+
+# Проверяем что UID тоже парсится через awk, а не tr -d '[:space:]'
+if grep -q "ck-server -uid.*tr -d" scripts/deploy/deploy-cloak.sh; then
+  fail "deploy-cloak.sh: UID парсится через tr -d (склеивает 'YourUIDis:value')"
+else
+  ok "deploy-cloak.sh: UID НЕ парсится через tr -d (корректно)"
+fi
+
 # ── 7. Конфигурация сервера ───────────────────────────────────────────────
 if grep -q 'ckserver.json' scripts/deploy/deploy-cloak.sh; then
   ok "deploy-cloak.sh: создаёт ckserver.json"
