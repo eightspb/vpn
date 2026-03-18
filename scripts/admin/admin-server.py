@@ -2174,6 +2174,7 @@ def cloak_status():
     available = bool(keys.get("CK_PUB"))
     result: dict[str, Any] = {
         "available": available,
+        "server_ip": (get_env("VPS1_IP") or "").strip(),
         "fake_domain": keys.get("FAKE_DOMAIN", ""),
         "cloak_port": keys.get("CLOAK_PORT", "443"),
     }

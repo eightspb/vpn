@@ -2657,6 +2657,82 @@ async function downloadCloakAwgConfig(peerId) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+let _cloakStatus = null;
+async function _fetchCloakStatus() {
+  if (!_cloakStatus) {
+    try { _cloakStatus = await api('GET', '/api/cloak/status'); } catch(e) { _cloakStatus = {}; }
+  }
+  return _cloakStatus;
+}
+
+async function showCloakSetupGuide(peerName) {
+  const cs = await _fetchCloakStatus();
+  const ip = cs.server_ip || 'SERVER_IP';
+  const port = cs.cloak_port || '443';
+  const domain = cs.fake_domain || 'yandex.ru';
+
+  openModal('cloak-guide-modal', `<div class="modal modal-lg">
+    <div class="modal-header">
+      <div class="modal-title">Cloak Setup — ${esc(peerName)}</div>
+      <button class="modal-close" onclick="closeModal('cloak-guide-modal')">✕</button>
+    </div>
+    <div class="modal-body" style="font-size:13px;line-height:1.6">
+      <div style="padding:10px 14px;background:var(--bg-input);border-radius:8px;margin-bottom:16px;border-left:3px solid var(--info)">
+        <strong>What Cloak does:</strong> wraps VPN traffic in TLS. Your ISP sees regular HTTPS to <code>${esc(domain)}</code> instead of VPN packets.
+      </div>
+
+      <p>Client needs <strong>2 files</strong> from admin panel (Edit peer → Cloak section):</p>
+      <ol>
+        <li><code>ck-client-${esc(peerName)}.json</code> — Cloak config (unique per user)</li>
+        <li><code>${esc(peerName)}-cloak.conf</code> — AmneziaWG config with <code>Endpoint=127.0.0.1:1984</code></li>
+      </ol>
+
+      <h3 style="margin:18px 0 8px;font-size:14px;border-bottom:1px solid var(--border);padding-bottom:4px">Windows / macOS / Linux</h3>
+      <ol>
+        <li>Download <a href="https://github.com/cbeuw/Cloak/releases" target="_blank" style="color:var(--info)">ck-client</a> for your platform</li>
+        <li>Place <code>ck-client</code> and <code>ck-client-${esc(peerName)}.json</code> in one folder</li>
+        <li>Run in terminal:
+          <pre style="background:var(--bg-input);padding:8px 12px;border-radius:6px;margin:6px 0;overflow-x:auto;font-size:12px">ck-client -c ck-client-${esc(peerName)}.json -s ${esc(ip)} -p ${esc(port)} -l 127.0.0.1:1984 -u</pre>
+        </li>
+        <li>Import <code>${esc(peerName)}-cloak.conf</code> into AmneziaVPN</li>
+        <li>Connect — done!</li>
+      </ol>
+
+      <h3 style="margin:18px 0 8px;font-size:14px;border-bottom:1px solid var(--border);padding-bottom:4px">Android (AmneziaVPN)</h3>
+      <ol>
+        <li>Install <strong>Cloak</strong> app from <a href="https://f-droid.org/packages/com.github.nicman23.cloak/" target="_blank" style="color:var(--info)">F-Droid</a> or APK from GitHub releases</li>
+        <li>Import <code>ck-client-${esc(peerName)}.json</code> in Cloak app</li>
+        <li>Set: Server = <code>${esc(ip)}</code>, Port = <code>${esc(port)}</code>, Local port = <code>1984</code></li>
+        <li>Start Cloak</li>
+        <li>Import <code>${esc(peerName)}-cloak.conf</code> into AmneziaVPN</li>
+        <li>Connect VPN</li>
+      </ol>
+      <div style="padding:10px 14px;background:var(--bg-input);border-radius:8px;margin-top:12px;font-size:12px;color:var(--text-secondary)">
+        <strong>Note:</strong> on Android both Cloak and AmneziaVPN must run simultaneously.<br>
+        Start Cloak first, then AmneziaVPN.
+      </div>
+
+      <h3 style="margin:18px 0 8px;font-size:14px;border-bottom:1px solid var(--border);padding-bottom:4px">iOS</h3>
+      <div style="padding:10px 14px;background:var(--bg-input);border-radius:8px;font-size:12px;color:var(--text-secondary)">
+        iOS does not have a standalone Cloak client app. Use AmneziaVPN without Cloak (regular <code>.conf</code> file) or connect via a PC/router with Cloak.
+      </div>
+
+      <h3 style="margin:18px 0 8px;font-size:14px;border-bottom:1px solid var(--border);padding-bottom:4px">How it works</h3>
+      <pre style="background:var(--bg-input);padding:10px 14px;border-radius:6px;font-size:12px;overflow-x:auto;line-height:1.5">AmneziaVPN (Endpoint=127.0.0.1:1984)
+    ↓ UDP
+ck-client (localhost:1984)
+    ↓ TLS (SNI=${esc(domain)})
+VPS ${esc(ip)}:${esc(port)} → ck-server → AmneziaWG
+    ↓
+Internet</pre>
+      <p style="font-size:12px;color:var(--text-secondary);margin-top:8px">ISP sees: HTTPS connection to ${esc(ip)} with SNI=${esc(domain)}</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('cloak-guide-modal')">Close</button>
+    </div>
+  </div>`);
+}
+
 async function importAndEditPeerByIp(ip) {
   try {
     const pathIp = ip.replace(/\./g, '_');
@@ -2886,9 +2962,10 @@ async function openEditPeerModal(id) {
                 <span class="badge badge-active" style="font-size:10px">enabled</span>
                 UID: <code style="font-size:11px">${esc(peer.cloak_uid)}</code>
               </div>
-              <div class="btn-group" style="gap:6px">
+              <div class="btn-group" style="gap:6px;flex-wrap:wrap">
                 <button class="btn" style="font-size:12px;padding:4px 10px" onclick="downloadCloakConfig(${id})">ck-client.json</button>
                 <button class="btn" style="font-size:12px;padding:4px 10px" onclick="downloadCloakAwgConfig(${id})">AWG config (Cloak)</button>
+                <button class="btn" style="font-size:12px;padding:4px 10px" onclick="showCloakSetupGuide('${esc(peer.name).replace(/'/g, "\\'")}')">Setup Guide</button>
                 <button class="btn" style="font-size:12px;padding:4px 10px;color:var(--danger)" onclick="disableCloak(${id});closeModal('edit-peer-modal')">Disable Cloak</button>
               </div>`
             : `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">
