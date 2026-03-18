@@ -8,7 +8,7 @@
 
 - **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты) + XRAY Reality (опц.) или Cloak (опц.)
 - **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1)
-- **XRAY Reality** (опционально): VLESS+Reality маскировка на VPS1, провайдер видит TLS к yahoo.com. Работает на iOS (Streisand), Android (v2rayNG), desktop
+- **XRAY Reality** (опционально): VLESS+Reality маскировка на VPS1, провайдер видит TLS к www.microsoft.com. Работает на iOS (Streisand), Android (v2rayNG), desktop
 - **Cloak** (опционально): TLS-маскировка трафика на VPS1, провайдер видит HTTPS к yandex.ru
 - **Admin panel**: `scripts/admin/admin-server.py` (Flask, port 8081) + `scripts/admin/admin.html` (SPA)
 - **Monitor**: `scripts/monitor/monitor-web.sh` (SSH polling → `vpn-output/data.json` каждые 5с)
@@ -70,7 +70,7 @@ python scripts/admin/admin-server.py
 - **Traffic double-counting**: VPS1 awg0 + VPS2 awg0 измеряют один и тот же тоннель — суммировать нельзя, показывать раздельно по серверам
 - **Monitor autostart**: если `data.json` устарел (>30с), `admin-server.py` запускает monitor автоматически при старте
 - **Счётчики трафика**: сбрасываются при перезагрузке VPS — метки говорят "с последней перезагрузки", не за всё время
-- **XRAY Reality**: VLESS+Reality прокси на VPS1:443. Провайдер видит TLS к yahoo.com. Каждому пользователю — уникальный UUID. Клиент получает VLESS URL для импорта. iOS: Streisand/V2Box, Android: v2rayNG, desktop: v2rayN/Nekoray. Трафик выходит из VPS1
+- **XRAY Reality**: VLESS+Reality прокси на VPS1:443. Провайдер видит TLS к www.microsoft.com (настраивается --dest-domain). Каждому пользователю — уникальный UUID. Клиент получает VLESS URL для импорта. iOS: Streisand/V2Box, Android: v2rayNG, desktop: v2rayN/Nekoray. Трафик выходит из VPS1
 - **Cloak TLS-маскировка**: опционально оборачивает AmneziaWG в TLS с SNI=yandex.ru. Провайдер видит обычный HTTPS. Клиенту нужен ck-client + Endpoint=127.0.0.1:1984. Порт 443 TCP на VPS1
 - **Cloak vs AmneziaWG Junk**: Junk обфусцирует пакеты (DPI не распознаёт WG), Cloak маскирует весь трафик под HTTPS. Можно использовать оба одновременно
 - **Cloak авторотация доменов**: cron на VPS1 каждые 6ч меняет RedirAddr среди 16 популярных РУ-доменов (yandex.ru, mail.ru, vk.com, ...). Клиент может ротировать ServerName независимо. Для установки на существующий Cloak: `bash deploy-cloak-rotation.sh` (безопасно, ключи не трогает)
