@@ -132,6 +132,13 @@ else
   fail "deploy-cloak.sh: нет зависимости от awg1"
 fi
 
+# ── 8b. Освобождение порта при конфликте (nginx и т.п.) ──────────────────
+if grep -q 'PORT_CONFLICT\|BLOCKING_PROC\|ss -tlnp.*CLOAK_PORT' scripts/deploy/deploy-cloak.sh; then
+  ok "deploy-cloak.sh: обрабатывает конфликт порта (nginx на 443)"
+else
+  fail "deploy-cloak.sh: нет обработки конфликта порта"
+fi
+
 # ── 9. Iptables — открытие порта ─────────────────────────────────────────
 if grep -q 'iptables.*INPUT.*tcp.*CLOAK_PORT.*ACCEPT' scripts/deploy/deploy-cloak.sh; then
   ok "deploy-cloak.sh: открывает TCP порт в iptables"

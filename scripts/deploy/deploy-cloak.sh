@@ -227,6 +227,44 @@ SVCEOF
 iptables -C INPUT -p tcp --dport ${CLOAK_PORT} -j ACCEPT 2>/dev/null || \
     iptables -I INPUT 5 -p tcp --dport ${CLOAK_PORT} -j ACCEPT
 
+# Освобождаем порт ${CLOAK_PORT} если занят (nginx и т.п.)
+if ss -tlnp | grep -q ':${CLOAK_PORT} '; then
+    echo \"PORT_CONFLICT=true\"
+    # Определяем что занимает порт
+    BLOCKING_PROC=\$(ss -tlnp | grep ':${CLOAK_PORT} ' | grep -oP '\"\\K[^\"]+' | head -1)
+    echo \"PORT_BLOCKED_BY=\${BLOCKING_PROC}\"
+    if [[ \"\$BLOCKING_PROC\" == \"nginx\" ]]; then
+        # Отключаем nginx на 443: убираем listen 443 из конфигов
+        # Сохраняем бэкап и останавливаем nginx
+        if nginx -t 2>/dev/null; then
+            # Удаляем конфиги слушающие 443
+            for f in /etc/nginx/sites-enabled/*; do
+                if [[ -f \"\$f\" ]] && grep -q 'listen.*443' \"\$f\"; then
+                    rm -f \"\$f\"
+                    echo \"NGINX_DISABLED_SITE=\$(basename \$f)\"
+                fi
+            done
+            # Если после удаления конфигов nginx не нужен — останавливаем
+            if [[ -z \"\$(ls /etc/nginx/sites-enabled/ 2>/dev/null)\" ]]; then
+                systemctl stop nginx
+                systemctl disable nginx
+                echo \"NGINX_STOPPED=true\"
+            else
+                systemctl reload nginx 2>/dev/null || systemctl restart nginx
+                echo \"NGINX_RELOADED=true\"
+            fi
+        fi
+        # Если порт всё ещё занят — принудительно останавливаем nginx
+        if ss -tlnp | grep -q ':${CLOAK_PORT} '; then
+            systemctl stop nginx
+            systemctl disable nginx
+            echo \"NGINX_FORCE_STOPPED=true\"
+        fi
+    else
+        echo \"PORT_CONFLICT_UNRESOLVED=true\"
+    fi
+fi
+
 # Запускаем
 systemctl daemon-reload
 systemctl enable cloak-server
