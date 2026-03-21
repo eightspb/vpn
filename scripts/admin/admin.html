@@ -2436,8 +2436,7 @@ function renderPeersContent() {
         ? `<span class="badge badge-active" style="font-size:10px" title="${esc(cfgRuntimeHint)}">live</span>`
         : `<span class="badge badge-inactive" style="font-size:10px" title="${esc(cfgRuntimeHint)}">inactive</span>`;
       const cloakBadge = p.cloak_uid ? '<span class="badge badge-active" style="font-size:10px;margin-right:4px" title="Cloak TLS enabled">cloak</span>' : '';
-      const xrayBadge = p.xray_uuid ? '<span class="badge badge-active" style="font-size:10px;margin-right:4px;background:#7c3aed;color:#fff" title="XRAY Reality enabled">xray</span>' : '';
-      const cfgMeta = `${xrayBadge}${cloakBadge}${cfgRuntimeBadge}${cfgStatus}<span style="margin-left:6px;color:var(--text-secondary)">v${esc(p.config_version ?? 1)} / ↓${cfgCount}</span>`;
+      const cfgMeta = `${cloakBadge}${cfgRuntimeBadge}${cfgStatus}<span style="margin-left:6px;color:var(--text-secondary)">v${esc(p.config_version ?? 1)} / ↓${cfgCount}</span>`;
       return `<tr>
         <td><strong>${esc(p.name)}</strong></td>
         <td class="mono">${esc(p.ip)}</td>
@@ -2734,57 +2733,6 @@ Internet</pre>
   </div>`);
 }
 
-// ====== XRAY Reality (VLESS+Reality masking) ======
-async function enableXray(peerId) {
-    try {
-        const data = await api('POST', `/api/peers/${peerId}/xray`);
-        toast('XRAY Reality enabled — UUID generated');
-        loadPeers();
-    } catch (e) { toast(e.message, 'error'); }
-}
-async function disableXray(peerId) {
-    try {
-        await api('DELETE', `/api/peers/${peerId}/xray`);
-        toast('XRAY Reality disabled');
-        loadPeers();
-    } catch (e) { toast(e.message, 'error'); }
-}
-async function showXrayUrl(peerId, peerName) {
-    try {
-        const data = await api('GET', `/api/peers/${peerId}/xray/url`);
-        const url = data.vless_url;
-        openModal('xray-url-modal', `<div class="modal">
-            <div class="modal-header">
-                <div class="modal-title">XRAY Reality — ${esc(peerName)}</div>
-                <button class="modal-close" onclick="closeModal('xray-url-modal')">&#10005;</button>
-            </div>
-            <div class="modal-body">
-                <p style="font-size:13px;margin-bottom:12px">VLESS URL for import into client app:</p>
-                <div style="position:relative">
-                    <textarea id="xray-vless-url" readonly
-                        style="width:100%;height:80px;font-family:monospace;font-size:11px;padding:8px;
-                        background:var(--bg-input);border:1px solid var(--border);border-radius:6px;
-                        color:var(--text-primary);resize:none;word-break:break-all">${esc(url)}</textarea>
-                    <button class="btn" style="position:absolute;top:4px;right:4px;font-size:11px;padding:2px 8px"
-                        onclick="navigator.clipboard.writeText(document.getElementById('xray-vless-url').value);toast('Copied!')">Copy</button>
-                </div>
-                <div style="margin-top:16px">
-                    <h4 style="font-size:13px;margin-bottom:6px">Setup Instructions</h4>
-                    <div style="font-size:12px;color:var(--text-secondary);line-height:1.6">
-                        <p><strong>iOS:</strong> Install <strong>Streisand</strong> from App Store → + → Import from clipboard</p>
-                        <p><strong>Android:</strong> Install <strong>v2rayNG</strong> → + → Import from clipboard</p>
-                        <p><strong>Windows:</strong> Install <strong>v2rayN</strong> or <strong>Nekoray</strong> → Import URL</p>
-                        <p><strong>macOS/Linux:</strong> Install <strong>Nekoray</strong> → Import URL</p>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn" onclick="closeModal('xray-url-modal')">Close</button>
-            </div>
-        </div>`);
-    } catch (e) { toast(e.message, 'error'); }
-}
-
 async function importAndEditPeerByIp(ip) {
   try {
     const pathIp = ip.replace(/\./g, '_');
@@ -3025,24 +2973,6 @@ async function openEditPeerModal(id) {
                 Cloak wraps VPN traffic in TLS (provider sees HTTPS to yandex.ru)
               </div>
               <button class="btn btn-primary" style="font-size:12px;padding:4px 10px" onclick="enableCloak(${id});closeModal('edit-peer-modal')">Enable Cloak</button>`
-          }
-        </div>
-        <div style="margin-top:8px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border)">
-          <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px">XRAY Reality (VLESS+Reality)</div>
-          ${peer.xray_uuid
-            ? `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">
-                <span class="badge badge-active" style="font-size:10px;background:#7c3aed;color:#fff">enabled</span>
-                UUID: <code style="font-size:11px">${esc(peer.xray_uuid)}</code>
-              </div>
-              <div class="btn-group" style="gap:6px;flex-wrap:wrap">
-                <button class="btn" style="font-size:12px;padding:4px 10px" onclick="showXrayUrl(${id}, '${esc(peer.name).replace(/'/g, "\\'")}')">VLESS URL</button>
-                <button class="btn" style="font-size:12px;padding:4px 10px;color:var(--danger)" onclick="disableXray(${id});closeModal('edit-peer-modal')">Disable XRAY</button>
-              </div>`
-            : `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">
-                <span class="badge badge-disabled" style="font-size:10px">disabled</span>
-                VLESS+Reality masks VPN as TLS (works on iOS, Android, desktop)
-              </div>
-              <button class="btn btn-primary" style="font-size:12px;padding:4px 10px" onclick="enableXray(${id});closeModal('edit-peer-modal')">Enable XRAY</button>`
           }
         </div>
         <div style="margin-top:8px;padding:10px;background:var(--bg-input);border-radius:8px;font-size:12px;color:var(--text-secondary)">
