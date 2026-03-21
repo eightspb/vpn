@@ -6,8 +6,9 @@
 
 ## Архитектура
 
-- **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты)
+- **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты) + Cloak (опц.)
 - **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1)
+- **Cloak** (опционально): TLS-маскировка трафика на VPS1, провайдер видит HTTPS к yandex.ru
 - **Admin panel**: `scripts/admin/admin-server.py` (Flask, port 8081) + `scripts/admin/admin.html` (SPA)
 - **Monitor**: `scripts/monitor/monitor-web.sh` (SSH polling → `vpn-output/data.json` каждые 5с)
 - **Backend API**: `backend/main.py` (FastAPI)
@@ -29,6 +30,9 @@
 # Деплой (с управляющего компьютера)
 bash manage.sh deploy               # развернуть VPN на VPS1 + VPS2
 bash manage.sh deploy --with-proxy  # + youtube-proxy
+bash manage.sh deploy --with-cloak  # + TLS-маскировка (Cloak, SNI=yandex.ru)
+bash manage.sh deploy --with-cloak --fake-domain mail.ru  # маскировка под другой домен
+bash scripts/deploy/deploy-cloak.sh --vps1-ip IP --vps1-key KEY  # только Cloak
 
 # Тесты
 bash tests/test-admin-server.sh     # 104+ тестов для admin-server (0 fail expected)
@@ -50,6 +54,10 @@ python scripts/admin/admin-server.py
 | `scripts/deploy/deploy-vps1.sh` | Деплой только VPS1 |
 | `scripts/deploy/deploy-vps2.sh` | Деплой только VPS2 |
 | `scripts/deploy/deploy-proxy.sh` | Деплой youtube-proxy |
+| `scripts/deploy/deploy-cloak.sh` | Деплой Cloak TLS-маскировки (SNI yandex.ru) |
+| `scripts/deploy/deploy-cloak-rotation.sh` | Безопасная установка авторотации доменов на работающий Cloak |
+| `scripts/deploy/cloak-rotate-domain.sh` | Серверный скрипт ротации RedirAddr (ставится на VPS1 через cron) |
+| `scripts/deploy/cloak-rotate-client.sh` | Клиентский скрипт ротации ServerName |
 | `backend/main.py` | Entry point FastAPI |
 | `.env` | Конфиг (IP серверов, SSH ключи) — **не коммитить** |
 
@@ -58,6 +66,9 @@ python scripts/admin/admin-server.py
 - **Traffic double-counting**: VPS1 awg0 + VPS2 awg0 измеряют один и тот же тоннель — суммировать нельзя, показывать раздельно по серверам
 - **Monitor autostart**: если `data.json` устарел (>30с), `admin-server.py` запускает monitor автоматически при старте
 - **Счётчики трафика**: сбрасываются при перезагрузке VPS — метки говорят "с последней перезагрузки", не за всё время
+- **Cloak TLS-маскировка**: опционально оборачивает AmneziaWG в TLS с SNI=yandex.ru. Провайдер видит обычный HTTPS. Клиенту нужен ck-client + Endpoint=127.0.0.1:1984. Порт 443 TCP на VPS1
+- **Cloak vs AmneziaWG Junk**: Junk обфусцирует пакеты (DPI не распознаёт WG), Cloak маскирует весь трафик под HTTPS. Можно использовать оба одновременно
+- **Cloak авторотация доменов**: cron на VPS1 каждые 6ч меняет RedirAddr среди 16 популярных РУ-доменов (yandex.ru, mail.ru, vk.com, ...). Клиент может ротировать ServerName независимо. Для установки на существующий Cloak: `bash deploy-cloak-rotation.sh` (безопасно, ключи не трогает)
 
 ## Правила проекта
 
