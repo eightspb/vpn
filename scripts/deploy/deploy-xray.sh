@@ -47,7 +47,7 @@ XRAY_VERSION="25.1.30"
 
 # ── Параметры по умолчанию ─────────────────────────────────────────────────
 VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
-DEST_DOMAIN="www.microsoft.com"
+DEST_DOMAIN="yahoo.com"
 XRAY_PORT=443
 OUTPUT_DIR="./vpn-output"
 
@@ -218,7 +218,7 @@ cat > /etc/xray/config.json << XEOF
         \"show\": false,
         \"dest\": \"${DEST_DOMAIN}:443\",
         \"xver\": 0,
-        \"serverNames\": [\"${DEST_DOMAIN}\"],
+        \"serverNames\": [\"${DEST_DOMAIN}\", \"www.${DEST_DOMAIN}\"],
         \"privateKey\": \"\${XRAY_PRIV}\",
         \"shortIds\": [\"\${XRAY_SHORT_ID}\"]
       }

@@ -2384,7 +2384,7 @@ def _build_xray_vless_url(uuid: str) -> str:
     server_ip = (get_env("VPS1_IP") or "").strip()
     port = keys.get("XRAY_PORT", "443")
     pub = keys.get("XRAY_PUB", "")
-    domain = keys.get("DEST_DOMAIN", "www.microsoft.com")
+    domain = keys.get("DEST_DOMAIN", "yahoo.com")
     sid = keys.get("XRAY_SHORT_ID", "")
     return (
         f"vless://{uuid}@{server_ip}:{port}"
