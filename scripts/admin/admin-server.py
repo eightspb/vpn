@@ -2204,6 +2204,32 @@ _DISCONNECTED_HS_THRESHOLD = 180  # seconds — peer is "disconnected" when hand
 _prev_monitor_snapshot: dict | None = None
 _prev_snapshot_lock = threading.Lock()
 
+# Cached peer metrics for SSE (refreshed every 2s to avoid SSH per-tick)
+_cached_peers: list[dict] = []
+_cached_peers_ts: float = 0.0
+_cached_peers_lock = threading.Lock()
+_PEER_CACHE_TTL = 2.0  # seconds
+
+
+def _get_cached_peers() -> list[dict]:
+    """Return cached WG peer metrics, refreshing via SSH if stale."""
+    global _cached_peers, _cached_peers_ts
+    now = time.time()
+    with _cached_peers_lock:
+        if now - _cached_peers_ts < _PEER_CACHE_TTL:
+            return _cached_peers
+    # Fetch outside lock to avoid blocking other threads
+    try:
+        dump = _vps1_ssh(_build_wg_dump_cmd())
+        peers = _parse_wg_dump_peers(dump)
+    except Exception as exc:
+        log.debug("SSE peer fetch failed: %s", exc)
+        peers = _cached_peers  # return stale on error
+    with _cached_peers_lock:
+        _cached_peers = peers
+        _cached_peers_ts = time.time()
+    return peers
+
 
 def _detect_monitoring_events(prev: dict | None, curr: dict) -> list[dict]:
     """Compare two monitoring snapshots and return a list of discrete events."""
@@ -2337,6 +2363,7 @@ def monitoring_stream():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 data["_monitor_running"] = _is_monitor_running()
+                data["_peers"] = _get_cached_peers()
                 yield f"event: monitoring_update\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
                 prev_mtime = path.stat().st_mtime
                 with _prev_snapshot_lock:
@@ -2350,8 +2377,13 @@ def monitoring_stream():
         if history:
             yield f"event: events_history\ndata: {json.dumps(history, ensure_ascii=False)}\n\n"
 
+        last_peer_send: float = 0.0
+        last_data: dict = {}
+
         while True:
             try:
+                now = time.time()
+                sent_full = False
                 path = _resolve_monitor_data_path()
                 if path is not None:
                     try:
@@ -2367,6 +2399,7 @@ def monitoring_stream():
                             time.sleep(0.5)
                             continue
                         data["_monitor_running"] = _is_monitor_running()
+                        data["_peers"] = _get_cached_peers()
 
                         # Detect events by comparing with previous snapshot
                         with _prev_snapshot_lock:
@@ -2381,6 +2414,18 @@ def monitoring_stream():
 
                         # Emit full update
                         yield f"event: monitoring_update\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                        last_peer_send = now
+                        last_data = data
+                        sent_full = True
+
+                # Send peer-only updates between full data.json cycles (every 2s)
+                if not sent_full and now - last_peer_send >= _PEER_CACHE_TTL:
+                    peers = _get_cached_peers()
+                    if peers:
+                        payload = dict(last_data) if last_data else {}
+                        payload["_peers"] = peers
+                        yield f"event: peers_update\ndata: {json.dumps(payload.get('_peers', peers), ensure_ascii=False)}\n\n"
+                        last_peer_send = now
 
                 # Keep-alive heartbeat every 15 seconds (via short sleep loop)
                 time.sleep(0.5)

@@ -863,10 +863,28 @@ td.mono { font-family: monospace; font-size: 12px; }
   border-radius: 50%;
   background: var(--success);
   box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.18);
+  transition: background 0.3s, box-shadow 0.3s;
 }
 .peer-speed-dot.idle {
   background: var(--text-muted);
   box-shadow: none;
+  animation: none;
+}
+.peer-speed-dot.slow {
+  background: var(--success);
+  animation: pulse-speed-slow 2s infinite;
+}
+.peer-speed-dot.fast {
+  background: #00ffd0;
+  animation: pulse-speed-fast 0.8s infinite;
+}
+@keyframes pulse-speed-slow {
+  0%,100% { box-shadow: 0 0 4px rgba(0, 212, 170, 0.3); }
+  50% { box-shadow: 0 0 10px rgba(0, 212, 170, 0.6); }
+}
+@keyframes pulse-speed-fast {
+  0%,100% { box-shadow: 0 0 6px rgba(0, 255, 208, 0.5); }
+  50% { box-shadow: 0 0 16px rgba(0, 255, 208, 0.9); }
 }
 .peer-speed-tooltip {
   position: fixed;
@@ -1136,6 +1154,7 @@ const state = {
 
 const PEERS_PER_PAGE = 50;
 let refreshTimer = null;
+let hsTickTimer = null;
 const SPEED_HIST_MAX = 60;
 const PEER_SPEED_HIST_MAX = 40;
 const PEER_ONLINE_HS_SEC = 55;
@@ -1193,6 +1212,25 @@ function toast(msg, type = 'success') {
 }
 
 // ====== SSE Real-time Monitoring ======
+function _applySSEPeers(peers) {
+  state.monitoringPeers = peers;
+  // Update live speed stats for each peer
+  const mpMap = {};
+  peers.forEach(mp => {
+    const ip = normKey(mp.peer_ip || extractPeerIp(mp.allowed_ips));
+    if (ip) mpMap[ip] = mp;
+    const pub = normKey(mp.public_key);
+    if (pub) mpMap[pub] = mp;
+  });
+  (state.peers || []).forEach(p => {
+    const mp = mpMap[normKey(p.ip)] || mpMap[normKey(p.public_key)];
+    if (mp) {
+      p._mp = mp;
+      updatePeerLiveStats(p, mp);
+    }
+  });
+}
+
 function connectSSE() {
   if (sseSource) { sseSource.close(); sseSource = null; }
   if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
@@ -1206,8 +1244,24 @@ function connectSSE() {
       state.monitoring = data._error ? null : data;
       state._monitorError = data._error || null;
       if (data && !data._error) pushSpeedHist(data);
+      // Consume inline peer metrics from SSE
+      if (Array.isArray(data._peers) && data._peers.length > 0) {
+        _applySSEPeers(data._peers);
+      }
       if (state.currentPage === 'dashboard') renderDashboardContent();
+      if (state.currentPage === 'peers') renderPeersContent();
     } catch (err) { /* ignore parse errors */ }
+  });
+
+  sseSource.addEventListener('peers_update', (e) => {
+    try {
+      const peers = JSON.parse(e.data);
+      if (Array.isArray(peers) && peers.length > 0) {
+        _applySSEPeers(peers);
+        if (state.currentPage === 'dashboard') renderDashboardContent();
+        if (state.currentPage === 'peers') renderPeersContent();
+      }
+    } catch (err) { /* ignore */ }
   });
 
   sseSource.addEventListener('monitoring_event', (e) => {
@@ -1547,10 +1601,24 @@ function startAutoRefresh() {
     if (state.currentPage === 'peers') await loadPeers();
     if (state.currentPage === 'bot') await loadBotControl(true);
   }, 5000);
+  // Tick handshake ages every second between SSE updates
+  hsTickTimer = setInterval(() => {
+    document.querySelectorAll('.hs-tick').forEach(el => {
+      const baseAge = Number(el.dataset.hsAge);
+      if (baseAge < 0) return; // "never"
+      const baseTs = Number(el.dataset.hsTs);
+      const elapsed = (Date.now() - baseTs) / 1000;
+      const currentAge = Math.round(baseAge + elapsed);
+      const hs = fmtHandshake(currentAge);
+      el.textContent = hs.text;
+      el.className = el.className.replace(/hs-\w+/g, '').trim() + ' hs-tick ' + hs.cls;
+    });
+  }, 1000);
 }
 
 function stopAutoRefresh() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  if (hsTickTimer) { clearInterval(hsTickTimer); hsTickTimer = null; }
   disconnectSSE();
 }
 
@@ -1558,16 +1626,23 @@ function stopAutoRefresh() {
 async function loadDashboardData() {
   try {
     // Monitoring data arrives via SSE — only fetch peers/stats here
-    const [stats, peersRes, monPeersRes] = await Promise.all([
+    const [stats, peersRes] = await Promise.all([
       api('GET', '/api/peers/stats').catch(() => ({})),
       api('GET', '/api/peers').catch(() => []),
-      api('GET', '/api/monitoring/peers').catch(() => []),
     ]);
     state.peerStats = stats;
     state.peers = Array.isArray(peersRes) ? peersRes : [];
     const thresholdPeer = (state.peers || []).find(p => Number(p?.connection_threshold_sec) > 0);
     state.peerOnlineThresholdSec = thresholdPeer ? Number(thresholdPeer.connection_threshold_sec) : PEER_ONLINE_HS_SEC;
-    state.monitoringPeers = Array.isArray(monPeersRes) ? monPeersRes : [];
+    // monitoringPeers now arrive via SSE — only fetch as fallback if SSE hasn't delivered yet
+    if (!state.monitoringPeers || state.monitoringPeers.length === 0) {
+      try {
+        const monPeersRes = await api('GET', '/api/monitoring/peers');
+        state.monitoringPeers = Array.isArray(monPeersRes) ? monPeersRes : [];
+      } catch (_) {
+        state.monitoringPeers = [];
+      }
+    }
     const mpMap = {};
     (state.monitoringPeers || []).forEach(mp => {
       const ip = normKey(mp.peer_ip || extractPeerIp(mp.allowed_ips));
@@ -1596,11 +1671,13 @@ async function loadPeers() {
     state.peerOnlineThresholdSec = thresholdPeer ? Number(thresholdPeer.connection_threshold_sec) : PEER_ONLINE_HS_SEC;
     state.groups = [...new Set(peers.map(p => p.group_name).filter(Boolean))];
 
-    try {
-      state.monitoringPeers = await api('GET', '/api/monitoring/peers');
-    } catch (_) {
-      // Drop stale runtime snapshot to avoid showing outdated online/offline state.
-      state.monitoringPeers = [];
+    // monitoringPeers now arrive via SSE — only fetch as fallback
+    if (!state.monitoringPeers || state.monitoringPeers.length === 0) {
+      try {
+        state.monitoringPeers = await api('GET', '/api/monitoring/peers');
+      } catch (_) {
+        state.monitoringPeers = [];
+      }
     }
 
     const mpMap = {};
@@ -1992,6 +2069,7 @@ function renderDashboardContent() {
                 <th>Endpoint</th>
                 <th>Allowed IPs</th>
                 <th>Handshake</th>
+                <th>Speed</th>
                 <th>Traffic</th>
                 <th>Public Key</th>
               </tr>
@@ -2005,6 +2083,14 @@ function renderDashboardContent() {
                 const peerMain = peerName || peerIp;
                 const peerSub = peerName && peerName !== peerIp ? peerIp : '';
                 const shortKey = mp.public_key ? (mp.public_key.slice(0, 10) + '...' + mp.public_key.slice(-6)) : '—';
+                const dbPeer = (state.peers || []).find(p => normKey(p.ip) === peerIp || normKey(p.public_key) === peerPub);
+                const live = dbPeer ? updatePeerLiveStats(dbPeer, mp) : updatePeerLiveStats(mp, mp);
+                const rxBps = live?.rxBps || 0;
+                const txBps = live?.txBps || 0;
+                const speedTotal = rxBps + txBps;
+                const dotCls = speedTotal < 1 ? 'peer-speed-dot idle' : speedTotal > 102400 ? 'peer-speed-dot fast' : 'peer-speed-dot slow';
+                const speedKey = live?.key || '';
+                const speedTitle = peerName || peerIp;
                 return `<tr>
                   <td>
                     <div><strong>${esc(peerMain)}</strong></div>
@@ -2012,7 +2098,10 @@ function renderDashboardContent() {
                   </td>
                   <td class="mono" style="font-size:12px">${esc(mp.endpoint || '—')}</td>
                   <td class="mono" style="font-size:12px">${esc(mp.allowed_ips || '—')}</td>
-                  <td class="${hs.cls}" style="font-family:monospace;font-size:12px">${hs.text}</td>
+                  <td class="${hs.cls} hs-tick" data-hs-age="${mp.handshake_age_sec ?? -1}" data-hs-ts="${Date.now()}" style="font-family:monospace;font-size:12px">${hs.text}</td>
+                  <td class="mono peer-speed-cell" data-peer-key="${esc(speedKey)}" data-peer-title="${esc(speedTitle)}" style="font-size:12px">
+                    <span class="peer-speed-main"><span class="${dotCls}"></span><span style="color:var(--success)">↓${fmtBytesSpeed(rxBps)}</span> <span style="color:var(--info)">↑${fmtBytesSpeed(txBps)}</span></span>
+                  </td>
                   <td class="mono" style="font-size:12px"><span style="color:var(--success)">↓${fmtBytes(mp.rx_bytes || 0)}</span> <span style="color:var(--info)">↑${fmtBytes(mp.tx_bytes || 0)}</span></td>
                   <td class="mono" style="font-size:11px;color:var(--text-secondary)" title="${esc(mp.public_key || '')}">${esc(shortKey)}</td>
                 </tr>`;
@@ -2189,6 +2278,14 @@ function renderDashboardContent() {
     </div>`;
 
   renderEventLog();
+  // Attach sparkline tooltips to dashboard speed cells
+  document.querySelectorAll('.peer-speed-cell').forEach(cell => {
+    const key = cell.getAttribute('data-peer-key') || '';
+    const title = cell.getAttribute('data-peer-title') || key;
+    cell.addEventListener('mouseenter', (e) => showPeerSpeedTooltip(e, key, title));
+    cell.addEventListener('mousemove', movePeerSpeedTooltip);
+    cell.addEventListener('mouseleave', hidePeerSpeedTooltip);
+  });
   api('GET', '/api/audit?per_page=10').then(data => {
     state.auditLog = data;
     const list = document.getElementById('activity-list');
@@ -2398,7 +2495,7 @@ function renderPeersContent() {
       const live = updatePeerLiveStats(p, monPeer);
       const speedTotal = ((live?.rxBps || 0) + (live?.txBps || 0));
       const speedKey = live?.key || '';
-      const speedDotCls = speedTotal > 1 ? 'peer-speed-dot' : 'peer-speed-dot idle';
+      const speedDotCls = speedTotal < 1 ? 'peer-speed-dot idle' : speedTotal > 102400 ? 'peer-speed-dot fast' : 'peer-speed-dot slow';
       const speedTitle = `${p.name || p.ip || 'peer'} · ${p.ip || ''}`;
       const hasId = p.id != null;
       let isOnline = hsAge != null && hsAge >= 0 && hsAge < thresholdSec;
@@ -2444,7 +2541,7 @@ function renderPeersContent() {
         <td>${statusBadge(p.status)}${connBadge}</td>
         <td>${esc(p.group_name || '—')}</td>
         <td style="font-size:12px;color:var(--text-secondary)">${fmtDate(p.created_at)}</td>
-        <td class="${hs.cls}" style="font-family:monospace;font-size:12px">${hs.text}</td>
+        <td class="${hs.cls} hs-tick" data-hs-age="${hsAge ?? -1}" data-hs-ts="${Date.now()}" style="font-family:monospace;font-size:12px">${hs.text}</td>
         <td class="mono" style="font-size:12px"><span style="color:var(--success)">↓${rx}</span> <span style="color:var(--info)">↑${tx}</span></td>
         <td class="mono peer-speed-cell" data-peer-key="${esc(speedKey)}" data-peer-title="${esc(speedTitle)}">
           <span class="peer-speed-main"><span class="${speedDotCls}"></span><span style="color:var(--success)">↓${fmtBytesSpeed(live?.rxBps || 0)}</span> <span style="color:var(--info)">↑${fmtBytesSpeed(live?.txBps || 0)}</span></span>
