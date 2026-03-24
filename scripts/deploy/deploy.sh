@@ -341,10 +341,12 @@ PostUp   = iptables -t nat -A POSTROUTING -s ${TUN_NET}.0/24 -o \${MAIN_IF} -j M
 PostUp   = iptables -t nat -A POSTROUTING -s ${CLIENT_NET}.0/24 -o \${MAIN_IF} -j MASQUERADE
 PostUp   = iptables -A FORWARD -i awg0 -o \${MAIN_IF} -j ACCEPT
 PostUp   = iptables -A FORWARD -i \${MAIN_IF} -o awg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+PostUp   = iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1320
 PostDown = iptables -t nat -D POSTROUTING -s ${TUN_NET}.0/24 -o \${MAIN_IF} -j MASQUERADE
 PostDown = iptables -t nat -D POSTROUTING -s ${CLIENT_NET}.0/24 -o \${MAIN_IF} -j MASQUERADE
 PostDown = iptables -D FORWARD -i awg0 -o \${MAIN_IF} -j ACCEPT
 PostDown = iptables -D FORWARD -i \${MAIN_IF} -o awg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+PostDown = iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1320
 
 [Peer]
 PublicKey  = ${VPS1_TUNNEL_PUB}

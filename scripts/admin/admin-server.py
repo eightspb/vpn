@@ -925,6 +925,7 @@ def _add_peer_to_server(public_key: str, preshared_key: str, peer_ip: str) -> No
     safe_public_key = shlex.quote(public_key)
     safe_peer_ip = shlex.quote(peer_ip)
 
+    # Add peer to running interface
     _vps1_ssh(
         f"printf '%s' {safe_psk} > /tmp/psk && "
         f"(sudo -n awg set awg1 peer {safe_public_key} preshared-key /tmp/psk allowed-ips {safe_peer_ip}/32 || "
@@ -932,12 +933,30 @@ def _add_peer_to_server(public_key: str, preshared_key: str, peer_ip: str) -> No
         f"rm -f /tmp/psk"
     )
 
+    # Persist peer to config file so it survives awg1 restart
+    conf = "/etc/amnezia/amneziawg/awg1.conf"
+    peer_block = f"\\n[Peer]\\nPublicKey  = {public_key}\\nPresharedKey = {preshared_key}\\nAllowedIPs = {peer_ip}/32"
+    safe_block = shlex.quote(peer_block)
+    _vps1_ssh(f"printf {safe_block} | sudo tee -a {conf} >/dev/null")
+
 
 def _remove_peer_from_server(public_key: str) -> None:
-    """Remove a peer from VPS1 via SSH."""
+    """Remove a peer from VPS1 via SSH (runtime + config file)."""
     if public_key:
         safe_public_key = shlex.quote(public_key)
+        # Remove from running interface
         _vps1_ssh(f"sudo -n awg set awg1 peer {safe_public_key} remove || awg set awg1 peer {safe_public_key} remove")
+        # Remove from config file so it stays gone after awg1 restart
+        conf = "/etc/amnezia/amneziawg/awg1.conf"
+        py_script = (
+            "import re\n"
+            f"pk = {repr(public_key)}\n"
+            f"conf = open({repr(conf)}).read()\n"
+            "sections = re.split(r'(?=^\\[)', conf, flags=re.MULTILINE)\n"
+            "filtered = [s for s in sections if pk not in s]\n"
+            f"open({repr(conf)}, 'w').write(''.join(filtered))\n"
+        )
+        _vps1_ssh(f"sudo python3 -c {shlex.quote(py_script)}")
 
 
 def _get_all_settings(db: sqlite3.Connection) -> dict[str, str]:
