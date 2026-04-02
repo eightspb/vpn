@@ -517,6 +517,127 @@ tbody td {
   white-space: nowrap;
 }
 td.mono { font-family: monospace; font-size: 12px; }
+.peer-table-scroller {
+  overflow-x: auto;
+}
+.peer-cards {
+  display: none;
+  padding: 10px 12px 12px;
+  gap: 8px;
+  background: var(--bg-card);
+}
+.peer-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--bg-secondary), var(--bg-card) 42%);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.peer-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.peer-card-title {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.peer-card-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 16px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+}
+.peer-card-main {
+  min-width: 0;
+}
+.peer-card-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.peer-card-ip {
+  margin-top: 2px;
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text-muted);
+}
+.peer-card-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.peer-card-actions .btn-group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.peer-card-actions .btn-icon {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.peer-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.peer-card-badges .server-chip,
+.peer-card-badges .badge {
+  margin: 0;
+}
+.peer-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+.peer-card-metric {
+  min-width: 0;
+}
+.peer-card-label {
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.peer-card-value {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.25;
+  min-width: 0;
+}
+.peer-card-value.mono {
+  font-family: monospace;
+  font-size: 11px;
+}
+.peer-card-config {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.peer-card-config-note {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
 
 /* ====== Badges ====== */
 .badge {
@@ -1071,6 +1192,12 @@ td.mono { font-family: monospace; font-size: 12px; }
   .table-toolbar { flex-direction: column; align-items: stretch; }
   .search-input { max-width: 100%; }
   .toolbar-right { margin-left: 0; justify-content: flex-end; }
+  .peer-table-scroller { display: none; }
+  .peer-cards { display: grid; }
+  .peer-card { padding: 9px; gap: 7px; }
+  .peer-card-grid { gap: 7px 8px; }
+  .peer-card-value { font-size: 11px; }
+  .peer-card-actions { max-width: 108px; }
   .pagination { flex-wrap: wrap; gap: 8px; }
   .pagination-info { width: 100%; text-align: center; }
   .modal-footer { flex-wrap: wrap; }
@@ -2472,84 +2599,168 @@ function renderPeersContent() {
     return `<span class="sort-arrow">${dir === 'asc' ? '↑' : '↓'}</span>`;
   };
   const sortCls = (c) => col === c ? 'sorted' : '';
+  const buildPeerActions = (p) => {
+    if (p.id != null) {
+      return `<div class="btn-group">
+        <button class="btn-icon" onclick="lockPeersRender(1200);openEditPeerModal(${p.id})" title="Edit">✏️</button>
+        <button class="btn-icon" onclick="downloadConfig(${p.id})" title="Download config">📥</button>
+        <button class="btn-icon" onclick="showQR(${p.id})" title="QR Code">📷</button>
+        ${p.status === 'active'
+          ? `<button class="btn-icon" onclick="togglePeer(${p.id},'disable')" title="Disable">⏸️</button>`
+          : p.status === 'disabled' ? `<button class="btn-icon" onclick="togglePeer(${p.id},'enable')" title="Enable">▶️</button>` : ''}
+        <button class="btn-icon danger" onclick="confirmDeletePeer(${p.id},'${esc(p.name).replace(/'/g, "\\'")}')" title="Delete">🗑️</button>
+      </div>`;
+    }
+    return `<div class="btn-group">
+      <button class="btn-icon" onclick="lockPeersRender(1200);importAndEditPeerByIp('${esc(p.ip).replace(/'/g, "\\'")}')" title="Import to DB and edit">✏️</button>
+      <button class="btn-icon" onclick="downloadConfigByIp('${esc(p.ip).replace(/'/g, "\\'")}')" title="Download config">📥</button>
+      <span class="badge badge-disabled" style="font-size:10px" title="From config folder">file</span>
+    </div>`;
+  };
+  const buildPeerView = (p) => {
+    const monPeer = mpMap[normKey(p.public_key)] || mpByIp[normKey(p.ip)];
+    const thresholdSec = Number(p.connection_threshold_sec || getPeerOnlineThresholdSec());
+    const hasBackendConnStatus = p.connection_status === 'online' || p.connection_status === 'offline';
+    const hsAge = monPeer?.handshake_age_sec ?? p.handshake_age_sec ?? null;
+    const hs = fmtHandshake(hsAge);
+    const rx = (p.rx_bytes != null ? p.rx_bytes : monPeer?.rx_bytes) ? fmtBytes(p.rx_bytes ?? monPeer?.rx_bytes) : '—';
+    const tx = (p.tx_bytes != null ? p.tx_bytes : monPeer?.tx_bytes) ? fmtBytes(p.tx_bytes ?? monPeer?.tx_bytes) : '—';
+    const live = updatePeerLiveStats(p, monPeer);
+    const speedTotal = ((live?.rxBps || 0) + (live?.txBps || 0));
+    const speedKey = live?.key || '';
+    const speedDotCls = speedTotal < 1 ? 'peer-speed-dot idle' : speedTotal > 102400 ? 'peer-speed-dot fast' : 'peer-speed-dot slow';
+    const speedTitle = `${p.name || p.ip || 'peer'} · ${p.ip || ''}`;
+    let isOnline = hsAge != null && hsAge >= 0 && hsAge < thresholdSec;
+    if (hsAge == null && hasBackendConnStatus) isOnline = p.connection_status === 'online';
+    const connBadge = connectionBadge(isOnline ? 'online' : 'offline', hsAge);
+    const cfgCount = Number(p.config_download_count || 0);
+    const cfgStatus = p.config_downloaded_latest
+      ? `<span class="badge badge-active" style="font-size:10px">ok</span>`
+      : `<span class="badge badge-expired" style="font-size:10px">new</span>`;
+    const cfgRuntimeActive = p.config_runtime_active === true || p.config_runtime_status === 'active';
+    const cfgRuntimeReason = p.config_runtime_reason || '';
+    const cfgRuntimeHint = cfgRuntimeActive
+      ? 'Config is active on VPN server'
+      : (cfgRuntimeReason === 'peer_disabled'
+          ? 'Peer disabled in admin (not active on server)'
+          : cfgRuntimeReason === 'config_not_loaded_on_server'
+            ? 'Config file exists locally but peer is not loaded on VPN server'
+            : 'Peer missing on VPN server (config is inactive)');
+    const cfgRuntimeBadge = cfgRuntimeActive
+      ? `<span class="badge badge-active" style="font-size:10px" title="${esc(cfgRuntimeHint)}">live</span>`
+      : `<span class="badge badge-inactive" style="font-size:10px" title="${esc(cfgRuntimeHint)}">inactive</span>`;
+    const cardChips = [
+      statusBadge(p.status),
+      connBadge,
+      `<span class="server-chip chip-dim">${esc((p.type || 'unknown').toUpperCase())}</span>`,
+    ];
+    if (p.group_name) cardChips.push(`<span class="server-chip chip-dim">${esc(p.group_name)}</span>`);
+    if (p.mode) cardChips.push(`<span class="server-chip chip-dim">${esc(p.mode)}</span>`);
+    if (p.id == null) cardChips.push('<span class="server-chip chip-dim">file</span>');
+    return {
+      actions: buildPeerActions(p),
+      connBadge,
+      hs,
+      hsAge,
+      speedKey,
+      speedTitle,
+      cfgMeta: `${cfgRuntimeBadge}${cfgStatus}<span style="margin-left:6px;color:var(--text-secondary)">v${esc(p.config_version ?? 1)} / ↓${cfgCount}</span>`,
+      trafficHtml: `<span style="color:var(--success)">↓${rx}</span> <span style="color:var(--info)">↑${tx}</span>`,
+      speedHtml: `<span class="peer-speed-main"><span class="${speedDotCls}"></span><span style="color:var(--success)">↓${fmtBytesSpeed(live?.rxBps || 0)}</span> <span style="color:var(--info)">↑${fmtBytesSpeed(live?.txBps || 0)}</span></span>`,
+      configCardHtml: `<div class="peer-card-config">${cfgRuntimeBadge}${cfgStatus}<span class="peer-card-config-note">v${esc(p.config_version ?? 1)} / ↓${cfgCount}</span></div>`,
+      cardChipsHtml: cardChips.join(''),
+    };
+  };
 
-  let rows = '';
+  let bodyHtml = '';
   if (paginated.length === 0) {
-    rows = `<tr><td colspan="12">
-      <div class="empty-state">
-        <div class="empty-state-icon">⊞</div>
-        <div class="empty-state-title">No peers yet</div>
-        <div class="empty-state-text">Create your first peer to get started!</div>
-        <button class="btn btn-primary" onclick="openAddPeerModal()">+ Add Peer</button>
-      </div>
-    </td></tr>`;
+    bodyHtml = `<div class="empty-state" style="padding:32px 20px">
+      <div class="empty-state-icon">⊞</div>
+      <div class="empty-state-title">No peers yet</div>
+      <div class="empty-state-text">Create your first peer to get started!</div>
+      <button class="btn btn-primary" onclick="openAddPeerModal()">+ Add Peer</button>
+    </div>`;
   } else {
-    rows = paginated.map(p => {
-      const monPeer = mpMap[normKey(p.public_key)] || mpByIp[normKey(p.ip)];
-      const thresholdSec = Number(p.connection_threshold_sec || getPeerOnlineThresholdSec());
-      const hasBackendConnStatus = p.connection_status === 'online' || p.connection_status === 'offline';
-      const hsAge = monPeer?.handshake_age_sec ?? p.handshake_age_sec ?? null;
-      const hs = fmtHandshake(hsAge);
-      const rx = (p.rx_bytes != null ? p.rx_bytes : monPeer?.rx_bytes) ? fmtBytes(p.rx_bytes ?? monPeer?.rx_bytes) : '—';
-      const tx = (p.tx_bytes != null ? p.tx_bytes : monPeer?.tx_bytes) ? fmtBytes(p.tx_bytes ?? monPeer?.tx_bytes) : '—';
-      const live = updatePeerLiveStats(p, monPeer);
-      const speedTotal = ((live?.rxBps || 0) + (live?.txBps || 0));
-      const speedKey = live?.key || '';
-      const speedDotCls = speedTotal < 1 ? 'peer-speed-dot idle' : speedTotal > 102400 ? 'peer-speed-dot fast' : 'peer-speed-dot slow';
-      const speedTitle = `${p.name || p.ip || 'peer'} · ${p.ip || ''}`;
-      const hasId = p.id != null;
-      let isOnline = hsAge != null && hsAge >= 0 && hsAge < thresholdSec;
-      if (hsAge == null && hasBackendConnStatus) isOnline = p.connection_status === 'online';
-      const connBadge = connectionBadge(isOnline ? 'online' : 'offline', hsAge);
-      const actions = hasId
-        ? `<div class="btn-group">
-            <button class="btn-icon" onclick="lockPeersRender(1200);openEditPeerModal(${p.id})" title="Edit">✏️</button>
-            <button class="btn-icon" onclick="downloadConfig(${p.id})" title="Download config">📥</button>
-            <button class="btn-icon" onclick="showQR(${p.id})" title="QR Code">📷</button>
-            ${p.status === 'active'
-              ? `<button class="btn-icon" onclick="togglePeer(${p.id},'disable')" title="Disable">⏸️</button>`
-              : p.status === 'disabled' ? `<button class="btn-icon" onclick="togglePeer(${p.id},'enable')" title="Enable">▶️</button>` : ''}
-            <button class="btn-icon danger" onclick="confirmDeletePeer(${p.id},'${esc(p.name).replace(/'/g, "\\'")}')" title="Delete">🗑️</button>
-          </div>`
-        : `<div class="btn-group">
-            <button class="btn-icon" onclick="lockPeersRender(1200);importAndEditPeerByIp('${esc(p.ip).replace(/'/g, "\\'")}')" title="Import to DB and edit">✏️</button>
-            <button class="btn-icon" onclick="downloadConfigByIp('${esc(p.ip).replace(/'/g, "\\'")}')" title="Download config">📥</button>
-            <span class="badge badge-disabled" style="font-size:10px" title="From config folder">file</span>
-          </div>`;
-      const cfgCount = Number(p.config_download_count || 0);
-      const cfgStatus = p.config_downloaded_latest
-        ? `<span class="badge badge-active" style="font-size:10px">ok</span>`
-        : `<span class="badge badge-expired" style="font-size:10px">new</span>`;
-      const cfgRuntimeActive = p.config_runtime_active === true || p.config_runtime_status === 'active';
-      const cfgRuntimeReason = p.config_runtime_reason || '';
-      const cfgRuntimeHint = cfgRuntimeActive
-        ? 'Config is active on VPN server'
-        : (cfgRuntimeReason === 'peer_disabled'
-            ? 'Peer disabled in admin (not active on server)'
-            : cfgRuntimeReason === 'config_not_loaded_on_server'
-              ? 'Config file exists locally but peer is not loaded on VPN server'
-              : 'Peer missing on VPN server (config is inactive)');
-      const cfgRuntimeBadge = cfgRuntimeActive
-        ? `<span class="badge badge-active" style="font-size:10px" title="${esc(cfgRuntimeHint)}">live</span>`
-        : `<span class="badge badge-inactive" style="font-size:10px" title="${esc(cfgRuntimeHint)}">inactive</span>`;
-      const cfgMeta = `${cfgRuntimeBadge}${cfgStatus}<span style="margin-left:6px;color:var(--text-secondary)">v${esc(p.config_version ?? 1)} / ↓${cfgCount}</span>`;
+    const peerViews = paginated.map(p => ({ peer: p, view: buildPeerView(p) }));
+    const rows = peerViews.map(({ peer: p, view }) => {
       return `<tr>
         <td><strong>${esc(p.name)}</strong></td>
         <td class="mono">${esc(p.ip)}</td>
         <td><span class="type-icon" title="${esc(p.type)}">${typeIcon(p.type)}</span> ${esc(p.type)}</td>
         <td>${esc(p.mode)}</td>
-        <td>${statusBadge(p.status)}${connBadge}</td>
+        <td>${statusBadge(p.status)}${view.connBadge}</td>
         <td>${esc(p.group_name || '—')}</td>
         <td style="font-size:12px;color:var(--text-secondary)">${fmtDate(p.created_at)}</td>
-        <td class="${hs.cls} hs-tick" data-hs-age="${hsAge ?? -1}" data-hs-ts="${Date.now()}" style="font-family:monospace;font-size:12px">${hs.text}</td>
-        <td class="mono" style="font-size:12px"><span style="color:var(--success)">↓${rx}</span> <span style="color:var(--info)">↑${tx}</span></td>
-        <td class="mono peer-speed-cell" data-peer-key="${esc(speedKey)}" data-peer-title="${esc(speedTitle)}">
-          <span class="peer-speed-main"><span class="${speedDotCls}"></span><span style="color:var(--success)">↓${fmtBytesSpeed(live?.rxBps || 0)}</span> <span style="color:var(--info)">↑${fmtBytesSpeed(live?.txBps || 0)}</span></span>
-        </td>
-        <td style="white-space:nowrap;font-size:12px">${cfgMeta}</td>
-        <td>${actions}</td>
+        <td class="${view.hs.cls} hs-tick" data-hs-age="${view.hsAge ?? -1}" data-hs-ts="${Date.now()}" style="font-family:monospace;font-size:12px">${view.hs.text}</td>
+        <td class="mono" style="font-size:12px">${view.trafficHtml}</td>
+        <td class="mono peer-speed-cell" data-peer-key="${esc(view.speedKey)}" data-peer-title="${esc(view.speedTitle)}">${view.speedHtml}</td>
+        <td style="white-space:nowrap;font-size:12px">${view.cfgMeta}</td>
+        <td>${view.actions}</td>
       </tr>`;
     }).join('');
+    const cards = peerViews.map(({ peer: p, view }) => {
+      return `<article class="peer-card">
+        <div class="peer-card-head">
+          <div class="peer-card-title">
+            <span class="peer-card-icon" title="${esc(p.type || 'unknown')}">${typeIcon(p.type)}</span>
+            <div class="peer-card-main">
+              <div class="peer-card-name">${esc(p.name)}</div>
+              <div class="peer-card-ip">${esc(p.ip || '—')}</div>
+            </div>
+          </div>
+          <div class="peer-card-actions">${view.actions}</div>
+        </div>
+        <div class="peer-card-badges">${view.cardChipsHtml}</div>
+        <div class="peer-card-grid">
+          <div class="peer-card-metric">
+            <div class="peer-card-label">Handshake</div>
+            <div class="peer-card-value mono ${view.hs.cls} hs-tick" data-hs-age="${view.hsAge ?? -1}" data-hs-ts="${Date.now()}">${view.hs.text}</div>
+          </div>
+          <div class="peer-card-metric">
+            <div class="peer-card-label">Speed</div>
+            <div class="peer-card-value mono peer-speed-cell" data-peer-key="${esc(view.speedKey)}" data-peer-title="${esc(view.speedTitle)}">${view.speedHtml}</div>
+          </div>
+          <div class="peer-card-metric">
+            <div class="peer-card-label">Traffic</div>
+            <div class="peer-card-value mono">${view.trafficHtml}</div>
+          </div>
+          <div class="peer-card-metric">
+            <div class="peer-card-label">Config</div>
+            <div class="peer-card-value">${view.configCardHtml}</div>
+          </div>
+          <div class="peer-card-metric">
+            <div class="peer-card-label">Group</div>
+            <div class="peer-card-value">${esc(p.group_name || '—')}</div>
+          </div>
+          <div class="peer-card-metric">
+            <div class="peer-card-label">Created</div>
+            <div class="peer-card-value">${fmtDate(p.created_at)}</div>
+          </div>
+        </div>
+      </article>`;
+    }).join('');
+    bodyHtml = `<div class="peer-table-scroller">
+      <table>
+        <thead>
+          <tr>
+            <th class="${sortCls('name')}" onclick="sortPeers('name')">Name ${sortArrow('name')}</th>
+            <th class="${sortCls('ip')}" onclick="sortPeers('ip')">IP ${sortArrow('ip')}</th>
+            <th class="${sortCls('type')}" onclick="sortPeers('type')">Type ${sortArrow('type')}</th>
+            <th>Mode</th>
+            <th class="${sortCls('status')}" onclick="sortPeers('status')">Status ${sortArrow('status')}</th>
+            <th>Group</th>
+            <th class="${sortCls('created_at')}" onclick="sortPeers('created_at')">Created ${sortArrow('created_at')}</th>
+            <th>Handshake</th>
+            <th>Traffic</th>
+            <th>Speed</th>
+            <th>Config</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="peer-cards">${cards}</div>`;
   }
 
   let paginationHtml = '';
@@ -2569,7 +2780,7 @@ function renderPeersContent() {
     </div>`;
   }
 
-  pc.innerHTML = `<div class="table-wrap">
+  pc.innerHTML = `<div class="table-wrap peer-list-wrap">
     <div class="table-toolbar">
       <input class="search-input" id="peers-search" type="text" placeholder="Search peers..." value="${esc(state.peersFilter.search)}" oninput="debouncedPeerSearch(this.value)">
       <select class="filter-select" onchange="state.peersFilter.status=this.value;state.peersPage=1;loadPeers()">
@@ -2593,27 +2804,7 @@ function renderPeersContent() {
         <button class="btn btn-primary" onclick="openAddPeerModal()">+ Add Peer</button>
       </div>
     </div>
-    <div style="overflow-x:auto">
-      <table>
-        <thead>
-          <tr>
-            <th class="${sortCls('name')}" onclick="sortPeers('name')">Name ${sortArrow('name')}</th>
-            <th class="${sortCls('ip')}" onclick="sortPeers('ip')">IP ${sortArrow('ip')}</th>
-            <th class="${sortCls('type')}" onclick="sortPeers('type')">Type ${sortArrow('type')}</th>
-            <th>Mode</th>
-            <th class="${sortCls('status')}" onclick="sortPeers('status')">Status ${sortArrow('status')}</th>
-            <th>Group</th>
-            <th class="${sortCls('created_at')}" onclick="sortPeers('created_at')">Created ${sortArrow('created_at')}</th>
-            <th>Handshake</th>
-            <th>Traffic</th>
-            <th>Speed</th>
-            <th>Config</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
+    ${bodyHtml}
     ${paginationHtml}
   </div>`;
 

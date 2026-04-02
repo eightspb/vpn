@@ -18,7 +18,7 @@ def main():
     try:
         import bcrypt
     except ImportError:
-        print("Ошибка: установите bcrypt (pip install -r requirements.txt)", file=sys.stderr)
+        print("Ошибка: подготовьте окружение админки через `bash manage.sh admin setup`", file=sys.stderr)
         sys.exit(1)
 
     conn = sqlite3.connect(db_path)

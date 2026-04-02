@@ -18,7 +18,7 @@ if [[ ! -d "$PROJECT_SRC" ]]; then
 fi
 
 sudo apt-get update -qq
-sudo apt-get install -y -qq python3 python3-venv python3-pip openssl curl rsync >/dev/null
+sudo apt-get install -y -qq python3 openssl curl rsync ca-certificates >/dev/null
 
 # Preserve persistent data (database, certs, .env) across deploys
 ADMIN_DB="${PROJECT_DST}/scripts/admin/admin.db"
@@ -53,9 +53,17 @@ if [[ -d "${PROJECT_DST}/.ssh" ]]; then
   sudo find "${PROJECT_DST}/.ssh" -type f ! -name '*.pub' -exec chmod 600 {} \;
 fi
 
-sudo -u "$ADMIN_USER" bash -lc "cd '$PROJECT_DST' && python3 -m venv scripts/admin/.venv"
-sudo -u "$ADMIN_USER" bash -lc "cd '$PROJECT_DST' && scripts/admin/.venv/bin/python -m pip install --upgrade pip >/dev/null"
-sudo -u "$ADMIN_USER" bash -lc "cd '$PROJECT_DST' && scripts/admin/.venv/bin/python -m pip install -r scripts/admin/requirements.txt >/dev/null"
+sudo -u "$ADMIN_USER" bash -lc '
+set -euo pipefail
+UV_BIN="${HOME}/.local/bin/uv"
+if [[ ! -x "$UV_BIN" ]]; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null
+fi
+"$UV_BIN" --version >/dev/null
+cd "'"$PROJECT_DST"'"
+"$UV_BIN" venv --python python3 scripts/admin/.venv >/dev/null
+"$UV_BIN" pip install --python scripts/admin/.venv/bin/python -r scripts/admin/requirements.txt >/dev/null
+'
 
 if ! sudo grep -q '^ADMIN_SECRET_KEY=' "$ENV_FILE"; then
   SECRET=$(openssl rand -hex 32)

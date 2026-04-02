@@ -115,6 +115,9 @@ check_html "Cookie session auth" "credentials: 'include'"
 check_html "QR code"        "qr"
 check_html "Modal"          "modal"
 check_html "Live peers table" "WireGuard peers (live)"
+check_html "Mobile peer cards" "peer-cards"
+check_html "Peer card grid"  "peer-card-grid"
+check_html "Peer table scroller" "peer-table-scroller"
 
 # ── 5. Dependencies check ────────────────────────────────────────────────────
 
@@ -218,8 +221,9 @@ check_deploy "Command: setup"          "cmd_setup"
 check_deploy "Command: restart"        "cmd_restart"
 check_deploy "Command: logs"           "cmd_logs"
 check_deploy "PID file handling"       "PID_FILE"
-check_deploy "Venv creation"           "venv"
-check_deploy "pip install"             "pip install"
+check_deploy "uv detection"            "find_uv"
+check_deploy "uv env creation"         "uv-окружения|uv venv"
+check_deploy "uv pip install"          "pip install --python"
 check_deploy "nohup background"        "nohup"
 check_deploy "Log file"               "LOG_FILE"
 check_deploy "Python detection"        "find_python"
@@ -267,6 +271,7 @@ check_html_api "Auth me check"        "/api/auth/me"
 check_html_api "Cookie session (credentials include)" "credentials: 'include'"
 check_html_api "Peer speed tooltip" "peer-speed-tooltip"
 check_html_api "Peers speed column" ">Speed<"
+check_html_api "Peers mobile card renderer" "peer-card"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

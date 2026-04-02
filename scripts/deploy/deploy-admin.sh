@@ -3,11 +3,11 @@
 # deploy-admin.sh — управление VPN Admin Panel
 #
 # Использование:
-#   bash deploy-admin.sh start       — Запуск (dev: 127.0.0.1:8081, в WSL: 0.0.0.0:8081)
+#   bash deploy-admin.sh start       — Запуск (dev: 127.0.0.1:8081)
 #   bash deploy-admin.sh start-prod  — Запуск HTTPS (0.0.0.0:8443)
 #   bash deploy-admin.sh stop        — Остановка
 #   bash deploy-admin.sh status      — Проверка статуса
-#   bash deploy-admin.sh setup       — Установка зависимостей
+#   bash deploy-admin.sh setup       — Подготовка uv-окружения и установка зависимостей
 #   bash deploy-admin.sh restart     — Перезапуск
 #   bash deploy-admin.sh logs        — Просмотр логов
 #   bash deploy-admin.sh reset-password  — Сбросить пароль admin на «My-secure-admin-password»
@@ -36,10 +36,12 @@ source "${PROJECT_ROOT}/lib/common.sh"
 ADMIN_DIR="${PROJECT_ROOT}/scripts/admin"
 ADMIN_SCRIPT="${ADMIN_DIR}/admin-server.py"
 REQUIREMENTS="${ADMIN_DIR}/requirements.txt"
-VENV_DIR="${ADMIN_DIR}/.venv"
+ADMIN_ENV_DIR="${ADMIN_DIR}/.venv"
 PID_FILE="${ADMIN_DIR}/admin.pid"
 LOG_FILE="${ADMIN_DIR}/admin.log"
 DEFAULT_ADMIN_PASSWORD="My-secure-admin-password"
+UV_BIN=""
+ADMIN_ENV_PYTHON=""
 
 # ── Поиск Python ─────────────────────────────────────────────────────────────
 
@@ -63,34 +65,54 @@ find_python_or_fail() {
     PYTHON="$(find_python)" || err "Python 3 не найден. Установите Python 3.8+"
 }
 
-# ── Виртуальное окружение ─────────────────────────────────────────────────────
+# ── uv-окружение ──────────────────────────────────────────────────────────────
 
-ensure_venv() {
-    if [[ ! -d "$VENV_DIR" ]]; then
-        step "Создание виртуального окружения"
-        "$PYTHON" -m venv "$VENV_DIR"
-        ok "Venv создан: $VENV_DIR"
-    fi
+find_uv() {
+    local candidate=""
+    for candidate in uv "${HOME}/.local/bin/uv"; do
+        if command -v "$candidate" &>/dev/null; then
+            command -v "$candidate"
+            return 0
+        fi
+        if [[ -x "$candidate" ]]; then
+            printf "%s" "$candidate"
+            return 0
+        fi
+    done
+    return 1
 }
 
-activate_venv() {
-    if [[ -f "$VENV_DIR/bin/activate" ]]; then
-        source "$VENV_DIR/bin/activate"
-    elif [[ -f "$VENV_DIR/Scripts/activate" ]]; then
-        source "$VENV_DIR/Scripts/activate"
-    else
-        err "Не найден activate в $VENV_DIR"
-    fi
+find_uv_or_fail() {
+    UV_BIN="$(find_uv)" || err "uv не найден. Установите его, например: brew install uv"
 }
 
-install_deps() {
-    step "Установка зависимостей"
+admin_env_python_path() {
+    if [[ -x "${ADMIN_ENV_DIR}/bin/python" ]]; then
+        printf "%s" "${ADMIN_ENV_DIR}/bin/python"
+        return 0
+    fi
+    if [[ -x "${ADMIN_ENV_DIR}/Scripts/python.exe" ]]; then
+        printf "%s" "${ADMIN_ENV_DIR}/Scripts/python.exe"
+        return 0
+    fi
+    return 1
+}
+
+ensure_admin_env() {
+    if [[ ! -d "$ADMIN_ENV_DIR" ]]; then
+        step "Создание uv-окружения"
+        "$UV_BIN" venv --python "$PYTHON" "$ADMIN_ENV_DIR"
+        ok "uv-окружение создано: $ADMIN_ENV_DIR"
+    fi
+    ADMIN_ENV_PYTHON="$(admin_env_python_path)" || err "Не найден python внутри ${ADMIN_ENV_DIR}"
+}
+
+sync_admin_deps() {
+    step "Синхронизация зависимостей через uv"
     if [[ ! -f "$REQUIREMENTS" ]]; then
         err "Не найден $REQUIREMENTS"
     fi
-    activate_venv
-    pip install --upgrade pip -q 2>/dev/null || true
-    pip install -r "$REQUIREMENTS" -q
+    "$UV_BIN" pip install --python "$ADMIN_ENV_PYTHON" -r "$REQUIREMENTS" -q
     ok "Зависимости установлены"
 }
 
@@ -225,8 +247,9 @@ print_admin_urls() {
 
 cmd_setup() {
     find_python_or_fail
-    ensure_venv
-    install_deps
+    find_uv_or_fail
+    ensure_admin_env
+    sync_admin_deps
     ok "Админ-панель готова к запуску"
 }
 
@@ -270,12 +293,11 @@ cmd_start() {
     fi
 
     find_python_or_fail
-    ensure_venv
-    install_deps
+    find_uv_or_fail
+    ensure_admin_env
+    sync_admin_deps
 
     step "Запуск админ-панели ($mode)"
-
-    activate_venv
 
     local args=()
     if [[ "$mode" == "prod" ]]; then
@@ -286,7 +308,7 @@ cmd_start() {
     args+=(--host "$listen_host")
     [[ -n "$port" ]] && args+=(--port "$port")
 
-    nohup "$PYTHON" "$ADMIN_SCRIPT" "${args[@]}" >> "$LOG_FILE" 2>&1 &
+    nohup "$ADMIN_ENV_PYTHON" "$ADMIN_SCRIPT" "${args[@]}" >> "$LOG_FILE" 2>&1 &
     local pid=$!
     echo "$pid" > "$PID_FILE"
 
@@ -364,8 +386,9 @@ cmd_logs() {
 
 cmd_reset_password() {
     find_python_or_fail
-    ensure_venv
-    activate_venv
+    find_uv_or_fail
+    ensure_admin_env
+    sync_admin_deps
 
     local db_file="${ADMIN_DIR}/admin.db"
     if [[ ! -f "$db_file" ]]; then
@@ -376,7 +399,7 @@ cmd_reset_password() {
 
     step "Сброс пароля пользователя admin на «${DEFAULT_ADMIN_PASSWORD}»"
 
-    "$PYTHON" "${ADMIN_DIR}/reset-admin-password.py" "$db_file" "$DEFAULT_ADMIN_PASSWORD" || { err "Не удалось сбросить пароль"; return 1; }
+    "$ADMIN_ENV_PYTHON" "${ADMIN_DIR}/reset-admin-password.py" "$db_file" "$DEFAULT_ADMIN_PASSWORD" || { err "Не удалось сбросить пароль"; return 1; }
 
     ok "Пароль пользователя admin установлен в «${DEFAULT_ADMIN_PASSWORD}»."
 }
@@ -388,11 +411,11 @@ usage() {
 deploy-admin.sh — управление VPN Admin Panel
 
 Команды:
-  start        Запуск (dev: 127.0.0.1:8081, в WSL: 0.0.0.0:8081)
+  start        Запуск (dev: 127.0.0.1:8081)
   start-prod   Запуск HTTPS (0.0.0.0:8443)
   stop         Остановка
   status       Проверка статуса
-  setup        Установка зависимостей
+  setup        Подготовка uv-окружения и установка зависимостей
   restart      Перезапуск
   logs         Просмотр логов (tail -f)
   reset-password  Сбросить пароль admin на «My-secure-admin-password» (если забыли)

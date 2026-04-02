@@ -205,7 +205,7 @@ else
     done
 
     if [[ "$HAS_DEPS" == false ]]; then
-        skip "Python dependencies not installed — run: pip install -r $REQUIREMENTS"
+        skip "Python dependencies not installed — run: bash manage.sh admin setup"
     else
         TEST_DB="/tmp/admin_test_$$.db"
         SMOKE_RESULT=$("$PYTHON" -c "

@@ -46,9 +46,9 @@ echo ""
 echo "--- 2. scripts/monitor/monitor-realtime.sh: нет хардкода дефолтов ---"
 
 if grep -q '89\.169\.179\.233' scripts/monitor/monitor-realtime.sh; then
-    fail "Хардкод IP 89.169.179.233 всё ещё присутствует в scripts/monitor/monitor-realtime.sh"
+    fail "Хардкод устаревшего VPS1 IP всё ещё присутствует в scripts/monitor/monitor-realtime.sh"
 else
-    ok "Хардкод IP 89.169.179.233 отсутствует в scripts/monitor/monitor-realtime.sh"
+    ok "Хардкод устаревшего VPS1 IP отсутствует в scripts/monitor/monitor-realtime.sh"
 fi
 
 if grep -q '38\.135\.122\.81' scripts/monitor/monitor-realtime.sh; then
@@ -70,9 +70,9 @@ echo ""
 echo "--- 3. scripts/monitor/monitor-web.sh: нет хардкода дефолтов ---"
 
 if grep -q '89\.169\.179\.233' scripts/monitor/monitor-web.sh; then
-    fail "Хардкод IP 89.169.179.233 всё ещё присутствует в scripts/monitor/monitor-web.sh"
+    fail "Хардкод устаревшего VPS1 IP всё ещё присутствует в scripts/monitor/monitor-web.sh"
 else
-    ok "Хардкод IP 89.169.179.233 отсутствует в scripts/monitor/monitor-web.sh"
+    ok "Хардкод устаревшего VPS1 IP отсутствует в scripts/monitor/monitor-web.sh"
 fi
 
 if grep -q '38\.135\.122\.81' scripts/monitor/monitor-web.sh; then
