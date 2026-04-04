@@ -528,6 +528,62 @@ def sync_peers_to_json() -> None:
         log.error("Failed to sync peers.json: %s", exc)
 
 
+def _sync_peers_to_server() -> None:
+    """Reconcile DB peers with the running awg1 interface on VPS1.
+
+    Reads all active peers from SQLite, compares with the live awg1 dump,
+    and re-registers any missing peers. Ensures peers survive VPS reboots,
+    redeploys, and awg1 restarts regardless of config file state.
+    """
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
+    db_peers = conn.execute(
+        "SELECT ip, public_key, preshared_key FROM peers WHERE status = 'active'"
+    ).fetchall()
+    conn.close()
+
+    peers_to_sync = [
+        r for r in db_peers
+        if r["public_key"] and r["preshared_key"] and r["ip"]
+    ]
+    if not peers_to_sync:
+        log.info("Peer sync: no active peers in DB, nothing to sync")
+        return
+
+    try:
+        dump = _vps1_ssh(
+            "sudo -n awg show awg1 dump 2>/dev/null || "
+            "awg show awg1 dump 2>/dev/null || true"
+        )
+    except Exception as exc:
+        log.warning("Peer sync: cannot reach VPS1, skipping: %s", exc)
+        return
+
+    live_keys: set[str] = set()
+    for line in dump.strip().splitlines():
+        parts = _split_wg_dump_line(line)
+        if len(parts) >= 4 and "/" in parts[3]:
+            live_keys.add(parts[0])
+
+    missing = [p for p in peers_to_sync if p["public_key"] not in live_keys]
+    if not missing:
+        log.info("Peer sync: all %d active peers present on server", len(peers_to_sync))
+        return
+
+    log.info("Peer sync: %d of %d active peers missing on server, re-registering",
+             len(missing), len(peers_to_sync))
+    restored = 0
+    for peer in missing:
+        try:
+            _add_peer_to_server(peer["public_key"], peer["preshared_key"], peer["ip"])
+            log.info("Peer sync: restored %s (%s)", peer["ip"], peer["public_key"][:12])
+            restored += 1
+        except Exception as exc:
+            log.error("Peer sync: failed to restore %s: %s", peer["ip"], exc)
+
+    log.info("Peer sync: restored %d / %d missing peers", restored, len(missing))
+
+
 # =============================================================================
 # SSH helpers
 # =============================================================================
@@ -770,16 +826,16 @@ def audit(action: str, target: str = "", details: Any = None) -> None:
 MTU_BY_TYPE: dict[str, int] = {
     "phone": 1280,
     "mobile": 1280,
-    "tablet": 1360,
+    "tablet": 1280,
     "ios": 1280,
     "android": 1280,
-    "pc": 1360,
-    "desktop": 1360,
-    "laptop": 1360,
-    "computer": 1360,
-    "router": 1400,
-    "mikrotik": 1400,
-    "openwrt": 1400,
+    "pc": 1280,
+    "desktop": 1280,
+    "laptop": 1280,
+    "computer": 1280,
+    "router": 1280,
+    "mikrotik": 1280,
+    "openwrt": 1280,
 }
 
 
@@ -878,14 +934,14 @@ def _build_config(
     server_info: dict[str, str],
 ) -> str:
     """Build a .conf file content for a peer."""
-    mtu = MTU_BY_TYPE.get(device_type, 1360)
+    mtu = MTU_BY_TYPE.get(device_type, 1280)
     dns = settings.get("DNS", "10.8.0.2")
-    endpoint_ip = (get_env("VPS1_IP") or "").strip()
+    endpoint_ip = (get_env("VPS1_ENDPOINT") or get_env("VPS1_IP") or "").strip()
     endpoint_port = (server_info.get("server_port") or "51820").strip() or "51820"
     server_public_key = (server_info.get("server_public_key") or "").strip()
 
     if not endpoint_ip:
-        raise ValueError("VPS1_IP is empty in .env/keys.env")
+        raise ValueError("VPS1_ENDPOINT and VPS1_IP are both empty in .env/keys.env")
     if not server_public_key:
         raise ValueError("server public key (awg1) is empty")
 
@@ -2774,6 +2830,7 @@ def main() -> None:
     _ensure_default_admin()
     _load_default_settings()
     _import_peers_from_json()
+    _sync_peers_to_server()
     _start_monitor()
 
     host = args.host or ("0.0.0.0" if args.prod else "127.0.0.1")
