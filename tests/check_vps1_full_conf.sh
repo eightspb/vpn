@@ -1,6 +1,6 @@
 #!/bin/bash
 KEY=.ssh/ssh-key-1772056840349
-VPS1=slava@130.193.41.13
+VPS1=slava@89.169.172.51
 
 echo "=== awg1.conf полный ==="
 ssh -i "$KEY" -o StrictHostKeyChecking=no "$VPS1" \

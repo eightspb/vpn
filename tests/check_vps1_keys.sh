@@ -1,7 +1,7 @@
 #!/bin/bash
 # Читаем текущие ключи с VPS1 для восстановления awg1.conf
 KEY=.ssh/ssh-key-1772056840349
-VPS1=slava@130.193.41.13
+VPS1=slava@89.169.172.51
 
 echo "=== Ключи на VPS1 ==="
 ssh -i "$KEY" -o StrictHostKeyChecking=no "$VPS1" '

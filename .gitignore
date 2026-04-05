@@ -7,6 +7,9 @@
 vpn-output/*
 !vpn-output/.gitkeep
 
+# Monitor runtime (local PID)
+scripts/monitor/vpn-output/*.pid
+
 # WireGuard/AmneziaWG client configs (contain private keys)
 *.conf
 

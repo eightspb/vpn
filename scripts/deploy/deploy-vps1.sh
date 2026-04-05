@@ -369,7 +369,7 @@ H4   = ${H4}
 
 [Peer]
 PublicKey           = ${VPS1_CLIENT_PUB}
-Endpoint            = ${VPS1_IP}:${VPS1_PORT_CLIENTS}
+Endpoint            = vpnrus.net:${VPS1_PORT_CLIENTS}
 AllowedIPs          = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF

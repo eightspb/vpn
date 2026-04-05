@@ -30,7 +30,7 @@
 #
 # Примеры:
 #   # С SSH ключом:
-#   bash deploy.sh --vps1-ip 130.193.41.13 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
+#   bash deploy.sh --vps1-ip 89.169.172.51 --vps1-user slava --vps1-key .ssh/ssh-key-1772056840349 \
 #                  --vps2-ip 38.135.122.81  --vps2-key .ssh/id_rsa
 #
 #   # С паролем (нужен sshpass):
@@ -709,9 +709,9 @@ H3   = ${H3}
 H4   = ${H4}
 
 [Peer]
-# VPS1 — точка входа (${VPS1_IP})
+# VPS1 — точка входа (vpnrus.net)
 PublicKey           = ${VPS1_CLIENT_PUB}
-Endpoint            = ${VPS1_IP}:${VPS1_PORT_CLIENTS}
+Endpoint            = vpnrus.net:${VPS1_PORT_CLIENTS}
 AllowedIPs          = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
