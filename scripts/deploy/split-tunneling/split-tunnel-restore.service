@@ -1,0 +1,28 @@
+# =============================================================================
+# split-tunnel-restore.service — восстановление split tunneling после ребута
+#
+# Кладётся в /etc/systemd/system/split-tunnel-restore.service
+# Активируется: systemctl enable split-tunnel-restore.service
+#
+# При загрузке системы запускается ПОСЛЕ awg-quick@awg1 и dnsmasq,
+# применяет ipset/iptables/policy routing через split-tunnel-apply.sh.
+#
+# split-tunnel-apply.sh идемпотентен — если правила уже есть, ничего не делает.
+#
+# ExecStop НЕ задаём специально: `systemctl stop split-tunnel-restore` НЕ должна
+# делать полный rollback (это сломало бы DNS у клиентов). Для отката используется
+# отдельная команда: `bash manage.sh deploy --split-tunneling --rollback`.
+# =============================================================================
+
+[Unit]
+Description=Restore split tunneling rules (ipset, iptables mangle, policy routing)
+After=awg-quick@awg1.service dnsmasq.service network-online.target
+Wants=awg-quick@awg1.service dnsmasq.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/split-tunnel-apply.sh
+
+[Install]
+WantedBy=multi-user.target

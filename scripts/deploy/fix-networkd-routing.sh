@@ -21,6 +21,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../lib/common.sh"
 
+RESTORE_SCRIPT="${SCRIPT_DIR}/split-tunneling/restore-vpn-routing.sh"
+[[ -f "$RESTORE_SCRIPT" ]] || err "Не найден restore-vpn-routing.sh: $RESTORE_SCRIPT"
+
 VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
 
 load_defaults_from_files
@@ -53,23 +56,27 @@ run1() {
     fi
 }
 
+step "Загрузка restore-vpn-routing.sh на VPS1"
+
+# Загружаем сам скрипт восстановления — он будет вызываться из networkd drop-in
+ssh_upload "$RESTORE_SCRIPT" "$VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS" \
+    /tmp/_restore-vpn-routing.sh
+
 step "Установка systemd drop-in для восстановления ip rule после рестарта networkd"
 
 run1 "sudo bash -s" << 'REMOTE_SCRIPT'
 set -euo pipefail
+
+# ── Кладём скрипт восстановления ─────────────────────────────────────────
+install -m 755 /tmp/_restore-vpn-routing.sh /usr/local/sbin/restore-vpn-routing.sh
+rm -f /tmp/_restore-vpn-routing.sh
 
 # ── Создаём drop-in для systemd-networkd ────────────────────────────────
 mkdir -p /etc/systemd/system/systemd-networkd.service.d
 
 cat > /etc/systemd/system/systemd-networkd.service.d/restore-vpn-routing.conf << 'DROPEOF'
 [Service]
-ExecStartPost=/bin/bash -c '\
-  sleep 2; \
-  if ip link show awg1 >/dev/null 2>&1 && ip link show awg0 >/dev/null 2>&1; then \
-    ip rule show | grep -q "from 10.9.0.0/24 lookup 200" || ip rule add from 10.9.0.0/24 table 200; \
-    ip route show table 200 2>/dev/null | grep -q "default via 10.8.0.2 dev awg0" || ip route add default via 10.8.0.2 dev awg0 table 200 2>/dev/null || true; \
-    echo "[vpn-routing] ip rule restored after networkd restart"; \
-  fi'
+ExecStartPost=/usr/local/sbin/restore-vpn-routing.sh
 DROPEOF
 chmod 644 /etc/systemd/system/systemd-networkd.service.d/restore-vpn-routing.conf
 
@@ -77,8 +84,12 @@ systemctl daemon-reload
 
 # ── Проверяем текущее состояние ─────────────────────────────────────────
 echo "--- Verification ---"
-ip rule show | grep -q 'from 10.9.0.0/24 lookup 200' && echo 'ip rule: OK' || echo 'ip rule: MISSING'
+ip rule show | grep -q 'from 10.9.0.0/24 lookup 200' && echo 'ip rule (table 200): OK' || echo 'ip rule (table 200): MISSING'
 ip route show table 200 2>/dev/null | grep -q 'default via 10.8.0.2 dev awg0' && echo 'table 200: OK' || echo 'table 200: MISSING'
+if ipset list ru_subnets >/dev/null 2>&1; then
+    ip rule show | grep -q 'fwmark 0x100 lookup 100' && echo 'ip rule (fwmark 0x100, split-tunneling): OK' || echo 'ip rule (fwmark 0x100): MISSING'
+    ip route show table 100 2>/dev/null | grep -q '^default' && echo 'table 100 (split-tunneling): OK' || echo 'table 100: MISSING'
+fi
 echo 'DROP-IN INSTALLED OK'
 REMOTE_SCRIPT
 

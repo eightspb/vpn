@@ -12,6 +12,8 @@ scripts/monitor/vpn-output/*.pid
 
 # WireGuard/AmneziaWG client configs (contain private keys)
 *.conf
+# Deploy-time configs без секретов — явный whitelist
+!scripts/deploy/split-tunneling/**/*.conf
 
 # Compiled binaries
 youtube-proxy/youtube-proxy
