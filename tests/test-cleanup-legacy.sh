@@ -72,13 +72,19 @@ for f in manage.sh README.md .env.example .gitignore .gitattributes; do
     fi
 done
 
-for d in lib scripts tests youtube-proxy vpn-output; do
+for d in lib scripts tests vpn-output; do
     if [[ -d "$d" ]]; then
         ok "$d/ на месте"
     else
         fail "$d/ отсутствует"
     fi
 done
+
+if [[ ! -d "youtube-proxy" ]]; then
+    ok "youtube-proxy/ удалён как legacy"
+else
+    fail "youtube-proxy/ всё ещё существует"
+fi
 
 # =============================================================================
 # Итог

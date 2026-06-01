@@ -7,8 +7,8 @@
 ## Архитектура
 
 - **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты)
-- **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1)
-- **Split tunneling** (опционально, `bash manage.sh deploy --split-tunneling --guard-timeout 300`): на VPS1 поднимается `dnsmasq` (10.9.0.1:53) как DNS-прокси перед текущим VPS2 DNS upstream (`10.8.0.2:53`, сейчас `youtube-proxy`). Он наблюдает за DNS-запросами и автоматически складывает IP `.ru/.рф/.su`-доменов в ipset `ru_subnets`. DNS-запросы клиентов DNAT-ятся на `10.9.0.1`, а ответы SNAT-ятся обратно как `10.8.0.2`, чтобы старые клиентские DNS-настройки продолжали работать. iptables/mangle маркирует только NEW-коннекты через CONNMARK, policy routing (`fwmark 0x100 → table 100`) направляет их через основной интерфейс VPS1 в обход awg0. Из-за `FORWARD DROP` на VPS1 apply обязан добавлять marked FORWARD `awg1→MAIN_IF`; из-за локального `dnsmasq` apply также добавляет `INPUT` allow на `awg1 → 10.9.0.1:53` и более приоритетное rule `10.9.0.1 → 10.9.0.0/24 lookup main`, чтобы ответы dnsmasq не уходили в table 200. Существующие сессии не разрываются, клиентские конфиги не меняются.
+- **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1) + AdGuard Home DNS (`10.8.0.2:53`, UI `10.8.0.2:3000`)
+- **Split tunneling** (опционально, `bash manage.sh deploy --split-tunneling --guard-timeout 300`): на VPS1 поднимается `dnsmasq` (10.9.0.1:53) как DNS-прокси перед текущим VPS2 DNS upstream (`10.8.0.2:53`, AdGuard Home). Он наблюдает за DNS-запросами и автоматически складывает IP `.ru/.рф/.su`-доменов в ipset `ru_subnets`. DNS-запросы клиентов DNAT-ятся на `10.9.0.1`, а ответы SNAT-ятся обратно как `10.8.0.2`, чтобы старые клиентские DNS-настройки продолжали работать. iptables/mangle маркирует только NEW-коннекты через CONNMARK, policy routing (`fwmark 0x100 → table 100`) направляет их через основной интерфейс VPS1 в обход awg0. Из-за `FORWARD DROP` на VPS1 apply обязан добавлять marked FORWARD `awg1→MAIN_IF`; из-за локального `dnsmasq` apply также добавляет `INPUT` allow на `awg1 → 10.9.0.1:53` и более приоритетное rule `10.9.0.1 → 10.9.0.0/24 lookup main`, чтобы ответы dnsmasq не уходили в table 200. Существующие сессии не разрываются, клиентские конфиги не меняются.
 - **Admin panel**: `scripts/admin/admin-server.py` (Flask, port 8081) + `scripts/admin/admin.html` (SPA)
 - **Monitor**: `scripts/monitor/monitor-web.sh` (SSH polling → `vpn-output/data.json` каждые 5с)
 - **Backend API**: `backend/main.py` (FastAPI)
@@ -18,18 +18,16 @@
 
 ## Платформа
 
-- Windows 11 + Git Bash + WSL2
-- Python venv: `scripts/admin/.venv/` (WSL-based, Python 3.10)
-- `monitor-web.sh` запускается в WSL bash; `admin-server.py` — в Windows Python
-- Windows Python **не** принимает MSYS-пути (`/c/...`) в `open()` — использовать `python -m py_compile` вместо `ast.parse(open(...))`
-- Для автозапуска monitor из Windows Python: `["wsl", "bash", "/mnt/c/path/to/script.sh"]`
+- macOS + zsh/bash
+- Python-окружение для админки: `uv` + `scripts/admin/.venv/`
+- Локальный запуск админки выполняется напрямую из macOS shell, без WSL
+- Базовый путь для подготовки окружения: `bash manage.sh admin setup`
 
 ## Команды
 
 ```bash
 # Деплой (с управляющего компьютера)
 bash manage.sh deploy                       # развернуть VPN на VPS1 + VPS2
-bash manage.sh deploy --with-proxy          # + youtube-proxy
 bash manage.sh deploy --split-tunneling --guard-timeout 300  # включить split tunneling на VPS1 с watchdog rollback
 bash manage.sh deploy --split-tunneling --rollback           # аварийный откат split tunneling
 bash scripts/deploy/rollback-split-tunneling.sh              # прямой аварийный откат
@@ -39,9 +37,9 @@ bash tests/test-admin-server.sh     # 104+ тестов для admin-server (0 f
 bash tests/test-backend-health.sh   # smoke-тест backend API
 bash tests/test-split-tunneling.sh  # 69 статических тестов артефактов split tunneling
 
-# Запуск admin-server локально (Windows)
-source scripts/admin/.venv/bin/activate
-python scripts/admin/admin-server.py
+# Подготовка и запуск admin-server локально (macOS)
+bash manage.sh admin setup
+bash manage.sh admin start
 ```
 
 ## Ключевые файлы
@@ -54,7 +52,6 @@ python scripts/admin/admin-server.py
 | `scripts/deploy/deploy.sh` | Основной деплой-скрипт |
 | `scripts/deploy/deploy-vps1.sh` | Деплой только VPS1 |
 | `scripts/deploy/deploy-vps2.sh` | Деплой только VPS2 |
-| `scripts/deploy/deploy-proxy.sh` | Деплой youtube-proxy |
 | `scripts/deploy/setup-split-tunneling.sh` | Установка раздельного туннелирования (.ru мимо VPN) на VPS1 с watchdog rollback |
 | `scripts/deploy/rollback-split-tunneling.sh` | Локальный аварийный rollback split tunneling, не зависит от удалённого rollback-файла |
 | `scripts/deploy/split-tunneling/` | Артефакты split tunneling: dnsmasq-конфиг, apply/rollback-скрипты, systemd-юниты |

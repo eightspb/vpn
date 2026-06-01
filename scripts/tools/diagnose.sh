@@ -196,90 +196,64 @@ fi # VPS1_OK
 
 # ---------------------------------------------------------------------------
 if $VPS2_OK; then
-hdr "3. VPS2 — AmneziaWG + youtube-proxy"
+hdr "3. VPS2 — AmneziaWG + AdGuard Home"
 
 VPS2_STATUS=$(ssh2 "
 echo '=awg0=' && systemctl is-active awg-quick@awg0 2>/dev/null || echo inactive
-echo '=yt_proxy=' && systemctl is-active youtube-proxy 2>/dev/null || echo inactive
-echo '=yt_proxy_log=' && journalctl -u youtube-proxy -n 20 --no-pager 2>/dev/null || echo 'no journal'
 echo '=adguard=' && (systemctl is-active AdGuardHome 2>/dev/null || systemctl is-active adguardhome 2>/dev/null || echo inactive)
+echo '=adguard_log=' && journalctl -u AdGuardHome -n 20 --no-pager 2>/dev/null || journalctl -u adguardhome -n 20 --no-pager 2>/dev/null || echo 'no journal'
 echo '=port53=' && ss -lunt 2>/dev/null | grep ':53' | head -5 || echo 'none'
-echo '=port443=' && ss -lnt 2>/dev/null | grep ':443' | head -5 || echo 'none'
-echo '=port8080=' && ss -lnt 2>/dev/null | grep ':8080' | head -3 || echo 'none'
+echo '=web3000=' && ss -lnt 2>/dev/null | grep ':3000' | head -5 || echo 'none'
 echo '=resolv=' && cat /etc/resolv.conf 2>/dev/null | head -3
 echo '=ip_forward=' && cat /proc/sys/net/ipv4/ip_forward
 echo '=masquerade=' && iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -E 'MASQUERADE|10\.' | head -5 || echo none
 echo '=wan_ping=' && ping -c1 -W2 8.8.8.8 >/dev/null 2>&1 && echo ok || echo fail
 echo '=dns_test=' && dig +time=3 +tries=1 @10.8.0.2 google.com +short 2>/dev/null | grep -E '^[0-9]+\.' | head -4 || echo 'dns fail'
-echo '=proxy_certs=' && ls /opt/youtube-proxy/certs/ 2>/dev/null || echo 'no certs dir'
 ")
 
 AWG0_V2=$(echo "$VPS2_STATUS" | awk '/^=awg0=/{getline; print}')
-YT_STATE=$(echo "$VPS2_STATUS" | awk '/^=yt_proxy=/{getline; print}')
 AGH_STATE=$(echo "$VPS2_STATUS" | awk '/^=adguard=/{getline; print}')
 PORT53=$(echo "$VPS2_STATUS" | awk '/^=port53=/{found=1; next} found && /^=/{exit} found{print}')
-PORT443=$(echo "$VPS2_STATUS" | awk '/^=port443=/{found=1; next} found && /^=/{exit} found{print}')
-PORT8080=$(echo "$VPS2_STATUS" | awk '/^=port8080=/{found=1; next} found && /^=/{exit} found{print}')
+WEB3000=$(echo "$VPS2_STATUS" | awk '/^=web3000=/{found=1; next} found && /^=/{exit} found{print}')
 IP_FWD2=$(echo "$VPS2_STATUS" | awk '/^=ip_forward=/{getline; print}')
 WAN_PING=$(echo "$VPS2_STATUS" | awk '/^=wan_ping=/{getline; print}')
 DNS_TEST=$(echo "$VPS2_STATUS" | awk '/^=dns_test=/{found=1; next} found && /^=/{exit} found{print}')
 MASQ=$(echo "$VPS2_STATUS" | awk '/^=masquerade=/{found=1; next} found && /^=/{exit} found{print}')
-CERTS=$(echo "$VPS2_STATUS" | awk '/^=proxy_certs=/{found=1; next} found && /^=/{exit} found{print}')
-YT_LOG=$(echo "$VPS2_STATUS" | awk '/^=yt_proxy_log=/{found=1; next} found && /^=/{exit} found{print}' | tail -5)
+AGH_LOG=$(echo "$VPS2_STATUS" | awk '/^=adguard_log=/{found=1; next} found && /^=/{exit} found{print}' | tail -5)
 
 [[ "$AWG0_V2" == "active" ]] && ok "awg0 (туннель к VPS1): active" || fail "awg0 (туннель к VPS1): $AWG0_V2"
 [[ "$IP_FWD2" == "1" ]] && ok "ip_forward=1" || fail "ip_forward=$IP_FWD2"
 [[ "$WAN_PING" == "ok" ]] && ok "WAN доступ (ping 8.8.8.8): OK" || fail "WAN доступ: FAIL — VPS2 не может выйти в интернет!"
 
 echo ""
-echo -e "  ${BOLD}youtube-proxy:${NC}"
-if [[ "$YT_STATE" == "active" ]]; then
-    ok "youtube-proxy: active"
-    if echo "$PORT53" | grep -qv 'none'; then
-        ok "Порт 53 (DNS): слушает"
-        info "$(echo "$PORT53" | head -2)"
-    else
-        fail "Порт 53 (DNS): НЕ слушает — DNS клиентов не работает!"
-    fi
-    if echo "$PORT443" | grep -qv 'none'; then
-        ok "Порт 443 (HTTPS прокси): слушает"
-    else
-        fail "Порт 443 (HTTPS прокси): НЕ слушает — YouTube прокси не работает!"
-    fi
-    if echo "$PORT8080" | grep -qv 'none'; then
-        ok "Порт 8080 (CA сервер): слушает"
-    else
-        warn "Порт 8080 (CA сервер): не слушает"
-    fi
-    if echo "$CERTS" | grep -q 'ca.crt'; then
-        ok "CA сертификат: сгенерирован (certs/ca.crt)"
-    else
-        fail "CA сертификат: НЕ найден в /opt/youtube-proxy/certs/"
-    fi
-    if echo "$DNS_TEST" | grep -Eq '^[0-9]+\.'; then
-        ok "DNS работает (dig google.com @10.8.0.2)"
-    else
-        fail "DNS не отвечает: $DNS_TEST"
-    fi
-    if [[ -n "$YT_LOG" ]]; then
-        info "Последние логи youtube-proxy:"
-        echo "$YT_LOG" | while IFS= read -r line; do echo "    $line"; done
-    fi
+echo -e "  ${BOLD}AdGuard Home:${NC}"
+if [[ "$AGH_STATE" == "active" ]]; then
+    ok "AdGuard Home: active"
 else
-    fail "youtube-proxy: $YT_STATE — DNS и HTTPS прокси не работают!"
-    if [[ -n "$YT_LOG" ]]; then
-        warn "Последние логи (ошибки):"
-        echo "$YT_LOG" | while IFS= read -r line; do echo "    $line"; done
+    fail "AdGuard Home: $AGH_STATE — DNS-фильтрация клиентов не работает!"
+    if [[ -n "$AGH_LOG" ]]; then
+        warn "Последние логи AdGuard Home:"
+        echo "$AGH_LOG" | while IFS= read -r line; do echo "    $line"; done
     fi
 fi
 
-echo ""
-echo -e "  ${BOLD}AdGuard Home:${NC}"
-if [[ "$AGH_STATE" == "active" ]]; then
-    fail "AdGuard Home АКТИВЕН — конфликт с youtube-proxy на порту 53!"
-    warn "AdGuard Home и youtube-proxy не могут работать одновременно на порту 53"
+if echo "$PORT53" | grep -qv 'none'; then
+    ok "Порт 53 (DNS): слушает"
+    info "$(echo "$PORT53" | head -2)"
 else
-    ok "AdGuard Home: остановлен/отключён (не конфликтует)"
+    fail "Порт 53 (DNS): НЕ слушает — DNS клиентов не работает!"
+fi
+
+if echo "$WEB3000" | grep -qv 'none'; then
+    ok "Порт 3000 (AdGuard Web UI): слушает"
+else
+    warn "Порт 3000 (AdGuard Web UI): не слушает"
+fi
+
+if echo "$DNS_TEST" | grep -Eq '^[0-9]+\.'; then
+    ok "DNS работает (dig google.com @10.8.0.2)"
+else
+    fail "DNS не отвечает: $DNS_TEST"
 fi
 
 if echo "$MASQ" | grep -q 'MASQUERADE'; then
@@ -288,26 +262,36 @@ else
     fail "NAT MASQUERADE: отсутствует — клиентский трафик не выйдет в интернет!"
 fi
 
-# Проверяем что TCP 443 разрешён с VPN-интерфейса
-TCP443_RULE=$(ssh2 "sudo iptables -L INPUT -n 2>/dev/null | grep -E 'tcp.*443|443.*tcp' | head -3" 2>/dev/null || echo "")
-if echo "$TCP443_RULE" | grep -q 'ACCEPT'; then
-    ok "Firewall: TCP 443 с awg0 разрешён"
-elif echo "$TCP443_RULE" | grep -q 'REJECT\|DROP'; then
-    fail "Firewall: TCP 443 ЗАБЛОКИРОВАН — YouTube прокси недоступен!"
-    info "Правила: $TCP443_RULE"
-else
-    warn "Firewall: нет явного правила для TCP 443 (может работать если нет DROP-all)"
-fi
-
 if $FIX; then
     echo ""
     info "=== Применяю исправления на VPS2 ==="
 
-    if [[ "$AGH_STATE" == "active" ]]; then
-        info "Останавливаю AdGuard Home..."
-        ssh2 "sudo systemctl stop AdGuardHome 2>/dev/null || sudo systemctl stop adguardhome 2>/dev/null || true"
-        ssh2 "sudo systemctl disable AdGuardHome 2>/dev/null || sudo systemctl disable adguardhome 2>/dev/null || true"
-        ok "AdGuard Home остановлен"
+    if [[ "$AGH_STATE" != "active" ]]; then
+        info "Запускаю AdGuard Home..."
+        LEGACY_PROXY_STATE=$(ssh2 "systemctl is-active youtube-proxy 2>/dev/null || echo inactive")
+        if [[ "$LEGACY_PROXY_STATE" == "active" ]]; then
+            warn "legacy youtube-proxy active — останавливаю перед запуском AdGuard Home"
+            ssh2 "sudo systemctl stop youtube-proxy 2>/dev/null || true"
+        fi
+
+        ENABLE_OUT=$(ssh2 "sudo systemctl enable AdGuardHome 2>/dev/null || sudo systemctl enable adguardhome 2>/dev/null")
+        ENABLE_RC=$?
+        [[ $ENABLE_RC -eq 0 ]] || warn "Не удалось enable AdGuard Home: $ENABLE_OUT"
+
+        START_OUT=$(ssh2 "sudo systemctl start AdGuardHome 2>/dev/null || sudo systemctl start adguardhome 2>/dev/null")
+        START_RC=$?
+        if [[ $START_RC -eq 0 ]] && ssh2 "systemctl is-active --quiet AdGuardHome 2>/dev/null || systemctl is-active --quiet adguardhome 2>/dev/null"; then
+            ok "AdGuard Home запущен"
+        else
+            fail "AdGuard Home не запущен после --fix"
+            [[ -n "$START_OUT" ]] && echo "$START_OUT" | while IFS= read -r line; do echo "    $line"; done
+            if [[ "$LEGACY_PROXY_STATE" == "active" ]]; then
+                warn "Восстанавливаю legacy youtube-proxy, чтобы не оставить DNS без сервиса"
+                ssh2 "sudo systemctl start youtube-proxy 2>/dev/null || true"
+            fi
+            info "Последние логи AdGuard Home:"
+            ssh2 "sudo journalctl -u AdGuardHome -n 30 --no-pager 2>/dev/null || sudo journalctl -u adguardhome -n 30 --no-pager 2>/dev/null || true" | tail -15
+        fi
     fi
 
     if [[ "$AWG0_V2" != "active" ]]; then
@@ -318,28 +302,6 @@ if $FIX; then
     if [[ "$IP_FWD2" != "1" ]]; then
         info "Включаю ip_forward..."
         ssh2 "sudo sysctl -w net.ipv4.ip_forward=1" && ok "ip_forward=1"
-    fi
-
-    # Проверяем наличие IP SAN в серверном сертификате.
-    # Если сертификат не содержит IP SAN — удаляем его, чтобы при рестарте
-    # youtube-proxy пересоздал его с актуальными IP из config.yaml.
-    CERT_HAS_IP_SAN=$(ssh2 "openssl x509 -in /opt/youtube-proxy/certs/server.crt -noout -text 2>/dev/null | grep -c 'IP Address' || echo 0" 2>/dev/null | tr -d '[:space:]')
-    if [[ "${CERT_HAS_IP_SAN:-0}" == "0" ]]; then
-        info "Серверный сертификат без IP SAN — пересоздаю..."
-        ssh2 "sudo rm -f /opt/youtube-proxy/certs/server.crt /opt/youtube-proxy/certs/server.key"
-        ok "Старый сертификат удалён (будет пересоздан с IP SAN при старте)"
-    fi
-
-    if [[ "$YT_STATE" != "active" ]]; then
-        info "Запускаю youtube-proxy..."
-        ssh2 "sudo systemctl start youtube-proxy" && ok "youtube-proxy запущен" || {
-            warn "Не удалось запустить youtube-proxy"
-            info "Логи:"
-            ssh2 "sudo journalctl -u youtube-proxy -n 30 --no-pager 2>/dev/null" | tail -15
-        }
-    else
-        info "Перезапускаю youtube-proxy (для применения изменений)..."
-        ssh2 "sudo systemctl restart youtube-proxy" && ok "youtube-proxy перезапущен" || warn "Не удалось"
     fi
 
     # Убеждаемся что resolv.conf указывает на 127.0.0.1
@@ -359,12 +321,6 @@ if $FIX; then
         ok "MASQUERADE добавлен"
     fi
 
-    # Разрешаем TCP 443 с VPN-интерфейса (нужно для YouTube прокси)
-    info "Проверяю firewall для TCP 443 (YouTube HTTPS прокси)..."
-    ssh2 "sudo iptables -C INPUT -p tcp --dport 443 -i awg0 -j ACCEPT 2>/dev/null || \
-          sudo iptables -I INPUT 1 -p tcp --dport 443 -i awg0 -j ACCEPT"
-    ok "TCP 443 с awg0 разрешён"
-
     # Разрешаем FORWARD для трафика через туннель
     info "Проверяю FORWARD правила..."
     ssh2 "sudo iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null || \
@@ -376,9 +332,9 @@ if $FIX; then
     sleep 2
     echo ""
     info "Проверка после исправлений:"
-    NEW_YT=$(ssh2 "systemctl is-active youtube-proxy 2>/dev/null || echo inactive")
+    NEW_AGH=$(ssh2 "systemctl is-active AdGuardHome 2>/dev/null || systemctl is-active adguardhome 2>/dev/null || echo inactive")
     NEW_DNS=$(ssh2 "ss -lunt 2>/dev/null | grep ':53' | head -2")
-    [[ "$NEW_YT" == "active" ]] && ok "youtube-proxy: active" || fail "youtube-proxy: $NEW_YT"
+    [[ "$NEW_AGH" == "active" ]] && ok "AdGuard Home: active" || fail "AdGuard Home: $NEW_AGH"
     [[ -n "$NEW_DNS" ]] && ok "Порт 53 слушает" || fail "Порт 53 не слушает"
 fi
 fi # VPS2_OK
@@ -395,8 +351,8 @@ echo -e "  ${YELLOW}1.${NC} SSH к VPS1 (10.9.0.1) зависает — monitor-
 echo -e "     Решение: уже исправлено (timeout на SSH)"
 echo ""
 echo -e "  ${YELLOW}2.${NC} DNS в WSL при включённом VPN идёт через VPN-DNS (10.8.0.2)"
-echo -e "     Если youtube-proxy не работает — DNS зависает → SSH зависает"
-echo -e "     Решение: убедиться что youtube-proxy работает на VPS2"
+echo -e "     Если AdGuard Home не работает — DNS зависает → SSH зависает"
+echo -e "     Решение: убедиться что AdGuard Home работает на VPS2"
 echo ""
 echo -e "  ${YELLOW}3.${NC} Порт 8080 на 127.0.0.1 занят другим процессом"
 if command -v ss >/dev/null 2>&1; then
@@ -423,13 +379,13 @@ else
 fi
 
 echo ""
-echo -e "  ${CYAN}Что делать если YouTube не работает:${NC}"
-echo -e "  1. Убедитесь что youtube-proxy active на VPS2 (см. выше)"
-echo -e "  2. CA-сертификат установлен на компьютере (уже сделано)"
-echo -e "  3. Перезапустите браузер после установки CA"
+echo -e "  ${CYAN}Что делать если реклама не фильтруется:${NC}"
+echo -e "  1. Убедитесь что AdGuard Home active на VPS2 (см. выше)"
+echo -e "  2. Убедитесь что порт 53 слушает на 10.8.0.2"
+echo -e "  3. Проверьте, что клиентский конфиг использует DNS=10.8.0.2"
 echo ""
 echo -e "  ${CYAN}Что делать если телефон без интернета:${NC}"
-echo -e "  1. youtube-proxy должен быть active (DNS на порту 53)"
+echo -e "  1. AdGuard Home должен быть active (DNS на порту 53)"
 echo -e "  2. awg0 на VPS2 должен быть active"
 echo -e "  3. MASQUERADE должен быть настроен"
 echo ""

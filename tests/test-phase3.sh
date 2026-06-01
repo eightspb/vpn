@@ -134,68 +134,76 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. config.yaml: CA-сервер на VPN-интерфейсе
+# 6. deploy.sh: legacy proxy flags are rejected
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 6. config.yaml: CA-сервер ограничен VPN-интерфейсом ---"
+echo "--- 6. scripts/deploy/deploy.sh: legacy proxy flags rejected ---"
 
-grep -q '10\.8\.0\.2:8080' youtube-proxy/config.yaml \
-    && ok "CA-сервер слушает на 10.8.0.2:8080 (VPN-интерфейс)" \
-    || fail "CA-сервер не ограничен VPN-интерфейсом"
-
-if grep -q '0\.0\.0\.0:8080' youtube-proxy/config.yaml; then
-    fail "CA-сервер всё ещё слушает на 0.0.0.0:8080"
+if grep -q -- '--with-proxy|--remove-adguard' scripts/deploy/deploy.sh; then
+    ok "deploy.sh явно отклоняет --with-proxy/--remove-adguard"
 else
-    ok "CA-сервер не слушает на 0.0.0.0:8080"
+    fail "deploy.sh не отклоняет legacy proxy flags"
 fi
 
 # ---------------------------------------------------------------------------
-# 7. scripts/deploy/deploy-proxy.sh: firewall-правило для порта 8080
+# 7. manage.sh: legacy proxy mode is rejected
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 7. scripts/deploy/deploy-proxy.sh: firewall для CA-сервера ---"
+echo "--- 7. manage.sh: legacy proxy mode rejected ---"
 
-grep -qE 'iptables.*8080.*DROP|DROP.*8080' scripts/deploy/deploy-proxy.sh \
-    && ok "scripts/deploy/deploy-proxy.sh блокирует порт 8080 снаружи" \
-    || fail "scripts/deploy/deploy-proxy.sh не блокирует порт 8080 снаружи"
-
-grep -qE 'iptables.*8080.*awg0|awg0.*8080' scripts/deploy/deploy-proxy.sh \
-    && ok "scripts/deploy/deploy-proxy.sh разрешает порт 8080 только через awg0" \
-    || fail "scripts/deploy/deploy-proxy.sh не ограничивает 8080 интерфейсом awg0"
-
-if grep -q 'http://\$VPS2_IP:8080' scripts/deploy/deploy-proxy.sh; then
-    fail "scripts/deploy/deploy-proxy.sh всё ещё содержит публичный URL CA (http://VPS2_IP:8080)"
+if grep -q -- '--proxy удалён' manage.sh; then
+    ok "manage.sh явно отклоняет --proxy"
 else
-    ok "scripts/deploy/deploy-proxy.sh не содержит публичный URL CA"
+    fail "manage.sh не отклоняет --proxy"
 fi
 
-grep -q '10\.8\.0\.2:8080' scripts/deploy/deploy-proxy.sh \
-    && ok "scripts/deploy/deploy-proxy.sh указывает VPN-URL для CA (10.8.0.2:8080)" \
-    || fail "scripts/deploy/deploy-proxy.sh не содержит VPN-URL для CA"
-
 # ---------------------------------------------------------------------------
-# 8. Go build проверка
+# 8. diagnose.sh: AdGuard Home is the DNS service
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 8. Go build youtube-proxy ---"
+echo "--- 8. scripts/tools/diagnose.sh: AdGuard Home checks ---"
 
-GO_BIN=""
-for candidate in go ~/go/bin/go ~/go-dist/go/bin/go /usr/local/go/bin/go; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-        GO_BIN="$candidate"
-        break
+if grep -q 'AdGuard Home' scripts/tools/diagnose.sh && grep -q 'port53' scripts/tools/diagnose.sh; then
+    ok "diagnose.sh проверяет AdGuard Home и DNS port 53"
+else
+    fail "diagnose.sh не проверяет AdGuard Home/DNS"
+fi
+
+if grep -q 'systemctl start AdGuardHome' scripts/tools/diagnose.sh && grep -q 'Восстанавливаю legacy youtube-proxy' scripts/tools/diagnose.sh; then
+    ok "diagnose.sh ремонтирует AdGuard Home и восстанавливает legacy DNS только при rollback"
+else
+    fail "diagnose.sh не содержит безопасный rollback legacy DNS при ошибке AdGuard"
+fi
+
+# ---------------------------------------------------------------------------
+# 9. deploy scripts: safe AdGuard switch before legacy cleanup
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- 9. deploy scripts: safe AdGuard switch before legacy cleanup ---"
+
+for deploy_file in scripts/deploy/deploy.sh scripts/deploy/deploy-vps2.sh; do
+    if grep -q 'ADGUARD_WAS_ACTIVE' "$deploy_file" && \
+       grep -q 'ADGUARD_CONFIG_BACKUP' "$deploy_file" && \
+       grep -q 'LEGACY_YOUTUBE_PROXY_ACTIVE' "$deploy_file" && \
+       grep -q 'restore_previous_dns' "$deploy_file" && \
+       grep -q 'health_ok' "$deploy_file"; then
+        ok "$deploy_file: есть rollback конфига/сервиса и healthcheck при переключении DNS"
+    else
+        fail "$deploy_file: нет полного rollback/healthcheck при переключении DNS"
+    fi
+
+    backup_line=$(grep -n 'ADGUARD_CONFIG_BACKUP=' "$deploy_file" | head -1 | cut -d: -f1)
+    curl_line=$(grep -n 'curl -fsSL https://static.adguard.com' "$deploy_file" | head -1 | cut -d: -f1)
+    health_line=$(grep -n 'health_ok=false' "$deploy_file" | head -1 | cut -d: -f1)
+    cleanup_line=$(grep -n 'rm -rf /opt/youtube-proxy' "$deploy_file" | head -1 | cut -d: -f1)
+
+    if [[ -n "$backup_line" && -n "$curl_line" && -n "$health_line" && -n "$cleanup_line" && \
+          "$backup_line" -lt "$curl_line" && "$curl_line" -lt "$health_line" && "$health_line" -lt "$cleanup_line" ]]; then
+        ok "$deploy_file: backup и legacy cleanup выполняются в безопасном порядке"
+    else
+        fail "$deploy_file: backup/cleanup порядок может сломать DNS при неудачном deploy"
     fi
 done
-
-if [[ -n "$GO_BIN" ]]; then
-    if (cd youtube-proxy && "$GO_BIN" build ./... 2>&1); then
-        ok "go build ./... успешен в youtube-proxy"
-    else
-        fail "go build ./... завершился с ошибкой"
-    fi
-else
-    echo "  [SKIP] Go не найден, пропускаем go build"
-fi
 
 # ---------------------------------------------------------------------------
 # Итог

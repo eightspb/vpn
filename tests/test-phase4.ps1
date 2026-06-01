@@ -68,12 +68,18 @@ Write-Host "--- 4. .gitignore содержит нужные записи ---"
 
 $gi = Get-Content ".gitignore" -Raw -ErrorAction SilentlyContinue
 
-foreach ($pattern in @("*.conf", "vpn-output/*", ".env", "youtube-proxy/youtube-proxy")) {
+foreach ($pattern in @("*.conf", "vpn-output/*", ".env")) {
     if ($gi -match [regex]::Escape($pattern)) {
         ok ".gitignore содержит: $pattern"
     } else {
         fail ".gitignore не содержит: $pattern"
     }
+}
+
+if ($gi -match "youtube-proxy") {
+    fail ".gitignore содержит устаревший youtube-proxy"
+} else {
+    ok ".gitignore не содержит устаревший youtube-proxy"
 }
 
 # ---------------------------------------------------------------------------
@@ -123,7 +129,7 @@ foreach ($f in @(
 Write-Host ""
 Write-Host "--- 7. Deploy-скрипты: базовая валидация структуры ---"
 
-foreach ($script in @("scripts/deploy/deploy.sh", "scripts/deploy/deploy-vps1.sh", "scripts/deploy/deploy-vps2.sh", "scripts/deploy/deploy-proxy.sh")) {
+foreach ($script in @("scripts/deploy/deploy.sh", "scripts/deploy/deploy-vps1.sh", "scripts/deploy/deploy-vps2.sh")) {
     if (-not (Test-Path $script)) {
         fail "$script отсутствует"
         continue

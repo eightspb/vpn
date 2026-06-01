@@ -387,7 +387,7 @@ else
   AGH=inactive
 fi
 if ss -lunt 2>/dev/null | grep -qE ':53[[:space:]]'; then
-  if getent ahostsv4 youtubei.googleapis.com >/dev/null 2>&1 || getent hosts youtubei.googleapis.com >/dev/null 2>&1; then
+  if getent ahostsv4 google.com >/dev/null 2>&1 || getent hosts google.com >/dev/null 2>&1; then
     DNS53=up
   else
     DNS53=degraded
@@ -406,13 +406,10 @@ LAST_DEPLOY_TS=$(awk 'NR==1{print int($1)}' /etc/vpn-last-deploy.ts 2>/dev/null 
 if ! [[ "$LAST_DEPLOY_TS" =~ ^[0-9]+$ ]] || [[ "$LAST_DEPLOY_TS" -le 0 ]]; then
   C1=$(stat -c %Y /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || echo 0)
   C2=$(stat -c %Y /opt/AdGuardHome/AdGuardHome.yaml 2>/dev/null || echo 0)
-  C3=$(stat -c %Y /opt/youtube-proxy/config.yaml 2>/dev/null || echo 0)
   [[ "$C1" =~ ^[0-9]+$ ]] || C1=0
   [[ "$C2" =~ ^[0-9]+$ ]] || C2=0
-  [[ "$C3" =~ ^[0-9]+$ ]] || C3=0
   LAST_DEPLOY_TS=$C1
   [[ "$C2" -gt "$LAST_DEPLOY_TS" ]] && LAST_DEPLOY_TS=$C2
-  [[ "$C3" -gt "$LAST_DEPLOY_TS" ]] && LAST_DEPLOY_TS=$C3
 fi
 echo "HOST=$HOST"
 echo "LOAD=$LOAD"

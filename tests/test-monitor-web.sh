@@ -588,76 +588,51 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 10. scripts/windows/install-ca.ps1 присутствует и корректен
+# 10. Legacy youtube-proxy/CA installer удалены
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 10. scripts/windows/install-ca.ps1: скрипт установки CA-сертификата ---"
+echo "--- 10. Legacy youtube-proxy/CA installer удалены ---"
 
-if [[ -f "scripts/windows/install-ca.ps1" ]]; then
-    ok "scripts/windows/install-ca.ps1 существует"
+if [[ ! -f "scripts/windows/install-ca.ps1" ]]; then
+    ok "scripts/windows/install-ca.ps1 удалён"
 else
-    fail "scripts/windows/install-ca.ps1 отсутствует"
+    fail "scripts/windows/install-ca.ps1 всё ещё существует"
 fi
 
-if grep -q '10.8.0.2:8080/ca.crt' scripts/windows/install-ca.ps1 2>/dev/null; then
-    ok "scripts/windows/install-ca.ps1: URL CA-сертификата корректен (10.8.0.2:8080/ca.crt)"
+if [[ ! -f "scripts/deploy/deploy-proxy.sh" ]]; then
+    ok "scripts/deploy/deploy-proxy.sh удалён"
 else
-    fail "scripts/windows/install-ca.ps1: URL CA-сертификата не найден"
+    fail "scripts/deploy/deploy-proxy.sh всё ещё существует"
 fi
 
-if grep -q 'Test-Connection.*10.9.0.1' scripts/windows/install-ca.ps1 2>/dev/null; then
-    ok "scripts/windows/install-ca.ps1: проверяет подключение к VPN (10.9.0.1)"
+if [[ ! -d "youtube-proxy" ]]; then
+    ok "youtube-proxy/ удалён"
 else
-    fail "scripts/windows/install-ca.ps1: не проверяет подключение к VPN"
-fi
-
-if grep -q 'StoreName.*Root\|StoreName]::Root' scripts/windows/install-ca.ps1 2>/dev/null && \
-   grep -q 'LocalMachine' scripts/windows/install-ca.ps1 2>/dev/null; then
-    ok "scripts/windows/install-ca.ps1: устанавливает в Trusted Root CAs (LocalMachine)"
-else
-    fail "scripts/windows/install-ca.ps1: не устанавливает в Trusted Root CAs"
+    fail "youtube-proxy/ всё ещё существует"
 fi
 
 # ---------------------------------------------------------------------------
-# 11. scripts/deploy/deploy-proxy.sh: AdGuard Home останавливается принудительно
+# 11. deploy/CLI legacy proxy flags отключены
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- 11. scripts/deploy/deploy-proxy.sh: конфликт портов AdGuard/youtube-proxy ---"
+echo "--- 11. deploy/CLI legacy proxy flags отключены ---"
 
-if [[ -f "scripts/deploy/deploy-proxy.sh" ]]; then
-    ok "scripts/deploy/deploy-proxy.sh существует"
+if grep -q -- '--proxy удалён' manage.sh 2>/dev/null; then
+    ok "manage.sh: --proxy явно отклоняется"
 else
-    fail "scripts/deploy/deploy-proxy.sh отсутствует"
+    fail "manage.sh: --proxy не отклоняется явно"
 fi
 
-if grep -q 'systemctl stop AdGuardHome' scripts/deploy/deploy-proxy.sh 2>/dev/null; then
-    ok "scripts/deploy/deploy-proxy.sh: AdGuard Home останавливается"
+if grep -q -- '--with-proxy|--remove-adguard' scripts/deploy/deploy.sh 2>/dev/null; then
+    ok "deploy.sh: --with-proxy/--remove-adguard явно отклоняются"
 else
-    fail "scripts/deploy/deploy-proxy.sh: AdGuard Home не останавливается"
+    fail "deploy.sh: legacy proxy flags не отклоняются явно"
 fi
 
-if grep -q 'systemctl disable AdGuardHome' scripts/deploy/deploy-proxy.sh 2>/dev/null; then
-    ok "scripts/deploy/deploy-proxy.sh: AdGuard Home отключается из автозапуска"
+if ! grep -q -- '--with-proxy\|--remove-adguard\|YouTube Ad Proxy\|youtube-proxy' README.md AGENTS.md CLAUDE.md ONBOARDING-MEMO.md 2>/dev/null; then
+    ok "Документация не содержит legacy proxy сценарии"
 else
-    fail "scripts/deploy/deploy-proxy.sh: AdGuard Home не отключается из автозапуска"
-fi
-
-if grep -q '10.9.0.0/24.*ACCEPT' scripts/deploy/deploy-proxy.sh 2>/dev/null; then
-    ok "scripts/deploy/deploy-proxy.sh: SSH разрешён из VPN-сети (10.9.0.0/24)"
-else
-    fail "scripts/deploy/deploy-proxy.sh: SSH из VPN-сети не разрешён"
-fi
-
-if grep -q 'tcp.*443.*awg0.*ACCEPT\|443.*awg0' scripts/deploy/deploy-proxy.sh 2>/dev/null; then
-    ok "scripts/deploy/deploy-proxy.sh: TCP 443 с awg0 разрешён (YouTube HTTPS прокси)"
-else
-    fail "scripts/deploy/deploy-proxy.sh: TCP 443 с awg0 не разрешён — YouTube прокси может не работать"
-fi
-
-if grep -q '10.8.0.2:8080/ca.crt\|install-ca.ps1' scripts/deploy/deploy-proxy.sh 2>/dev/null; then
-    ok "scripts/deploy/deploy-proxy.sh: содержит инструкцию установки CA"
-else
-    fail "scripts/deploy/deploy-proxy.sh: должна быть инструкция установки CA (URL или install-ca.ps1)"
+    fail "Документация всё ещё содержит legacy proxy сценарии"
 fi
 
 # ---------------------------------------------------------------------------
@@ -678,13 +653,19 @@ else
     fail "scripts/tools/diagnose.sh: ошибка синтаксиса bash"
 fi
 
-for check in 'youtube-proxy' 'AdGuardHome' 'MASQUERADE' 'awg0' 'port53' '--fix'; do
+for check in 'AdGuardHome' 'AdGuard Home' 'MASQUERADE' 'awg0' 'port53' '--fix'; do
     if grep -q -- "$check" scripts/tools/diagnose.sh 2>/dev/null; then
         ok "scripts/tools/diagnose.sh: проверяет '$check'"
     else
         fail "scripts/tools/diagnose.sh: не проверяет '$check'"
     fi
 done
+
+if grep -q 'Восстанавливаю legacy youtube-proxy' scripts/tools/diagnose.sh 2>/dev/null; then
+    ok "scripts/tools/diagnose.sh: восстанавливает legacy DNS только как rollback"
+else
+    fail "scripts/tools/diagnose.sh: нет rollback для legacy DNS при ошибке AdGuard"
+fi
 
 # ---------------------------------------------------------------------------
 # Итог

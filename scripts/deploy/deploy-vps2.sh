@@ -262,6 +262,7 @@ err "Не удалось сгенерировать bcrypt-хэш пароля. 
 
 run_script2 "
 export DEBIAN_FRONTEND=noninteractive
+set -e
 mkdir -p /etc/systemd/resolved.conf.d
 cat > /etc/systemd/resolved.conf.d/adguard.conf << 'EOF'
 [Resolve]
@@ -271,12 +272,34 @@ EOF
 systemctl restart systemd-resolved 2>/dev/null || true
 sleep 1
 
+ADGUARD_WAS_ACTIVE=0
+if systemctl is-active --quiet AdGuardHome 2>/dev/null || systemctl is-active --quiet adguardhome 2>/dev/null; then
+    ADGUARD_WAS_ACTIVE=1
+fi
+LEGACY_YOUTUBE_PROXY_ACTIVE=0
+if systemctl is-active --quiet youtube-proxy 2>/dev/null; then
+    LEGACY_YOUTUBE_PROXY_ACTIVE=1
+fi
+ADGUARD_CONFIG_BACKUP=/tmp/AdGuardHome.yaml.pre-deploy
+if [[ -f /opt/AdGuardHome/AdGuardHome.yaml ]]; then
+    cp -f /opt/AdGuardHome/AdGuardHome.yaml \"\$ADGUARD_CONFIG_BACKUP\"
+else
+    rm -f \"\$ADGUARD_CONFIG_BACKUP\"
+fi
+
 cd /tmp
+rm -rf /tmp/AdGuardHome /tmp/agh.tar.gz
 curl -fsSL https://static.adguard.com/adguardhome/release/AdGuardHome_linux_amd64.tar.gz -o agh.tar.gz
 tar -xzf agh.tar.gz
 cd AdGuardHome
 ./AdGuardHome -s install 2>/dev/null || true
 sleep 2
+
+if [[ ! -x /opt/AdGuardHome/AdGuardHome ]]; then
+    echo 'AdGuard Home binary not found after install; keeping existing DNS service intact' >&2
+    exit 1
+fi
+
 /opt/AdGuardHome/AdGuardHome -s stop 2>/dev/null || true
 sleep 1
 
@@ -335,8 +358,52 @@ statistics:
 schema_version: 28
 AGHEOF
 
-/opt/AdGuardHome/AdGuardHome -s start
+restore_previous_dns() {
+    /opt/AdGuardHome/AdGuardHome -s stop 2>/dev/null || true
+    if [[ -f \"\$ADGUARD_CONFIG_BACKUP\" ]]; then
+        cp -f \"\$ADGUARD_CONFIG_BACKUP\" /opt/AdGuardHome/AdGuardHome.yaml
+    fi
+    if [[ \"\$ADGUARD_WAS_ACTIVE\" == \"1\" ]]; then
+        /opt/AdGuardHome/AdGuardHome -s start 2>/dev/null || \
+            systemctl start AdGuardHome 2>/dev/null || \
+            systemctl start adguardhome 2>/dev/null || true
+    elif [[ \"\$LEGACY_YOUTUBE_PROXY_ACTIVE\" == \"1\" ]]; then
+        systemctl start youtube-proxy 2>/dev/null || true
+    fi
+}
+
+systemctl stop youtube-proxy 2>/dev/null || true
+if ! /opt/AdGuardHome/AdGuardHome -s start; then
+    restore_previous_dns
+    echo 'AdGuard Home failed to start; previous DNS service/config was restored when available' >&2
+    exit 1
+fi
 sleep 3
+
+health_ok=false
+if systemctl is-active --quiet AdGuardHome 2>/dev/null || systemctl is-active --quiet adguardhome 2>/dev/null; then
+    if ss -lunt 2>/dev/null | grep -qE ':53[[:space:]]'; then
+        if command -v dig >/dev/null 2>&1; then
+            dig +time=3 +tries=1 @${TUN_NET}.2 google.com +short 2>/dev/null | grep -Eq '^[0-9]+\\.' && health_ok=true
+        elif getent ahostsv4 google.com >/dev/null 2>&1 || getent hosts google.com >/dev/null 2>&1; then
+            health_ok=true
+        fi
+    fi
+fi
+
+if [[ \"\$health_ok\" != \"true\" ]]; then
+    restore_previous_dns
+    journalctl -u AdGuardHome -n 30 --no-pager 2>/dev/null || journalctl -u adguardhome -n 30 --no-pager 2>/dev/null || true
+    echo 'AdGuard Home healthcheck failed; previous DNS service/config was restored when available' >&2
+    exit 1
+fi
+
+systemctl disable youtube-proxy 2>/dev/null || true
+rm -f /etc/systemd/system/youtube-proxy.service
+rm -rf /opt/youtube-proxy
+rm -f \"\$ADGUARD_CONFIG_BACKUP\"
+systemctl daemon-reload 2>/dev/null || true
+
 /opt/AdGuardHome/AdGuardHome -s status
 echo AGH_OK
 "

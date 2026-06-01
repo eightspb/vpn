@@ -1,21 +1,10 @@
 #!/usr/bin/env bash
-# Tests for Phase 2 (performance): DNS cache, streaming, connection pooling, MTU in deploy scripts
+# Tests for Phase 2 (performance): MTU in deploy scripts and legacy proxy cleanup
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 FAIL=0
 
-echo "=== Phase 2: Go build youtube-proxy ==="
-if ! command -v go >/dev/null 2>&1; then
-  echo "SKIP: go не найден, пропускаем go build"
-elif (cd youtube-proxy && go build ./...); then
-  echo "OK: youtube-proxy build"
-else
-  echo "FAIL: youtube-proxy build"
-  FAIL=1
-fi
-
-echo ""
 echo "=== Phase 2: MTU in scripts/deploy/deploy-vps1.sh (awg0, awg1) ==="
 if grep -q "MTU = 1420" scripts/deploy/deploy-vps1.sh && grep -q "MTU = 1360" scripts/deploy/deploy-vps1.sh; then
   echo "OK: scripts/deploy/deploy-vps1.sh has MTU for awg0 and awg1"
@@ -34,29 +23,27 @@ else
 fi
 
 echo ""
-echo "=== Phase 2: proxy.go connection pooling ==="
-if grep -q "MaxIdleConns" youtube-proxy/internal/proxy/proxy.go; then
-  echo "OK: connection pooling in proxy.go"
+echo "=== Phase 2: legacy youtube-proxy removed ==="
+if [[ ! -d youtube-proxy && ! -f scripts/deploy/deploy-proxy.sh ]]; then
+  echo "OK: youtube-proxy code and deploy script removed"
 else
-  echo "FAIL: proxy.go expected MaxIdleConns"
+  echo "FAIL: youtube-proxy legacy files still present"
   FAIL=1
 fi
 
-echo ""
-echo "=== Phase 2: proxy.go streaming ==="
-if grep -q "io.Copy(w, resp.Body)" youtube-proxy/internal/proxy/proxy.go; then
-  echo "OK: streaming for non-filtered requests"
+if ! grep -q -- "--with-proxy" README.md manage.sh; then
+  echo "OK: --with-proxy removed from docs/help"
+elif grep -q -- '--with-proxy|--remove-adguard' scripts/deploy/deploy.sh; then
+  echo "OK: legacy proxy flags are rejected by deploy.sh"
 else
-  echo "FAIL: proxy.go expected io.Copy streaming"
+  echo "FAIL: --with-proxy still referenced outside explicit rejection"
   FAIL=1
 fi
 
-echo ""
-echo "=== Phase 2: dns/server.go cache ==="
-if grep -q "cacheEntry" youtube-proxy/internal/dns/server.go && grep -q "maxCacheTTL" youtube-proxy/internal/dns/server.go; then
-  echo "OK: DNS cache in server.go"
+if ! grep -q -- "--proxy" README.md && grep -q -- '--proxy удалён' manage.sh; then
+  echo "OK: --proxy removed from docs and rejected by manage.sh"
 else
-  echo "FAIL: dns/server.go expected cache (cacheEntry, maxCacheTTL)"
+  echo "FAIL: --proxy docs/rejection state is not correct"
   FAIL=1
 fi
 

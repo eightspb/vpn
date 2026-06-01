@@ -303,7 +303,7 @@ if [[ "$CPU_USAGE" -gt "$THRESHOLD" ]]; then
     SUSPICIOUS=$(ps aux --sort=-%cpu | awk 'NR>1 && $3>50 {print $11}' | head -3)
     for proc in $SUSPICIOUS; do
         KNOWN=false
-        for safe in awg-quick awg youtube-proxy AdGuardHome sshd systemd apt dpkg; do
+        for safe in awg-quick awg AdGuardHome sshd systemd apt dpkg; do
             [[ "$proc" == *"$safe"* ]] && KNOWN=true && break
         done
         if [[ "$KNOWN" == "false" ]]; then

@@ -82,7 +82,12 @@ check_gitignore() {
 check_gitignore "*.conf"
 check_gitignore "vpn-output/*"
 check_gitignore ".env"
-check_gitignore "youtube-proxy/youtube-proxy"
+
+if grep -q 'youtube-proxy' .gitignore 2>/dev/null; then
+    fail ".gitignore содержит устаревший youtube-proxy"
+else
+    ok ".gitignore не содержит устаревший youtube-proxy"
+fi
 
 # ---------------------------------------------------------------------------
 # 5. README.md содержит актуальную документацию
@@ -134,7 +139,7 @@ done
 echo ""
 echo "--- 7. Deploy-скрипты: базовая валидация структуры ---"
 
-for script in scripts/deploy/deploy.sh scripts/deploy/deploy-vps1.sh scripts/deploy/deploy-vps2.sh scripts/deploy/deploy-proxy.sh; do
+for script in scripts/deploy/deploy.sh scripts/deploy/deploy-vps1.sh scripts/deploy/deploy-vps2.sh; do
     if [[ ! -f "$script" ]]; then
         fail "$script отсутствует"
         continue

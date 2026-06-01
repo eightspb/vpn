@@ -6,8 +6,7 @@
 
 - Клиент -> VPS1 (вход, AmneziaWG)
 - VPS1 -> VPS2 (туннель)
-- VPS2 -> Интернет
-- Опционально: `youtube-proxy` (DNS/HTTPS фильтрация)
+- VPS2 -> AdGuard Home DNS-фильтрация -> Интернет
 
 Единая точка входа: `manage.sh`.
 
@@ -30,13 +29,9 @@ bash manage.sh audit
 # Полный деплой
 bash manage.sh deploy
 
-# Полный деплой + youtube-proxy
-bash manage.sh deploy --with-proxy --remove-adguard
-
 # Точечный деплой
 bash manage.sh deploy --vps1
 bash manage.sh deploy --vps2
-bash manage.sh deploy --proxy --remove-adguard
 ```
 
 ### Мониторинг
@@ -77,7 +72,6 @@ bash manage.sh admin stop
 - `scripts/monitor/` — realtime/web мониторинг
 - `scripts/tools/` — диагностика, оптимизация, peers, аудит
 - `scripts/admin/` — Flask API + web UI админки
-- `youtube-proxy/` — Go-сервис DNS/HTTPS фильтра
 - `tests/` — shell/ps1 тесты
 - `vpn-output/` — сгенерированные конфиги и ключевые артефакты
 
@@ -117,4 +111,3 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/repair-local-configs.ps
 ## 7. Правило внесения изменений
 
 Любое изменение делается как: скрипт + тест + обновление документации.
-

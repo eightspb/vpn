@@ -24,8 +24,6 @@
 #   --client-ip     IP клиента в VPN сети (default: 10.9.0.2)
 #   --adguard-pass  Пароль для AdGuard Home Web UI (обязательный, без дефолта)
 #   --output-dir    Куда сохранить клиентский конфиг (default: ./vpn-output)
-#   --with-proxy    Задеплоить YouTube Ad Proxy на VPS2 (DNS + HTTPS фильтр)
-#   --remove-adguard  Удалить AdGuard Home (только с --with-proxy)
 #   --help          Показать эту справку
 #
 # Примеры:
@@ -53,8 +51,6 @@ VPS2_IP=""; VPS2_USER=""; VPS2_KEY=""; VPS2_PASS=""
 CLIENT_VPN_IP="10.9.0.2"
 ADGUARD_PASS=""
 OUTPUT_DIR="./vpn-output"
-WITH_PROXY=false
-REMOVE_ADGUARD=false
 SECURITY_UPDATE_SCRIPT="${SCRIPT_DIR}/security-update.sh"
 SECURITY_HARDEN_SCRIPT="${SCRIPT_DIR}/security-harden.sh"
 
@@ -82,8 +78,9 @@ while [[ $# -gt 0 ]]; do
         --client-ip)   CLIENT_VPN_IP="$2"; shift 2 ;;
         --adguard-pass) ADGUARD_PASS="$2"; shift 2 ;;
         --output-dir)  OUTPUT_DIR="$2";   shift 2 ;;
-        --with-proxy)  WITH_PROXY=true;   shift ;;
-        --remove-adguard) REMOVE_ADGUARD=true; shift ;;
+        --with-proxy|--remove-adguard)
+            err "$1 удалён: legacy proxy больше не поддерживается. Используйте AdGuard Home через обычный deploy."
+            ;;
         --help|-h)
             sed -n '/^# Использование/,/^# ====/p' "$0" | grep -v "^# ====" | sed 's/^# \?//'
             exit 0 ;;
@@ -584,10 +581,6 @@ echo VPS1_AWG_OK
 ok "VPS1 настроен"
 
 # ── Шаг 7: Установка AdGuard Home на VPS2 ─────────────────────────────────
-if [[ "$WITH_PROXY" == "true" ]]; then
-    step "Шаг 7/8: Пропуск AdGuard Home (используется youtube-proxy)"
-    warn "AdGuard Home не устанавливается — его функции выполняет youtube-proxy"
-else
 step "Шаг 7/8: Установка AdGuard Home на VPS2"
 
 # Хэш пароля bcrypt для AdGuard Home
@@ -601,6 +594,7 @@ err "Не удалось сгенерировать bcrypt-хэш пароля. 
 
 run_script2 "
 export DEBIAN_FRONTEND=noninteractive
+set -e
 
 # Освобождаем порт 53 от systemd-resolved
 mkdir -p /etc/systemd/resolved.conf.d
@@ -612,13 +606,35 @@ EOF
 systemctl restart systemd-resolved 2>/dev/null || true
 sleep 1
 
+ADGUARD_WAS_ACTIVE=0
+if systemctl is-active --quiet AdGuardHome 2>/dev/null || systemctl is-active --quiet adguardhome 2>/dev/null; then
+    ADGUARD_WAS_ACTIVE=1
+fi
+LEGACY_YOUTUBE_PROXY_ACTIVE=0
+if systemctl is-active --quiet youtube-proxy 2>/dev/null; then
+    LEGACY_YOUTUBE_PROXY_ACTIVE=1
+fi
+ADGUARD_CONFIG_BACKUP=/tmp/AdGuardHome.yaml.pre-deploy
+if [[ -f /opt/AdGuardHome/AdGuardHome.yaml ]]; then
+    cp -f /opt/AdGuardHome/AdGuardHome.yaml \"\$ADGUARD_CONFIG_BACKUP\"
+else
+    rm -f \"\$ADGUARD_CONFIG_BACKUP\"
+fi
+
 # Скачиваем и устанавливаем AdGuard Home
 cd /tmp
+rm -rf /tmp/AdGuardHome /tmp/agh.tar.gz
 curl -fsSL https://static.adguard.com/adguardhome/release/AdGuardHome_linux_amd64.tar.gz -o agh.tar.gz
 tar -xzf agh.tar.gz
 cd AdGuardHome
 ./AdGuardHome -s install 2>/dev/null || true
 sleep 2
+
+if [[ ! -x /opt/AdGuardHome/AdGuardHome ]]; then
+    echo 'AdGuard Home binary not found after install; keeping existing DNS service intact' >&2
+    exit 1
+fi
+
 /opt/AdGuardHome/AdGuardHome -s stop 2>/dev/null || true
 sleep 1
 
@@ -678,13 +694,56 @@ statistics:
 schema_version: 28
 AGHEOF
 
-/opt/AdGuardHome/AdGuardHome -s start
+restore_previous_dns() {
+    /opt/AdGuardHome/AdGuardHome -s stop 2>/dev/null || true
+    if [[ -f \"\$ADGUARD_CONFIG_BACKUP\" ]]; then
+        cp -f \"\$ADGUARD_CONFIG_BACKUP\" /opt/AdGuardHome/AdGuardHome.yaml
+    fi
+    if [[ \"\$ADGUARD_WAS_ACTIVE\" == \"1\" ]]; then
+        /opt/AdGuardHome/AdGuardHome -s start 2>/dev/null || \
+            systemctl start AdGuardHome 2>/dev/null || \
+            systemctl start adguardhome 2>/dev/null || true
+    elif [[ \"\$LEGACY_YOUTUBE_PROXY_ACTIVE\" == \"1\" ]]; then
+        systemctl start youtube-proxy 2>/dev/null || true
+    fi
+}
+
+systemctl stop youtube-proxy 2>/dev/null || true
+if ! /opt/AdGuardHome/AdGuardHome -s start; then
+    restore_previous_dns
+    echo 'AdGuard Home failed to start; previous DNS service/config was restored when available' >&2
+    exit 1
+fi
 sleep 3
+
+health_ok=false
+if systemctl is-active --quiet AdGuardHome 2>/dev/null || systemctl is-active --quiet adguardhome 2>/dev/null; then
+    if ss -lunt 2>/dev/null | grep -qE ':53[[:space:]]'; then
+        if command -v dig >/dev/null 2>&1; then
+            dig +time=3 +tries=1 @${TUN_NET}.2 google.com +short 2>/dev/null | grep -Eq '^[0-9]+\\.' && health_ok=true
+        elif getent ahostsv4 google.com >/dev/null 2>&1 || getent hosts google.com >/dev/null 2>&1; then
+            health_ok=true
+        fi
+    fi
+fi
+
+if [[ \"\$health_ok\" != \"true\" ]]; then
+    restore_previous_dns
+    journalctl -u AdGuardHome -n 30 --no-pager 2>/dev/null || journalctl -u adguardhome -n 30 --no-pager 2>/dev/null || true
+    echo 'AdGuard Home healthcheck failed; previous DNS service/config was restored when available' >&2
+    exit 1
+fi
+
+systemctl disable youtube-proxy 2>/dev/null || true
+rm -f /etc/systemd/system/youtube-proxy.service
+rm -rf /opt/youtube-proxy
+rm -f \"\$ADGUARD_CONFIG_BACKUP\"
+systemctl daemon-reload 2>/dev/null || true
+
 /opt/AdGuardHome/AdGuardHome -s status
 echo AGH_OK
 "
 ok "AdGuard Home установлен на VPS2"
-fi  # end if WITH_PROXY != true
 
 # ── Шаг 8: Генерация клиентского конфига ──────────────────────────────────
 step "Шаг 8/8: Генерация клиентского конфига"
@@ -736,18 +795,6 @@ H1=${H1} H2=${H2} H3=${H3} H4=${H4}
 EOF
 chmod 600 "${OUTPUT_DIR}/keys.txt"
 
-# ── YouTube Proxy (опционально) ───────────────────────────────────────────
-if [[ "$WITH_PROXY" == "true" ]]; then
-    step "Деплой YouTube Ad Proxy на VPS2"
-    PROXY_ARGS="--vps2-ip $VPS2_IP"
-    [[ -n "$VPS2_KEY" ]]              && PROXY_ARGS="$PROXY_ARGS --vps2-key $VPS2_KEY"
-    [[ "$REMOVE_ADGUARD" == "true" ]] && PROXY_ARGS="$PROXY_ARGS --remove-adguard"
-
-    # Convert Windows path to Linux path for bash
-    LINUX_SCRIPT_DIR=$(cd "$SCRIPT_DIR" && pwd)
-    bash "${LINUX_SCRIPT_DIR}/deploy-proxy.sh" $PROXY_ARGS
-fi
-
 # ── Фиксация времени успешного деплоя на серверах ─────────────────────────
 DEPLOY_TS="$(date +%s)"
 if run1 "echo '${DEPLOY_TS}' | sudo tee /etc/vpn-last-deploy.ts >/dev/null && sudo chmod 644 /etc/vpn-last-deploy.ts"; then
@@ -773,16 +820,10 @@ echo ""
 echo -e "  ${GREEN}Клиентский конфиг:${NC} ${BOLD}${CLIENT_CONF}${NC}"
 echo -e "  ${GREEN}Импортируй в:${NC} AmneziaVPN (https://amnezia.org/ru/downloads)"
 echo ""
-if [[ "$WITH_PROXY" != "true" ]]; then
 echo -e "  ${GREEN}AdGuard Home:${NC}"
 echo -e "  URL:    http://${VPS2_IP}:3000"
 echo -e "  Логин:  admin"
 echo -e "  Пароль: ${ADGUARD_PASS}"
-else
-echo -e "  ${GREEN}YouTube Ad Proxy:${NC}"
-echo -e "  CA cert: http://${VPS2_IP}:8080/ca.crt  (установи на устройства)"
-echo -e "  DNS+HTTPS фильтрация активна на VPS2"
-fi
 echo ""
 echo -e "  ${GREEN}SSH доступ:${NC}"
 echo -e "  VPS1: ssh ${VPS1_USER}@${VPS1_IP}"

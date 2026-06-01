@@ -145,14 +145,6 @@ if [[ "${localhost_bypass_count}" -gt 2 ]]; then
         "Restrict bypass to read-only monitoring endpoints only."
 fi
 
-if grep -q 'upstreamURL := fmt.Sprintf("https://%s%s", host, r.RequestURI)' "${PROJECT_ROOT}/youtube-proxy/internal/proxy/proxy.go"; then
-    add_finding \
-        "medium" \
-        "Proxy upstream host depends on request Host header" \
-        "youtube-proxy/internal/proxy/proxy.go builds upstream URL from incoming host" \
-        "Enforce strict allowlist or always use configured upstream_host."
-fi
-
 if grep -q '^INTERVAL=2' "${PROJECT_ROOT}/scripts/monitor/monitor-web.sh"; then
     add_finding \
         "medium" \
@@ -184,7 +176,7 @@ if [[ "$WITH_SERVERS" == "true" ]]; then
     fi
 
     if [[ -n "${VPS2_IP:-}" && ( -n "${VPS2_KEY:-}" || -n "${VPS2_PASS:-}" ) ]]; then
-        out2="$(ssh_exec "$VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "${VPS2_PASS:-}" "uname -sr && systemctl is-active awg-quick@awg0 || true && systemctl is-active youtube-proxy || true" 20 2>/dev/null || true)"
+        out2="$(ssh_exec "$VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "${VPS2_PASS:-}" "uname -sr && systemctl is-active awg-quick@awg0 || true && (systemctl is-active AdGuardHome 2>/dev/null || systemctl is-active adguardhome 2>/dev/null || true)" 20 2>/dev/null || true)"
         append "- VPS2: $(echo "$out2" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g')"
     else
         append "- VPS2: skipped (missing VPS2_IP/key/pass in .env)"

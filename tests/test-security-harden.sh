@@ -10,9 +10,8 @@
 #   5. AdGuard Home bind не на 0.0.0.0
 #   6. security-harden.sh содержит все компоненты hardening
 #   7. lib/common.sh использует accept-new
-#   8. deploy-proxy.sh использует accept-new
-#   9. deploy.sh требует --adguard-pass (нет дефолта)
-#  10. security-harden.sh принимает параметры --role, --vpn-port и т.д.
+#   8. deploy.sh требует --adguard-pass (нет дефолта)
+#   9. security-harden.sh принимает параметры --role, --vpn-port и т.д.
 # =============================================================================
 
 set -uo pipefail
@@ -80,7 +79,7 @@ echo ""
 # ── 2. SSH StrictHostKeyChecking=accept-new ──────────────────────────────────
 echo "2. SSH host key verification (accept-new instead of no):"
 
-for script in deploy.sh deploy-vps1.sh deploy-vps2.sh deploy-proxy.sh; do
+for script in deploy.sh deploy-vps1.sh deploy-vps2.sh; do
     FILE="$PROJECT_DIR/scripts/deploy/$script"
     if [[ -f "$FILE" ]]; then
         check "$script uses accept-new" grep -q "StrictHostKeyChecking=accept-new" "$FILE"
@@ -183,7 +182,7 @@ echo ""
 # ── 8. All deploy scripts have valid bash syntax ────────────────────────────
 echo "8. Bash syntax validation:"
 
-for script in deploy.sh deploy-vps1.sh deploy-vps2.sh deploy-proxy.sh security-update.sh security-harden.sh; do
+for script in deploy.sh deploy-vps1.sh deploy-vps2.sh security-update.sh security-harden.sh; do
     FILE="$PROJECT_DIR/scripts/deploy/$script"
     if [[ -f "$FILE" ]]; then
         check "$script syntax OK" bash -n "$FILE"

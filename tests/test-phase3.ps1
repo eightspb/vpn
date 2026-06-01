@@ -93,97 +93,100 @@ check ($content -match 'load_defaults_from_files') `
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "--- 5. add_phone_peer.sh: параметризация ---"
-$peer_content = Get-Content "add_phone_peer.sh" -Raw
+$peer_content = Get-Content "scripts/tools/add_phone_peer.sh" -Raw
 
 check ($peer_content -match '--vps1-ip') `
-    "add_phone_peer.sh принимает --vps1-ip" `
-    "add_phone_peer.sh не принимает --vps1-ip"
+    "scripts/tools/add_phone_peer.sh принимает --vps1-ip" `
+    "scripts/tools/add_phone_peer.sh не принимает --vps1-ip"
 
 check ($peer_content -match '--peer-ip') `
-    "add_phone_peer.sh принимает --peer-ip" `
-    "add_phone_peer.sh не принимает --peer-ip"
+    "scripts/tools/add_phone_peer.sh принимает --peer-ip" `
+    "scripts/tools/add_phone_peer.sh не принимает --peer-ip"
 
 check ($peer_content -match '--peer-name') `
-    "add_phone_peer.sh принимает --peer-name" `
-    "add_phone_peer.sh не принимает --peer-name"
+    "scripts/tools/add_phone_peer.sh принимает --peer-name" `
+    "scripts/tools/add_phone_peer.sh не принимает --peer-name"
 
 check ($peer_content -match 'автоопределение|auto.*ip|next.*ip|seq 3 254' -or $peer_content -match 'seq 3') `
-    "add_phone_peer.sh содержит автоопределение IP" `
-    "add_phone_peer.sh не содержит автоопределение IP"
+    "scripts/tools/add_phone_peer.sh содержит автоопределение IP" `
+    "scripts/tools/add_phone_peer.sh не содержит автоопределение IP"
 
 check ($peer_content -match 'load_defaults_from_files') `
-    "add_phone_peer.sh читает .env через load_defaults_from_files" `
-    "add_phone_peer.sh не читает .env"
+    "scripts/tools/add_phone_peer.sh читает .env через load_defaults_from_files" `
+    "scripts/tools/add_phone_peer.sh не читает .env"
 
 check (-not ($peer_content -match '10\.9\.0\.3')) `
-    "Хардкод 10.9.0.3 убран из add_phone_peer.sh" `
-    "Хардкод 10.9.0.3 всё ещё присутствует в add_phone_peer.sh"
+    "Хардкод 10.9.0.3 убран из scripts/tools/add_phone_peer.sh" `
+    "Хардкод 10.9.0.3 всё ещё присутствует в scripts/tools/add_phone_peer.sh"
 
 # ---------------------------------------------------------------------------
-# 6. config.yaml: CA-сервер на VPN-интерфейсе
-# ---------------------------------------------------------------------------
-Write-Host ""
-Write-Host "--- 6. config.yaml: CA-сервер ограничен VPN-интерфейсом ---"
-$yaml_content = Get-Content "youtube-proxy\config.yaml" -Raw
-
-check ($yaml_content -match '10\.8\.0\.2:8080') `
-    "CA-сервер слушает на 10.8.0.2:8080 (VPN-интерфейс)" `
-    "CA-сервер не ограничен VPN-интерфейсом"
-
-check (-not ($yaml_content -match '0\.0\.0\.0:8080')) `
-    "CA-сервер не слушает на 0.0.0.0:8080" `
-    "CA-сервер всё ещё слушает на 0.0.0.0:8080"
-
-# ---------------------------------------------------------------------------
-# 7. scripts/deploy/deploy-proxy.sh: firewall-правило для порта 8080
+# 6. deploy.sh: legacy proxy flags are rejected
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 7. scripts/deploy/deploy-proxy.sh: firewall для CA-сервера ---"
-$proxy_content = Get-Content "scripts/deploy/deploy-proxy.sh" -Raw
+Write-Host "--- 6. scripts/deploy/deploy.sh: legacy proxy flags rejected ---"
+$deploy_content = Get-Content "scripts/deploy/deploy.sh" -Raw
 
-check ($proxy_content -match 'iptables.*8080.*DROP|DROP.*8080') `
-    "scripts/deploy/deploy-proxy.sh блокирует порт 8080 снаружи" `
-    "scripts/deploy/deploy-proxy.sh не блокирует порт 8080 снаружи"
-
-check ($proxy_content -match 'iptables.*8080.*awg0|awg0.*8080') `
-    "scripts/deploy/deploy-proxy.sh разрешает порт 8080 только через awg0" `
-    "scripts/deploy/deploy-proxy.sh не ограничивает 8080 интерфейсом awg0"
-
-check (-not ($proxy_content -match "http://\`$VPS2_IP:8080")) `
-    "scripts/deploy/deploy-proxy.sh не содержит публичный URL CA (http://VPS2_IP:8080)" `
-    "scripts/deploy/deploy-proxy.sh всё ещё содержит публичный URL CA"
-
-check ($proxy_content -match '10\.8\.0\.2:8080') `
-    "scripts/deploy/deploy-proxy.sh указывает VPN-URL для CA (10.8.0.2:8080)" `
-    "scripts/deploy/deploy-proxy.sh не содержит VPN-URL для CA"
+check ($deploy_content -match '--with-proxy\|--remove-adguard') `
+    "deploy.sh явно отклоняет --with-proxy/--remove-adguard" `
+    "deploy.sh не отклоняет legacy proxy flags"
 
 # ---------------------------------------------------------------------------
-# 8. Go build проверка (youtube-proxy)
+# 7. manage.sh: legacy proxy mode is rejected
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "--- 8. Go build youtube-proxy ---"
+Write-Host "--- 7. manage.sh: legacy proxy mode rejected ---"
+$manage_content = Get-Content "manage.sh" -Raw
 
-$go_bin = $null
-foreach ($candidate in @("go", "$env:USERPROFILE\go\bin\go.exe", "$env:USERPROFILE\go-dist\go\bin\go.exe")) {
-    try {
-        $null = & $candidate version 2>$null
-        $go_bin = $candidate
-        break
-    } catch {}
+check ($manage_content -match '--proxy удалён') `
+    "manage.sh явно отклоняет --proxy" `
+    "manage.sh не отклоняет --proxy"
+
+# ---------------------------------------------------------------------------
+# 8. diagnose.sh: AdGuard Home is the DNS service
+# ---------------------------------------------------------------------------
+Write-Host ""
+Write-Host "--- 8. scripts/tools/diagnose.sh: AdGuard Home checks ---"
+$diagnose_content = Get-Content "scripts/tools/diagnose.sh" -Raw
+
+check ($diagnose_content -match 'AdGuard Home' -and $diagnose_content -match 'port53') `
+    "diagnose.sh проверяет AdGuard Home и DNS port 53" `
+    "diagnose.sh не проверяет AdGuard Home/DNS"
+
+check ($diagnose_content -match 'systemctl start AdGuardHome' -and $diagnose_content -match 'Восстанавливаю legacy youtube-proxy') `
+    "diagnose.sh ремонтирует AdGuard Home и восстанавливает legacy DNS только при rollback" `
+    "diagnose.sh не содержит безопасный rollback legacy DNS при ошибке AdGuard"
+
+# ---------------------------------------------------------------------------
+# 9. deploy scripts: safe AdGuard switch before legacy cleanup
+# ---------------------------------------------------------------------------
+Write-Host ""
+Write-Host "--- 9. deploy scripts: safe AdGuard switch before legacy cleanup ---"
+
+function firstLine($path, $pattern) {
+    $matches = Select-String -Path $path -Pattern $pattern
+    if ($matches) { return $matches[0].LineNumber }
+    return 0
 }
 
-if ($go_bin) {
-    try {
-        Push-Location "youtube-proxy"
-        & $go_bin build ./... 2>&1 | Out-Null
-        ok "go build ./... успешен в youtube-proxy"
-    } catch {
-        fail "go build ./... завершился с ошибкой: $_"
-    } finally {
-        Pop-Location
-    }
-} else {
-    Write-Host "  [SKIP] Go не найден, пропускаем go build" -ForegroundColor Yellow
+foreach ($deploy_file in @("scripts/deploy/deploy.sh", "scripts/deploy/deploy-vps2.sh")) {
+    $content = Get-Content $deploy_file -Raw
+
+    check ($content -match 'ADGUARD_WAS_ACTIVE' -and `
+           $content -match 'ADGUARD_CONFIG_BACKUP' -and `
+           $content -match 'LEGACY_YOUTUBE_PROXY_ACTIVE' -and `
+           $content -match 'restore_previous_dns' -and `
+           $content -match 'health_ok') `
+        "$deploy_file: есть rollback конфига/сервиса и healthcheck при переключении DNS" `
+        "$deploy_file: нет полного rollback/healthcheck при переключении DNS"
+
+    $backup_line = firstLine $deploy_file 'ADGUARD_CONFIG_BACKUP='
+    $curl_line = firstLine $deploy_file 'curl -fsSL https://static.adguard.com'
+    $health_line = firstLine $deploy_file 'health_ok=false'
+    $cleanup_line = firstLine $deploy_file 'rm -rf /opt/youtube-proxy'
+
+    check ($backup_line -gt 0 -and $curl_line -gt $backup_line -and $health_line -gt $curl_line -and $cleanup_line -gt $health_line) `
+        "$deploy_file: backup и legacy cleanup выполняются в безопасном порядке" `
+        "$deploy_file: backup/cleanup порядок может сломать DNS при неудачном deploy"
 }
 
 # ---------------------------------------------------------------------------

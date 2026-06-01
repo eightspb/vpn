@@ -15,16 +15,10 @@ scripts/monitor/vpn-output/*.pid
 # Deploy-time configs без секретов — явный whitelist
 !scripts/deploy/split-tunneling/**/*.conf
 
-# Compiled binaries
-youtube-proxy/youtube-proxy
-
 # Temporary files
 *.tmp
 *.log
 .DS_Store
-
-# youtube-proxy binary
-youtube-proxy/youtube-proxy
 
 # nginx config with local paths
 vpn-dashboard-nginx.conf

@@ -7,8 +7,8 @@
 ## Архитектура
 
 - **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты)
-- **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1)
-- **Split tunneling** (опционально): `bash manage.sh deploy --split-tunneling --guard-timeout 300` включает `.ru/.рф/.su` через основной интерфейс VPS1, остальное оставляет через VPS2. DNS upstream остаётся `10.8.0.2:53` на VPS2; DNS-запросы DNAT-ятся на `10.9.0.1`, ответы SNAT-ятся обратно как `10.8.0.2`. Клиентские конфиги и ключи не меняются. Откат: `bash scripts/deploy/rollback-split-tunneling.sh`.
+- **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1) + AdGuard Home DNS (`10.8.0.2:53`, UI `10.8.0.2:3000`)
+- **Split tunneling** (опционально): `bash manage.sh deploy --split-tunneling --guard-timeout 300` включает `.ru/.рф/.su` через основной интерфейс VPS1, остальное оставляет через VPS2. DNS upstream остаётся `10.8.0.2:53` на VPS2 (AdGuard Home); DNS-запросы DNAT-ятся на `10.9.0.1`, ответы SNAT-ятся обратно как `10.8.0.2`. Клиентские конфиги и ключи не меняются. Откат: `bash scripts/deploy/rollback-split-tunneling.sh`.
 - **Admin panel**: `scripts/admin/admin-server.py` (Flask, port 8081) + `scripts/admin/admin.html` (SPA)
 - **Monitor**: `scripts/monitor/monitor-web.sh` (SSH polling → `vpn-output/data.json` каждые 5с)
 - **Backend API**: `backend/main.py` (FastAPI)
@@ -28,7 +28,6 @@
 ```bash
 # Деплой (с управляющего компьютера)
 bash manage.sh deploy               # развернуть VPN на VPS1 + VPS2
-bash manage.sh deploy --with-proxy  # + youtube-proxy
 bash manage.sh deploy --split-tunneling --guard-timeout 300  # split tunneling RU TLD на VPS1
 bash manage.sh deploy --split-tunneling --rollback           # аварийный откат
 
@@ -52,7 +51,6 @@ bash manage.sh admin start
 | `scripts/deploy/deploy.sh` | Основной деплой-скрипт |
 | `scripts/deploy/deploy-vps1.sh` | Деплой только VPS1 |
 | `scripts/deploy/deploy-vps2.sh` | Деплой только VPS2 |
-| `scripts/deploy/deploy-proxy.sh` | Деплой youtube-proxy |
 | `scripts/deploy/setup-split-tunneling.sh` | Guarded apply split tunneling на VPS1 |
 | `scripts/deploy/rollback-split-tunneling.sh` | Локальный аварийный rollback split tunneling |
 | `backend/main.py` | Entry point FastAPI |

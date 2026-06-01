@@ -32,7 +32,6 @@ SCRIPTS=(
     "scripts/deploy/deploy.sh"
     "scripts/deploy/deploy-vps1.sh"
     "scripts/deploy/deploy-vps2.sh"
-    "scripts/deploy/deploy-proxy.sh"
     "scripts/monitor/monitor-realtime.sh"
     "scripts/monitor/monitor-web.sh"
     "scripts/tools/add_phone_peer.sh"
@@ -191,7 +190,6 @@ ALL_SCRIPTS=(
     "scripts/deploy/deploy.sh"
     "scripts/deploy/deploy-vps1.sh"
     "scripts/deploy/deploy-vps2.sh"
-    "scripts/deploy/deploy-proxy.sh"
     "scripts/monitor/monitor-realtime.sh"
     "scripts/monitor/monitor-web.sh"
     "scripts/tools/add_phone_peer.sh"
@@ -241,11 +239,11 @@ FUNC_RESULT=$(bash -c "
     echo \"VPS2_USER=\$VPS2_USER\"
 " 2>/dev/null) || true
 
-ACTUAL_VPS1_USER=$(echo "$FUNC_RESULT" | grep '^VPS1_USER=' | cut -d= -f2)
-ACTUAL_VPS2_USER=$(echo "$FUNC_RESULT" | grep '^VPS2_USER=' | cut -d= -f2)
+ACTUAL_VPS1_USER=$(echo "$FUNC_RESULT" | grep '^VPS1_USER=' | cut -d= -f2 | tr -d '\r')
+ACTUAL_VPS2_USER=$(echo "$FUNC_RESULT" | grep '^VPS2_USER=' | cut -d= -f2 | tr -d '\r')
 
-ENV_VPS1_USER=$(grep '^VPS1_USER=' "${PROJECT_ROOT}/.env" 2>/dev/null | cut -d= -f2 || echo "")
-ENV_VPS2_USER=$(grep '^VPS2_USER=' "${PROJECT_ROOT}/.env" 2>/dev/null | cut -d= -f2 || echo "")
+ENV_VPS1_USER=$(grep '^VPS1_USER=' "${PROJECT_ROOT}/.env" 2>/dev/null | cut -d= -f2 | tr -d '\r' || echo "")
+ENV_VPS2_USER=$(grep '^VPS2_USER=' "${PROJECT_ROOT}/.env" 2>/dev/null | cut -d= -f2 | tr -d '\r' || echo "")
 
 if [[ -n "$ENV_VPS1_USER" ]]; then
     if [[ "$ACTUAL_VPS1_USER" == "$ENV_VPS1_USER" ]]; then

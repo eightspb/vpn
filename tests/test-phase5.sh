@@ -148,7 +148,6 @@ check_delegates() {
 check_delegates "scripts/deploy/deploy.sh"
 check_delegates "scripts/deploy/deploy-vps1.sh"
 check_delegates "scripts/deploy/deploy-vps2.sh"
-check_delegates "scripts/deploy/deploy-proxy.sh"
 check_delegates "scripts/monitor/monitor-realtime.sh"
 check_delegates "scripts/monitor/monitor-web.sh"
 check_delegates "scripts/tools/add_phone_peer.sh"

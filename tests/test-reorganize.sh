@@ -37,7 +37,6 @@ EXPECTED_FILES=(
     "scripts/deploy/deploy.sh"
     "scripts/deploy/deploy-vps1.sh"
     "scripts/deploy/deploy-vps2.sh"
-    "scripts/deploy/deploy-proxy.sh"
     "scripts/deploy/security-update.sh"
     "scripts/monitor/monitor-realtime.sh"
     "scripts/monitor/monitor-web.sh"
@@ -50,7 +49,6 @@ EXPECTED_FILES=(
     "scripts/tools/load-test.sh"
     "scripts/tools/optimize-vpn.sh"
     "scripts/tools/repair-vps1.sh"
-    "scripts/windows/install-ca.ps1"
     "scripts/windows/repair-local-configs.ps1"
 )
 
@@ -72,7 +70,6 @@ OLD_FILES=(
     "deploy.sh"
     "deploy-vps1.sh"
     "deploy-vps2.sh"
-    "deploy-proxy.sh"
     "security-update.sh"
     "monitor-realtime.sh"
     "monitor-web.sh"
@@ -85,7 +82,6 @@ OLD_FILES=(
     "load-test.sh"
     "optimize-vpn.sh"
     "repair-vps1.sh"
-    "install-ca.ps1"
     "repair-local-configs.ps1"
 )
 
@@ -115,7 +111,6 @@ check_manage_ref() {
 check_manage_ref 'scripts/deploy/deploy\.sh'          "ссылка на scripts/deploy/deploy.sh"
 check_manage_ref 'scripts/deploy/deploy-vps1\.sh'     "ссылка на scripts/deploy/deploy-vps1.sh"
 check_manage_ref 'scripts/deploy/deploy-vps2\.sh'     "ссылка на scripts/deploy/deploy-vps2.sh"
-check_manage_ref 'scripts/deploy/deploy-proxy\.sh'    "ссылка на scripts/deploy/deploy-proxy.sh"
 check_manage_ref 'scripts/monitor/monitor-realtime\.sh' "ссылка на scripts/monitor/monitor-realtime.sh"
 check_manage_ref 'scripts/monitor/monitor-web\.sh'    "ссылка на scripts/monitor/monitor-web.sh"
 check_manage_ref 'scripts/tools/add_phone_peer\.sh'   "ссылка на scripts/tools/add_phone_peer.sh"
@@ -160,19 +155,21 @@ for script in scripts/tools/benchmark.sh scripts/tools/load-test.sh scripts/tool
 done
 
 # =============================================================================
-# 5. deploy-proxy.sh: PROXY_DIR указывает на ../../youtube-proxy
+# 5. Legacy youtube-proxy удалён
 # =============================================================================
 echo ""
-echo "--- 5. scripts/deploy/deploy-proxy.sh: PROXY_DIR ---"
+echo "--- 5. Legacy youtube-proxy удалён ---"
 
-if [[ -f "scripts/deploy/deploy-proxy.sh" ]]; then
-    if grep -q 'PROXY_DIR=.*\.\./\.\./youtube-proxy' scripts/deploy/deploy-proxy.sh 2>/dev/null; then
-        ok "deploy-proxy.sh: PROXY_DIR указывает на ../../youtube-proxy"
-    else
-        fail "deploy-proxy.sh: PROXY_DIR не обновлён (ожидается ../../youtube-proxy)"
-    fi
+if [[ ! -f "scripts/deploy/deploy-proxy.sh" ]]; then
+    ok "scripts/deploy/deploy-proxy.sh удалён"
 else
-    fail "scripts/deploy/deploy-proxy.sh не найден"
+    fail "scripts/deploy/deploy-proxy.sh всё ещё существует"
+fi
+
+if [[ ! -d "youtube-proxy" ]]; then
+    ok "youtube-proxy/ удалён"
+else
+    fail "youtube-proxy/ всё ещё существует"
 fi
 
 # =============================================================================
@@ -206,7 +203,6 @@ BASH_SCRIPTS=(
     "scripts/deploy/deploy.sh"
     "scripts/deploy/deploy-vps1.sh"
     "scripts/deploy/deploy-vps2.sh"
-    "scripts/deploy/deploy-proxy.sh"
     "scripts/deploy/security-update.sh"
     "scripts/monitor/monitor-realtime.sh"
     "scripts/monitor/monitor-web.sh"
@@ -260,7 +256,6 @@ check_test_no_ref() {
 if [[ -f "tests/test-phase3.sh" ]]; then
     check_test_ref "tests/test-phase3.sh" "scripts/monitor/monitor-realtime\.sh" "ссылка на scripts/monitor/monitor-realtime.sh"
     check_test_ref "tests/test-phase3.sh" "scripts/monitor/monitor-web\.sh"      "ссылка на scripts/monitor/monitor-web.sh"
-    check_test_ref "tests/test-phase3.sh" "scripts/deploy/deploy-proxy\.sh"      "ссылка на scripts/deploy/deploy-proxy.sh"
 fi
 
 # test-phase4.sh
@@ -279,7 +274,6 @@ fi
 if [[ -f "tests/test-monitor-web.sh" ]]; then
     check_test_ref "tests/test-monitor-web.sh" "scripts/monitor/monitor-web\.sh" "ссылка на scripts/monitor/monitor-web.sh"
     check_test_ref "tests/test-monitor-web.sh" "scripts/monitor/dashboard\.html" "ссылка на scripts/monitor/dashboard.html"
-    check_test_ref "tests/test-monitor-web.sh" "scripts/deploy/deploy-proxy\.sh" "ссылка на scripts/deploy/deploy-proxy.sh"
 fi
 
 # test-optimize.sh
@@ -307,13 +301,6 @@ for f in "${ROOT_FILES[@]}"; do
         fail "$f отсутствует"
     fi
 done
-
-# youtube-proxy/ и tests/ без изменений
-if [[ -d "youtube-proxy" ]]; then
-    ok "youtube-proxy/ на месте"
-else
-    fail "youtube-proxy/ отсутствует"
-fi
 
 if [[ -d "tests" ]]; then
     ok "tests/ на месте"
