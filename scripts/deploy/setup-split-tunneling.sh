@@ -16,6 +16,7 @@
 #   bash scripts/deploy/setup-split-tunneling.sh [--vps1-ip IP] [--vps1-key KEY]
 #   bash scripts/deploy/setup-split-tunneling.sh --dry-run     # pre-flight only
 #   bash scripts/deploy/setup-split-tunneling.sh --rollback    # полный откат
+#   bash scripts/deploy/setup-split-tunneling.sh --guard-timeout 300
 #
 # Идемпотентен: повторный запуск ничего не ломает.
 # =============================================================================
@@ -31,6 +32,8 @@ source "${PROJECT_ROOT}/lib/common.sh"
 VPS1_IP=""; VPS1_USER=""; VPS1_KEY=""; VPS1_PASS=""
 TUN_NET=""; CLIENT_NET=""
 DRY_RUN=0; DO_ROLLBACK=0
+GUARD_TIMEOUT=300
+WATCHDOG_UNIT="split-tunnel-auto-rollback"
 
 load_defaults_from_files
 
@@ -42,6 +45,7 @@ while [[ $# -gt 0 ]]; do
         --vps1-pass) VPS1_PASS="$2"; shift 2 ;;
         --dry-run)   DRY_RUN=1;      shift ;;
         --rollback)  DO_ROLLBACK=1;  shift ;;
+        --guard-timeout) GUARD_TIMEOUT="$2"; shift 2 ;;
         --help|-h)
             cat <<EOF
 Usage: bash $0 [options]
@@ -52,6 +56,7 @@ Usage: bash $0 [options]
   --vps1-pass PASS    SSH-пароль
   --dry-run           проверить готовность, ничего не менять
   --rollback          полный откат (вернуть состояние ДО split tunneling)
+  --guard-timeout SEC  автооткат через SEC секунд, если canary не прошли (default: 300)
   --help              эта справка
 
 Идемпотентен. Безопасно запускать повторно.
@@ -64,6 +69,9 @@ done
 VPS1_USER="${VPS1_USER:-root}"
 TUN_NET="${TUN_NET:-10.8.0}"
 CLIENT_NET="${CLIENT_NET:-10.9.0}"
+
+[[ "$GUARD_TIMEOUT" =~ ^[0-9]+$ ]] || err "--guard-timeout должен быть числом секунд"
+[[ "$GUARD_TIMEOUT" -ge 60 ]] || err "--guard-timeout должен быть >= 60 секунд"
 
 VPS1_KEY="$(expand_tilde "$VPS1_KEY")"
 VPS1_KEY="$(auto_pick_key_if_missing "$VPS1_KEY")"
@@ -80,6 +88,41 @@ remote()        { ssh_exec        "$VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PAS
 remote_script() { ssh_run_script  "$VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS" "$1"; }
 upload()        { ssh_upload "$1" "$VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS" "$2"; }
 
+GUARD_ACTIVE=0
+
+schedule_watchdog() {
+    step "Постановка watchdog rollback (${GUARD_TIMEOUT}s)"
+    remote "sudo systemctl stop ${WATCHDOG_UNIT}.timer 2>/dev/null || true; \
+sudo systemctl reset-failed ${WATCHDOG_UNIT}.timer ${WATCHDOG_UNIT}.service 2>/dev/null || true; \
+sudo systemd-run --unit=${WATCHDOG_UNIT} --on-active=${GUARD_TIMEOUT} --description='Auto rollback split tunneling if setup canary fails' /usr/local/sbin/split-tunnel-rollback.sh >/dev/null"
+    GUARD_ACTIVE=1
+    ok "Watchdog активен: ${WATCHDOG_UNIT}.timer"
+}
+
+cancel_watchdog() {
+    [[ "$GUARD_ACTIVE" == "1" ]] || return 0
+    step "Отмена watchdog rollback"
+    remote "sudo systemctl stop ${WATCHDOG_UNIT}.timer 2>/dev/null || true; \
+sudo systemctl reset-failed ${WATCHDOG_UNIT}.timer ${WATCHDOG_UNIT}.service 2>/dev/null || true; \
+if sudo systemctl is-active --quiet ${WATCHDOG_UNIT}.timer 2>/dev/null; then exit 1; fi" \
+        || fail_guarded "Не удалось отменить watchdog rollback; состояние небезопасно"
+    GUARD_ACTIVE=0
+    ok "Watchdog отменён"
+}
+
+rollback_now() {
+    warn "Запускаю немедленный rollback split tunneling на VPS1..."
+    remote "sudo bash /usr/local/sbin/split-tunnel-rollback.sh" || true
+}
+
+fail_guarded() {
+    local msg="$1"
+    if [[ "$GUARD_ACTIVE" == "1" ]]; then
+        rollback_now
+    fi
+    err "$msg"
+}
+
 # ── Проверка наличия артефактов локально ────────────────────────────────────
 for f in dnsmasq-vpn.conf dnsmasq.service.d/override.conf \
          split-tunnel-apply.sh split-tunnel-rollback.sh split-tunnel-restore.service; do
@@ -89,11 +132,13 @@ ok "Артефакты найдены в ${ARTIFACTS_DIR}"
 
 # ── Rollback mode ───────────────────────────────────────────────────────────
 if [[ "$DO_ROLLBACK" == "1" ]]; then
-    step "Полный откат split tunneling на VPS1 (${VPS1_IP})"
-    remote "sudo bash /usr/local/sbin/split-tunnel-rollback.sh" || true
-    remote "sudo systemctl disable split-tunnel-restore.service 2>/dev/null || true" || true
-    ok "Rollback выполнен. Состояние идентично пред-split-tunneling."
-    exit 0
+    rollback_script="${SCRIPT_DIR}/rollback-split-tunneling.sh"
+    [[ -f "$rollback_script" ]] || err "Не найден аварийный rollback script: $rollback_script"
+    rollback_args=(--vps1-ip "$VPS1_IP" --vps1-user "$VPS1_USER")
+    [[ -n "$VPS1_KEY" ]] && rollback_args+=(--vps1-key "$VPS1_KEY")
+    [[ -n "$VPS1_PASS" ]] && rollback_args+=(--vps1-pass "$VPS1_PASS")
+    bash "$rollback_script" "${rollback_args[@]}"
+    exit $?
 fi
 
 # ── Pre-flight checks ───────────────────────────────────────────────────────
@@ -126,6 +171,41 @@ if [[ "$DRY_RUN" == "1" ]]; then
     ok "Dry-run завершён. Изменения не применялись."
     exit 0
 fi
+
+# ── 0. Ранняя установка rollback-скрипта ───────────────────────────────────
+step "Ранняя установка rollback-скрипта на VPS1"
+
+upload "${ARTIFACTS_DIR}/split-tunnel-rollback.sh" /tmp/_st_rollback.sh
+remote_script "$(cat <<'REMOTE_ROLLBACK_INSTALL'
+set -euo pipefail
+install -m 755 /tmp/_st_rollback.sh /usr/local/sbin/split-tunnel-rollback.sh
+rm -f /tmp/_st_rollback.sh
+echo "[ok] /usr/local/sbin/split-tunnel-rollback.sh installed"
+REMOTE_ROLLBACK_INSTALL
+)"
+ok "Rollback-скрипт установлен до изменения DNS/маршрутов"
+
+# ── 0a. Pre-state snapshot ─────────────────────────────────────────────────
+step "Snapshot текущего состояния VPS1"
+
+PRE_STATE="$(remote "
+    set +e
+    echo '── services ──'
+    systemctl is-active awg-quick@awg0 awg-quick@awg1 dnsmasq split-tunnel-restore.service 2>/dev/null
+    echo '── ip rule ──'
+    ip rule show
+    echo '── table 100 ──'
+    ip route show table 100 2>/dev/null
+    echo '── table 200 ──'
+    ip route show table 200 2>/dev/null
+    echo '── DNS DNAT ──'
+    sudo iptables -t nat -S PREROUTING | grep -E -- '--dport 53' || true
+    echo '── FORWARD split candidates ──'
+    sudo iptables -S FORWARD | grep -E 'awg1|mark' || true
+    echo '── ipset ru_subnets ──'
+    sudo ipset list ru_subnets 2>/dev/null | head -8 || true
+")"
+echo "$PRE_STATE"
 
 # ── 1. Установка пакетов ────────────────────────────────────────────────────
 step "Установка dnsmasq и ipset"
@@ -190,6 +270,15 @@ chmod 644 /etc/dnsmasq.conf
 # Главный конфиг для split tunneling
 install -m 644 /tmp/_st_dnsmasq-vpn.conf /etc/dnsmasq.d/vpn.conf
 
+# dnsmasq стартует с директивой ipset=.../ru_subnets, поэтому set должен
+# существовать ДО запуска сервиса.
+if ! ipset list ru_subnets >/dev/null 2>&1; then
+    ipset create ru_subnets hash:ip family inet hashsize 4096 maxelem 131072 timeout 604800
+    echo "[ok] ipset ru_subnets создан до запуска dnsmasq"
+else
+    echo "[info] ipset ru_subnets уже существует"
+fi
+
 # systemd drop-in для dnsmasq (зависимость от awg-quick@awg1)
 mkdir -p /etc/systemd/system/dnsmasq.service.d
 install -m 644 /tmp/_st_dnsmasq-override.conf /etc/systemd/system/dnsmasq.service.d/override.conf
@@ -236,23 +325,27 @@ REMOTE_DEPLOY
 )"
 ok "dnsmasq запущен и отвечает на 10.9.0.1:53"
 
+# ── 3.5. Watchdog rollback перед переключением DNS DNAT ─────────────────────
+schedule_watchdog || err "Не удалось поставить watchdog rollback — split tunneling не применялся"
+
 # ── 4. Запуск split-tunnel-apply.sh (zero-downtime переключение) ────────────
 step "Применение split tunneling (zero-downtime через CONNMARK)"
 
 remote "sudo bash /usr/local/sbin/split-tunnel-apply.sh" \
-    || err "split-tunnel-apply.sh завершился с ошибкой — старые DNS-правила сохранены"
+    || fail_guarded "split-tunnel-apply.sh завершился с ошибкой"
 ok "Split tunneling включён"
 
 # ── 5. Включение автостарта split-tunnel-restore ────────────────────────────
 step "Включение автостарта после ребута"
 
-remote "sudo systemctl enable split-tunnel-restore.service >/dev/null"
+remote "sudo systemctl enable split-tunnel-restore.service >/dev/null" \
+    || fail_guarded "Не удалось включить split-tunnel-restore.service"
 ok "split-tunnel-restore.service enabled"
 
 # ── 6. Финальная верификация ────────────────────────────────────────────────
 step "Финальная верификация"
 
-VERIFY="$(remote_script "$(cat <<'REMOTE_VERIFY'
+if ! VERIFY="$(remote_script "$(cat <<'REMOTE_VERIFY'
 set -uo pipefail
 echo "── dnsmasq ──"
 systemctl is-active dnsmasq
@@ -265,27 +358,78 @@ echo "── iptables nat (DNS DNAT) ──"
 iptables -t nat -S PREROUTING | grep -E 'dport 53' | sed 's/^/   /'
 echo "── ip rule fwmark ──"
 ip rule show | grep 'fwmark 0x100' | head -1
+echo "── ip rule DNS replies ──"
+ip rule show | grep 'from 10.9.0.1 to 10.9.0.0/24 lookup main' | head -1
 echo "── ip route table 100 ──"
 ip route show table 100 | head -1
 echo "── split-tunnel-restore.service ──"
 systemctl is-enabled split-tunnel-restore.service
 REMOTE_VERIFY
-)")"
+)")"; then
+    fail_guarded "Финальная удалённая верификация не прошла"
+fi
 
 echo "$VERIFY"
 
-# Резолвим .ru-домен и проверяем что IP попал в ipset
-step "Smoke-test: резолв .ru-домена должен добавить IP в ipset"
-SMOKE="$(remote_script "$(cat <<'REMOTE_SMOKE'
+step "Local canary: DNS через текущий VPN"
+if ! command -v dig >/dev/null 2>&1; then
+    fail_guarded "Локальная команда dig не найдена — не могу проверить DNS canary"
+fi
+dig +time=3 +tries=1 @10.8.0.2 google.com +short | grep -E '^[0-9]+\.' >/dev/null \
+    || fail_guarded "Local canary failed: google.com не резолвится через 10.8.0.2"
+dig +time=3 +tries=1 @10.8.0.2 lenta.ru +short | grep -E '^[0-9]+\.' >/dev/null \
+    || fail_guarded "Local canary failed: lenta.ru не резолвится через 10.8.0.2"
+ok "Local DNS canary OK"
+
+step "Remote canary: ipset + route mark + firewall"
+if ! SMOKE="$(remote_script "$(cat <<'REMOTE_SMOKE'
 set -uo pipefail
-dig +time=3 +tries=1 @10.9.0.1 lenta.ru +short | head -3 | sed 's/^/    lenta.ru→/'
+CLIENT_NET="${CLIENT_NET:-10.9.0}"
+DNSMASQ_IP="${CLIENT_NET}.1"
+TUN_NET="${TUN_NET:-10.8.0}"
+VPS2_DNS_IP="${TUN_NET}.2"
+CLIENT_CIDR="${CLIENT_NET}.0/24"
+MARK_HEX="${MARK_HEX:-0x100}"
+IPSET_NAME="${IPSET_NAME:-ru_subnets}"
+MAIN_IF="$(ip route show default | awk '/^default/ {print $5; exit}')"
+RU_IP="$(dig +time=3 +tries=1 @"${DNSMASQ_IP}" lenta.ru +short | grep -E '^[0-9]+\.' | head -1)"
+[[ -n "$RU_IP" ]] || { echo "no RU_IP from dnsmasq"; exit 10; }
+echo "lenta.ru→${RU_IP}"
 sleep 1
-COUNT=$(ipset list ru_subnets 2>/dev/null | awk '/Number of entries:/ {print $4}')
+COUNT=$(ipset list "$IPSET_NAME" 2>/dev/null | awk '/Number of entries:/ {print $4}')
 echo "ipset entries: $COUNT"
+[[ "$COUNT" =~ ^[0-9]+$ && "$COUNT" -gt 0 ]] || { echo "ipset is empty"; exit 11; }
+PEER_IP="$(awg show awg1 allowed-ips 2>/dev/null | awk '$2 ~ /^10\.9\./ {print $2; exit}' | cut -d/ -f1)"
+[[ -n "$PEER_IP" ]] || PEER_IP="${CLIENT_NET}.2"
+ROUTE="$(ip route get "$RU_IP" mark "$MARK_HEX" from "$PEER_IP" iif awg1 2>&1 || true)"
+echo "route: $ROUTE"
+echo "$ROUTE" | grep -q " dev ${MAIN_IF}" || { echo "marked route does not use ${MAIN_IF}"; exit 12; }
+DNS_REPLY_ROUTE="$(ip route get "$PEER_IP" from "$DNSMASQ_IP" 2>&1 || true)"
+echo "dns reply route: $DNS_REPLY_ROUTE"
+echo "$DNS_REPLY_ROUTE" | grep -q " dev awg1" || { echo "dns reply route does not use awg1"; exit 13; }
+iptables -C FORWARD -i awg1 -o "$MAIN_IF" -m mark --mark "$MARK_HEX" -j ACCEPT 2>/dev/null \
+  || { echo "missing marked FORWARD awg1→${MAIN_IF}"; exit 14; }
+iptables -t nat -C PREROUTING -i awg1 -p udp --dport 53 -j DNAT --to-destination "${DNSMASQ_IP}:53" 2>/dev/null \
+  || { echo "missing UDP DNS DNAT to ${DNSMASQ_IP}:53"; exit 15; }
+iptables -t nat -C PREROUTING -i awg1 -p tcp --dport 53 -j DNAT --to-destination "${DNSMASQ_IP}:53" 2>/dev/null \
+  || { echo "missing TCP DNS DNAT to ${DNSMASQ_IP}:53"; exit 16; }
+iptables -t nat -C POSTROUTING -o awg1 -s "${DNSMASQ_IP}/32" -d "${CLIENT_CIDR}" -p udp --sport 53 -j SNAT --to-source "${VPS2_DNS_IP}" 2>/dev/null \
+  || { echo "missing UDP DNS reply SNAT to ${VPS2_DNS_IP}"; exit 17; }
+iptables -t nat -C POSTROUTING -o awg1 -s "${DNSMASQ_IP}/32" -d "${CLIENT_CIDR}" -p tcp --sport 53 -j SNAT --to-source "${VPS2_DNS_IP}" 2>/dev/null \
+  || { echo "missing TCP DNS reply SNAT to ${VPS2_DNS_IP}"; exit 18; }
+iptables -C INPUT -i awg1 -d "${DNSMASQ_IP}" -p udp --dport 53 -j ACCEPT 2>/dev/null \
+  || { echo "missing UDP DNS INPUT allow to ${DNSMASQ_IP}:53"; exit 19; }
+iptables -C INPUT -i awg1 -d "${DNSMASQ_IP}" -p tcp --dport 53 -j ACCEPT 2>/dev/null \
+  || { echo "missing TCP DNS INPUT allow to ${DNSMASQ_IP}:53"; exit 20; }
 REMOTE_SMOKE
-)")"
+)")"; then
+    echo "${SMOKE:-}"
+    fail_guarded "Remote canary failed"
+fi
 
 echo "$SMOKE"
+
+cancel_watchdog
 
 ok ""
 ok "Split tunneling успешно установлен на VPS1"
@@ -293,6 +437,6 @@ ok ""
 ok "  • Российские TLD (.ru/.рф/.su) идут напрямую через VPS1"
 ok "  • Зарубежный трафик идёт через VPS2 как раньше"
 ok "  • Клиентские конфиги НЕ изменены"
-ok "  • DNS-резолв и фильтрация AdGuard продолжают работать (через dnsmasq на VPS1)"
+ok "  • DNS-резолв через VPS2 upstream 10.8.0.2:53 продолжает работать (через dnsmasq на VPS1)"
 ok ""
 ok "  Откат:  bash scripts/deploy/setup-split-tunneling.sh --rollback"

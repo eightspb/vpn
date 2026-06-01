@@ -17,7 +17,7 @@
 #   CLIENT_NET     — сеть клиентов awg1 (по умолчанию 10.9.0)
 #   TUN_NET        — сеть тоннеля awg0  (по умолчанию 10.8.0)
 #   DNSMASQ_IP     — IP VPS1 в awg1     (по умолчанию ${CLIENT_NET}.1)
-#   ADGUARD_IP     — IP AdGuard на VPS2 (по умолчанию ${TUN_NET}.2)
+#   ADGUARD_IP     — IP DNS upstream на VPS2 (по умолчанию ${TUN_NET}.2)
 #   MARK_HEX       — fwmark             (по умолчанию 0x100)
 #   ROUTE_TABLE    — номер таблицы      (по умолчанию 100)
 #   IPSET_NAME     — имя ipset          (по умолчанию ru_subnets)
@@ -31,6 +31,7 @@ DNSMASQ_IP="${DNSMASQ_IP:-${CLIENT_NET}.1}"
 ADGUARD_IP="${ADGUARD_IP:-${TUN_NET}.2}"
 MARK_HEX="${MARK_HEX:-0x100}"
 ROUTE_TABLE="${ROUTE_TABLE:-100}"
+DNS_REPLY_RULE_PRIORITY="${DNS_REPLY_RULE_PRIORITY:-90}"
 IPSET_NAME="${IPSET_NAME:-ru_subnets}"
 CLIENT_CIDR="${CLIENT_NET}.0/24"
 
@@ -117,9 +118,31 @@ fi
 ip route replace default via "$MAIN_GW" dev "$MAIN_IF" table "$ROUTE_TABLE"
 log "ip route table $ROUTE_TABLE: default via $MAIN_GW dev $MAIN_IF"
 
-# ── 5. MASQUERADE на основном интерфейсе ────────────────────────────────────
+# ── 5. FORWARD + MASQUERADE на основном интерфейсе ─────────────────────────
+# security-harden.sh ставит policy FORWARD=DROP. Базовый VPN разрешает только
+# awg1→awg0, поэтому split-трафику нужен отдельный allow на основной интерфейс.
+ipt_ensure filter FORWARD -i awg1 -o "$MAIN_IF" -m mark --mark "$MARK_HEX" -j ACCEPT
+ipt_ensure filter FORWARD -i "$MAIN_IF" -o awg1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+log "FORWARD для маркированного split-трафика через $MAIN_IF установлен"
+
 ipt_ensure nat POSTROUTING -s "$CLIENT_CIDR" -o "$MAIN_IF" -j MASQUERADE
 log "MASQUERADE для $CLIENT_CIDR через $MAIN_IF установлен"
+
+# DNS после DNAT обслуживается локальным процессом dnsmasq, поэтому пакет идёт
+# через INPUT, а не FORWARD. При default INPUT=DROP нужен явный allow.
+ipt_ensure filter INPUT -i awg1 -d "$DNSMASQ_IP" -p udp --dport 53 -j ACCEPT
+ipt_ensure filter INPUT -i awg1 -d "$DNSMASQ_IP" -p tcp --dport 53 -j ACCEPT
+log "INPUT для клиентского DNS к dnsmasq ${DNSMASQ_IP}:53 установлен"
+
+# На VPS1 уже есть правило "from 10.9.0.0/24 lookup 200" для клиентского
+# full-tunnel трафика. Оно также цепляет локальные ответы dnsmasq с source
+# 10.9.0.1 и уводит их в awg0. Более приоритетное правило возвращает ответы
+# VPS1 клиентам напрямую через connected route awg1.
+if ! ip rule show | grep -Fq "from ${DNSMASQ_IP} to ${CLIENT_CIDR} lookup main"; then
+    ip rule add from "${DNSMASQ_IP}/32" to "$CLIENT_CIDR" table main priority "$DNS_REPLY_RULE_PRIORITY"
+fi
+ip route flush cache 2>/dev/null || true
+log "ip rule DNS replies: from ${DNSMASQ_IP} to ${CLIENT_CIDR} → main"
 
 # ── 6. ZERO-DOWNTIME переключение DNS DNAT ──────────────────────────────────
 # Insert в начало срабатывает первым, старые правила (если есть) остаются как
@@ -127,6 +150,14 @@ log "MASQUERADE для $CLIENT_CIDR через $MAIN_IF установлен"
 ipt_ensure_top nat PREROUTING -i awg1 -p udp --dport 53 -j DNAT --to-destination "${DNSMASQ_IP}:53"
 ipt_ensure_top nat PREROUTING -i awg1 -p tcp --dport 53 -j DNAT --to-destination "${DNSMASQ_IP}:53"
 log "DNS DNAT → ${DNSMASQ_IP}:53 вставлен (в начало цепочки)"
+
+# Клиентские конфиги по-прежнему указывают DNS=${ADGUARD_IP}. После DNAT запрос
+# обслуживает локальный dnsmasq (${DNSMASQ_IP}), поэтому ответы должны выглядеть
+# для клиента как пришедшие от старого DNS ${ADGUARD_IP}; иначе клиенты/dig могут
+# отбросить пакет как ответ от неожиданного сервера.
+ipt_ensure nat POSTROUTING -o awg1 -s "${DNSMASQ_IP}/32" -d "$CLIENT_CIDR" -p udp --sport 53 -j SNAT --to-source "$ADGUARD_IP"
+ipt_ensure nat POSTROUTING -o awg1 -s "${DNSMASQ_IP}/32" -d "$CLIENT_CIDR" -p tcp --sport 53 -j SNAT --to-source "$ADGUARD_IP"
+log "DNS reply SNAT: ${DNSMASQ_IP}:53 → source ${ADGUARD_IP}"
 
 # ── 7. Healthcheck dnsmasq ──────────────────────────────────────────────────
 # Двухуровневая проверка: (1) systemctl is-active защищает от crashloop,

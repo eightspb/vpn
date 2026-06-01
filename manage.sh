@@ -276,8 +276,38 @@ cmd_deploy() {
             ;;
         split-tunneling)
             [[ "$regen_configs" == "true" ]] && err "--regen-configs недоступен для --split-tunneling"
-            log "Включение раздельного туннелирования (.ru/.рф/.su мимо VPN) на VPS1..."
-            bash "${SCRIPT_DIR}/scripts/deploy/setup-split-tunneling.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            local rollback=false
+            local split_args=()
+            for arg in "${extra_args[@]+"${extra_args[@]}"}"; do
+                if [[ "$arg" == "--rollback" ]]; then
+                    rollback=true
+                fi
+            done
+            if [[ "$rollback" == "true" ]]; then
+                local i=0
+                while [[ "$i" -lt "${#extra_args[@]}" ]]; do
+                    case "${extra_args[$i]}" in
+                        --rollback)
+                            i=$((i + 1))
+                            ;;
+                        --guard-timeout)
+                            i=$((i + 2))
+                            ;;
+                        --guard-timeout=*)
+                            i=$((i + 1))
+                            ;;
+                        *)
+                            split_args+=("${extra_args[$i]}")
+                            i=$((i + 1))
+                            ;;
+                    esac
+                done
+                log "Аварийный откат split tunneling на VPS1..."
+                bash "${SCRIPT_DIR}/scripts/deploy/rollback-split-tunneling.sh" "${split_args[@]+"${split_args[@]}"}"
+            else
+                log "Включение раздельного туннелирования (.ru/.рф/.su мимо VPN) на VPS1..."
+                bash "${SCRIPT_DIR}/scripts/deploy/setup-split-tunneling.sh" "${extra_args[@]+"${extra_args[@]}"}"
+            fi
             ;;
     esac
 }

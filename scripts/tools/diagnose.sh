@@ -210,7 +210,7 @@ echo '=resolv=' && cat /etc/resolv.conf 2>/dev/null | head -3
 echo '=ip_forward=' && cat /proc/sys/net/ipv4/ip_forward
 echo '=masquerade=' && iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -E 'MASQUERADE|10\.' | head -5 || echo none
 echo '=wan_ping=' && ping -c1 -W2 8.8.8.8 >/dev/null 2>&1 && echo ok || echo fail
-echo '=dns_test=' && nslookup google.com 127.0.0.1 2>/dev/null | grep -E 'Address|Server' | head -4 || echo 'dns fail'
+echo '=dns_test=' && dig +time=3 +tries=1 @10.8.0.2 google.com +short 2>/dev/null | grep -E '^[0-9]+\.' | head -4 || echo 'dns fail'
 echo '=proxy_certs=' && ls /opt/youtube-proxy/certs/ 2>/dev/null || echo 'no certs dir'
 ")
 
@@ -256,8 +256,8 @@ if [[ "$YT_STATE" == "active" ]]; then
     else
         fail "CA сертификат: НЕ найден в /opt/youtube-proxy/certs/"
     fi
-    if echo "$DNS_TEST" | grep -q 'Address'; then
-        ok "DNS работает (nslookup google.com → 127.0.0.1)"
+    if echo "$DNS_TEST" | grep -Eq '^[0-9]+\.'; then
+        ok "DNS работает (dig google.com @10.8.0.2)"
     else
         fail "DNS не отвечает: $DNS_TEST"
     fi

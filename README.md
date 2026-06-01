@@ -483,6 +483,33 @@ bash manage.sh deploy \
 - `--with-proxy` — задеплоить `youtube-proxy` на VPS2 (DNS + HTTPS фильтр)
 - `--remove-adguard` — удалить AdGuard Home (используется вместе с `--with-proxy`)
 
+**Раздельное туннелирование RU TLD на VPS1 (без перевыпуска клиентских конфигов):**
+```bash
+# Проверки без изменения серверов
+bash tests/test-split-tunneling.sh
+bash scripts/deploy/setup-split-tunneling.sh --dry-run
+
+# Включить .ru/.рф/.su через VPS1, остальное через VPS2
+bash manage.sh deploy --split-tunneling --guard-timeout 300
+
+# Аварийный откат к текущему full-tunnel состоянию
+bash scripts/deploy/rollback-split-tunneling.sh
+# или:
+bash manage.sh deploy --split-tunneling --rollback
+```
+
+Split tunneling меняет только VPS1: поднимает `dnsmasq` на `10.9.0.1:53`,
+форвардит DNS в текущий VPS2 DNS upstream `10.8.0.2:53`, SNAT-ит DNS-ответы
+обратно как `10.8.0.2`, чтобы старые клиентские DNS-настройки работали, складывает ответы
+для `.ru/.рф/.su` в `ipset ru_subnets` и маршрутизирует только marked-трафик
+через основной интерфейс VPS1. Для DNS добавляется `INPUT` allow на `10.9.0.1:53`
+и отдельное policy rule `10.9.0.1 -> 10.9.0.0/24 lookup main`, потому что после
+DNAT запрос обслуживает локальный `dnsmasq`, а его ответы иначе попадают под
+старое правило `from 10.9.0.0/24 lookup 200`. Клиентские `AllowedIPs`, ключи, `awg0/awg1` и
+VPS2 не перезапускаются. При ошибке canary срабатывает немедленный rollback,
+а если управляющая сессия оборвётся — remote watchdog откатит изменения через
+`--guard-timeout` секунд.
+
 **Только YouTube Ad Proxy (без переустановки VPN):**
 ```bash
 bash manage.sh deploy --proxy \
@@ -510,6 +537,7 @@ bash manage.sh deploy --vps2 --vps2-ip ... --vps2-key ... --keys-file ./vpn-outp
 | `bash manage.sh deploy --vps1` / `bash scripts/deploy/deploy-vps1.sh` | Генерируются новые ключи для связки VPS1↔VPS2 и клиента, пересобираются `keys.env` и `client.conf` | Обязательно выполнить деплой VPS2 с этим же `keys.env`; затем переимпортировать клиентские конфиги |
 | `bash manage.sh deploy --vps2` / `bash scripts/deploy/deploy-vps2.sh --keys-file ...` | Новые ключи не генерируются (используется переданный `keys.env`) | Обычно ничего перевыпускать на клиентах не нужно, если `keys.env` не меняли |
 | `bash manage.sh deploy --proxy` / `bash scripts/deploy/deploy-proxy.sh` | Перегенерируется только TLS server cert для `youtube-proxy` (CA сохраняется) | VPN-конфиги и WG-ключи не трогаются; Root CA на устройствах переустанавливать не нужно |
+| `bash manage.sh deploy --split-tunneling --guard-timeout 300` | Ключи и клиентские конфиги не меняются; меняются только DNS DNAT/policy routing/firewall rules на VPS1 | Переимпорт клиентских конфигов не нужен; rollback: `bash scripts/deploy/rollback-split-tunneling.sh` |
 | `bash manage.sh peers add ...` / `peers batch` | Создаётся новый peer-ключ и новый `peer_*.conf` только для добавляемых устройств | Импортировать только новые `peer_*.conf`; существующие устройства не трогать |
 | `bash scripts/tools/generate-all-configs.sh` | Пересборка `client.conf`, `phone.conf`; обновление `keys.env`; ключ телефона может быть пересоздан, если утерян/невалиден | Переимпортировать пересобранные конфиги; если был пересоздан ключ телефона, старый телефонный конфиг нужно заменить |
 | `powershell -File scripts/windows/repair-local-configs.ps1` | Пересобирает локальные `client.conf`/`phone.conf` под текущие серверные параметры без ротации приватных ключей | Если файл изменился (Endpoint/PublicKey/Junk), переимпортировать конфиг на устройстве |

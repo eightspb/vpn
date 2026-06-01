@@ -8,7 +8,7 @@
 
 - **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты)
 - **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1)
-- **Split tunneling** (опционально, `bash manage.sh deploy --split-tunneling`): на VPS1 поднимается `dnsmasq` (10.9.0.1:53) как DNS-прокси перед AdGuard на VPS2. Он наблюдает за DNS-запросами и автоматически складывает IP `.ru/.рф/.su`-доменов в ipset `ru_subnets`. iptables/mangle маркирует только NEW-коннекты через CONNMARK, policy routing (`fwmark 0x100 → table 100`) направляет их через основной интерфейс VPS1 в обход awg0. Существующие сессии не разрываются, клиентские конфиги не меняются.
+- **Split tunneling** (опционально, `bash manage.sh deploy --split-tunneling --guard-timeout 300`): на VPS1 поднимается `dnsmasq` (10.9.0.1:53) как DNS-прокси перед текущим VPS2 DNS upstream (`10.8.0.2:53`, сейчас `youtube-proxy`). Он наблюдает за DNS-запросами и автоматически складывает IP `.ru/.рф/.su`-доменов в ipset `ru_subnets`. DNS-запросы клиентов DNAT-ятся на `10.9.0.1`, а ответы SNAT-ятся обратно как `10.8.0.2`, чтобы старые клиентские DNS-настройки продолжали работать. iptables/mangle маркирует только NEW-коннекты через CONNMARK, policy routing (`fwmark 0x100 → table 100`) направляет их через основной интерфейс VPS1 в обход awg0. Из-за `FORWARD DROP` на VPS1 apply обязан добавлять marked FORWARD `awg1→MAIN_IF`; из-за локального `dnsmasq` apply также добавляет `INPUT` allow на `awg1 → 10.9.0.1:53` и более приоритетное rule `10.9.0.1 → 10.9.0.0/24 lookup main`, чтобы ответы dnsmasq не уходили в table 200. Существующие сессии не разрываются, клиентские конфиги не меняются.
 - **Admin panel**: `scripts/admin/admin-server.py` (Flask, port 8081) + `scripts/admin/admin.html` (SPA)
 - **Monitor**: `scripts/monitor/monitor-web.sh` (SSH polling → `vpn-output/data.json` каждые 5с)
 - **Backend API**: `backend/main.py` (FastAPI)
@@ -30,8 +30,9 @@
 # Деплой (с управляющего компьютера)
 bash manage.sh deploy                       # развернуть VPN на VPS1 + VPS2
 bash manage.sh deploy --with-proxy          # + youtube-proxy
-bash manage.sh deploy --split-tunneling     # включить раздельное туннелирование на VPS1
-bash manage.sh deploy --split-tunneling --rollback   # полный откат split tunneling
+bash manage.sh deploy --split-tunneling --guard-timeout 300  # включить split tunneling на VPS1 с watchdog rollback
+bash manage.sh deploy --split-tunneling --rollback           # аварийный откат split tunneling
+bash scripts/deploy/rollback-split-tunneling.sh              # прямой аварийный откат
 
 # Тесты
 bash tests/test-admin-server.sh     # 104+ тестов для admin-server (0 fail expected)
@@ -54,7 +55,8 @@ python scripts/admin/admin-server.py
 | `scripts/deploy/deploy-vps1.sh` | Деплой только VPS1 |
 | `scripts/deploy/deploy-vps2.sh` | Деплой только VPS2 |
 | `scripts/deploy/deploy-proxy.sh` | Деплой youtube-proxy |
-| `scripts/deploy/setup-split-tunneling.sh` | Установка раздельного туннелирования (.ru мимо VPN) на VPS1 |
+| `scripts/deploy/setup-split-tunneling.sh` | Установка раздельного туннелирования (.ru мимо VPN) на VPS1 с watchdog rollback |
+| `scripts/deploy/rollback-split-tunneling.sh` | Локальный аварийный rollback split tunneling, не зависит от удалённого rollback-файла |
 | `scripts/deploy/split-tunneling/` | Артефакты split tunneling: dnsmasq-конфиг, apply/rollback-скрипты, systemd-юниты |
 | `scripts/deploy/fix-networkd-routing.sh` | Восстановление `ip rule` (table 200 + split-tunneling) после рестарта networkd |
 | `backend/main.py` | Entry point FastAPI |
@@ -67,7 +69,7 @@ python scripts/admin/admin-server.py
 - **Счётчики трафика**: сбрасываются при перезагрузке VPS — метки говорят "с последней перезагрузки", не за всё время
 - **Split tunneling и счётчики**: при включённом split tunneling VPS1 awg0 показывает только зарубежный трафик (российский идёт через основной интерфейс VPS1 минуя awg0). Чтобы видеть весь клиентский трафик, надо смотреть `awg1` на VPS1.
 - **Split tunneling и первый коннект**: первый запрос к новому `.ru`-домену может пройти через VPN (пока dnsmasq не успеет добавить IP в ipset). Последующие — напрямую. Задержка ~50–200мс однократно.
-- **Split tunneling зависит от dnsmasq**: если dnsmasq на VPS1 не запущен — DNS у клиентов не работает (так как awg1 DNAT перенаправлен на 10.9.0.1:53). `Restart=always` + healthcheck в apply.sh защищают от этого. Полный откат: `bash manage.sh deploy --split-tunneling --rollback`.
+- **Split tunneling зависит от dnsmasq**: если dnsmasq на VPS1 не запущен — DNS у клиентов не работает (так как awg1 DNAT перенаправлен на 10.9.0.1:53). `Restart=always`, local/remote canary, watchdog rollback и аварийный скрипт защищают от этого. Полный откат: `bash scripts/deploy/rollback-split-tunneling.sh`.
 
 ## Правила проекта
 

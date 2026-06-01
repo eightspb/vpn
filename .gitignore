@@ -21,6 +21,7 @@ youtube-proxy/youtube-proxy
 # Temporary files
 *.tmp
 *.log
+.DS_Store
 
 # youtube-proxy binary
 youtube-proxy/youtube-proxy
