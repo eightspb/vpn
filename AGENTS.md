@@ -8,7 +8,7 @@
 
 - **VPS1** (входной, Москва): awg0 (тоннель к VPS2) + awg1 (прямые VPN-клиенты)
 - **VPS2** (выходной, США): awg0 (конечная точка тоннеля от VPS1) + AdGuard Home DNS (`10.8.0.2:53`, UI `10.8.0.2:3000`)
-- **Split tunneling** (опционально): `bash manage.sh deploy --split-tunneling --guard-timeout 300` включает `.ru/.рф/.su` через основной интерфейс VPS1, остальное оставляет через VPS2. DNS upstream остаётся `10.8.0.2:53` на VPS2 (AdGuard Home); DNS-запросы DNAT-ятся на `10.9.0.1`, ответы SNAT-ятся обратно как `10.8.0.2`. Клиентские конфиги и ключи не меняются. Откат: `bash scripts/deploy/rollback-split-tunneling.sh`.
+- **Split tunneling** (опционально): `bash manage.sh deploy --split-tunneling --guard-timeout 300` включает российские TLD (`.ru/.рф/.su`) и домены `v2fly/domain-list-community category-ru` (включая Ozon `.com`/CDN-домены) через основной интерфейс VPS1, остальное оставляет через VPS2. DNS upstream остаётся `10.8.0.2:53` на VPS2 (AdGuard Home); DNS-запросы DNAT-ятся на `10.9.0.1`, ответы SNAT-ятся обратно как `10.8.0.2`. Клиентские конфиги и ключи не меняются. Откат: `bash scripts/deploy/rollback-split-tunneling.sh`.
 - **Admin panel**: `scripts/admin/admin-server.py` (Flask, port 8081) + `scripts/admin/admin.html` (SPA)
 - **Monitor**: `scripts/monitor/monitor-web.sh` (SSH polling → `vpn-output/data.json` каждые 5с)
 - **Backend API**: `backend/main.py` (FastAPI)
@@ -29,7 +29,7 @@
 # Деплой (с управляющего компьютера)
 bash manage.sh deploy               # maintenance deploy: auto snapshot + rollback on failure; ключи/конфиги сохраняются
 bash scripts/deploy/deploy-snapshot-rollback.sh rollback --snapshot-id ID  # ручной повторный откат к snapshot
-bash manage.sh deploy --split-tunneling --guard-timeout 300  # split tunneling RU TLD на VPS1
+bash manage.sh deploy --split-tunneling --guard-timeout 300  # split tunneling RU TLD + category-ru на VPS1
 bash manage.sh deploy --split-tunneling --rollback           # аварийный откат
 
 # Тесты
@@ -55,6 +55,7 @@ bash manage.sh admin start
 | `scripts/deploy/deploy-snapshot-rollback.sh` | Pre-deploy snapshot и аварийный rollback VPS1/VPS2/local `vpn-output` |
 | `scripts/deploy/setup-split-tunneling.sh` | Guarded apply split tunneling на VPS1 |
 | `scripts/deploy/rollback-split-tunneling.sh` | Локальный аварийный rollback split tunneling |
+| `scripts/deploy/split-tunneling/split-tunnel-update-ru-domains.sh` | Генерация dnsmasq rules из `category-ru` + локального Ozon seed |
 | `backend/main.py` | Entry point FastAPI |
 | `.env` | Конфиг (IP серверов, SSH ключи) — **не коммитить** |
 
@@ -65,6 +66,7 @@ bash manage.sh admin start
 - **Счётчики трафика**: сбрасываются при перезагрузке VPS — метки говорят "с последней перезагрузки", не за всё время
 - **Split tunneling firewall**: на VPS1 `FORWARD DROP`; для RU split нужны marked FORWARD правила `awg1 -> MAIN_IF`, иначе `fwmark`/table 100 сами по себе не дадут трафику выйти через VPS1.
 - **Split tunneling DNS firewall/routing**: DNS после DNAT обслуживает локальный `dnsmasq` на `10.9.0.1:53`, поэтому нужен явный `INPUT` allow `awg1 -> 10.9.0.1:53` и rule `10.9.0.1 -> 10.9.0.0/24 lookup main`, иначе ответы dnsmasq попадают под `from 10.9.0.0/24 lookup 200` и уходят в awg0.
+- **Split tunneling domain source**: базовый `/etc/dnsmasq.d/vpn.conf` покрывает `.ru/.рф/.su`; расширенный `/etc/dnsmasq.d/vpn-ru-domains.conf` генерируется из `v2fly/domain-list-community category-ru` с локальным seed для Ozon (`ozon.com`, `ozonusercontent.com`, etc.), чтобы российские сервисы на не-`.ru` доменах тоже уходили через VPS1.
 - **Split rollback**: не полагаться только на удалённый `/usr/local/sbin/split-tunnel-rollback.sh`; локальный `scripts/deploy/rollback-split-tunneling.sh` содержит inline rollback и должен работать даже при частичной установке.
 
 ## Правила проекта

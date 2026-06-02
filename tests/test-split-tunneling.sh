@@ -46,6 +46,8 @@ for f in \
     "scripts/deploy/split-tunneling/dnsmasq.service.d/override.conf" \
     "scripts/deploy/split-tunneling/split-tunnel-apply.sh" \
     "scripts/deploy/split-tunneling/split-tunnel-rollback.sh" \
+    "scripts/deploy/split-tunneling/split-tunnel-update-ru-domains.sh" \
+    "scripts/deploy/split-tunneling/ru-domain-seed.txt" \
     "scripts/deploy/split-tunneling/split-tunnel-restore.service" \
     "scripts/deploy/split-tunneling/restore-vpn-routing.sh"; do
     if [[ -f "${PROJECT_ROOT}/${f}" ]]; then
@@ -82,12 +84,14 @@ check_bash_syntax "${SETUP_SCRIPT}"
 check_bash_syntax "${PROJECT_ROOT}/scripts/deploy/rollback-split-tunneling.sh"
 check_bash_syntax "${ARTIFACTS_DIR}/split-tunnel-apply.sh"
 check_bash_syntax "${ARTIFACTS_DIR}/split-tunnel-rollback.sh"
+check_bash_syntax "${ARTIFACTS_DIR}/split-tunnel-update-ru-domains.sh"
 check_bash_syntax "${ARTIFACTS_DIR}/restore-vpn-routing.sh"
 
 check_executable "${SETUP_SCRIPT}"
 check_executable "${PROJECT_ROOT}/scripts/deploy/rollback-split-tunneling.sh"
 check_executable "${ARTIFACTS_DIR}/split-tunnel-apply.sh"
 check_executable "${ARTIFACTS_DIR}/split-tunnel-rollback.sh"
+check_executable "${ARTIFACTS_DIR}/split-tunnel-update-ru-domains.sh"
 check_executable "${ARTIFACTS_DIR}/restore-vpn-routing.sh"
 
 # ── 3. dnsmasq-vpn.conf — критичные директивы ───────────────────────────────
@@ -110,6 +114,62 @@ check_in_file "$DNSMASQ_CONF" '^bind-dynamic$'                "bind-dynamic (в�
 check_in_file "$DNSMASQ_CONF" '^no-resolv$'                   "no-resolv (не использовать /etc/resolv.conf)"
 check_in_file "$DNSMASQ_CONF" '^server=10\.8\.0\.2$'          "upstream server=10.8.0.2 (VPS2 DNS)"
 check_in_file "$DNSMASQ_CONF" '^ipset=/\.ru/\.xn--p1ai/\.su/ru_subnets$' "ipset для .ru/.рф (xn--p1ai)/.su → ru_subnets"
+check_in_file "$DNSMASQ_CONF" 'vpn-ru-domains\.conf'          "упоминает generated category-ru/Ozon rules file"
+
+# ── 3a. split-tunnel-update-ru-domains.sh — генератор RU domain rules ──────
+echo ""
+echo "── 3a. split-tunnel-update-ru-domains.sh ──"
+
+UPDATE_RU_SH="${ARTIFACTS_DIR}/split-tunnel-update-ru-domains.sh"
+RU_SEED="${ARTIFACTS_DIR}/ru-domain-seed.txt"
+
+check_in_file "$UPDATE_RU_SH" 'set -euo pipefail'                  "update script: set -euo pipefail"
+check_in_file "$UPDATE_RU_SH" 'category-ru'                        "update script: default root category-ru"
+check_in_file "$UPDATE_RU_SH" 'domain-list-community/master/data'  "update script: v2fly domain-list-community source"
+check_in_file "$UPDATE_RU_SH" 'include:\*|include:'                "update script: parses include:* recursively"
+check_in_file "$UPDATE_RU_SH" 'vpn-ru-domains\.conf'               "update script: writes vpn-ru-domains.conf"
+check_in_file "$UPDATE_RU_SH" 'ru-domain-seed\.txt'                "update script: uses local seed fallback"
+check_in_file "$UPDATE_RU_SH" 'dnsmasq --test --conf-file'         "update script: validates generated dnsmasq config"
+check_in_file "$UPDATE_RU_SH" 'curl .*--retry 3|wget -q'           "update script: fetches source with retry-capable downloader"
+check_in_file "$UPDATE_RU_SH" 'ipset=/%s/%s'                       "update script: emits dnsmasq ipset rules"
+check_in_file "$UPDATE_RU_SH" '--no-reload'                        "update script: supports --no-reload for setup flow"
+check_in_file "$RU_SEED" '^gosuslugi\.ru$'                         "seed: gosuslugi.ru fallback"
+check_in_file "$RU_SEED" '^ozon\.com$'                             "seed: ozon.com fallback"
+check_in_file "$RU_SEED" '^ozonusercontent\.com$'                  "seed: ozonusercontent.com fallback"
+
+echo ""
+echo "── 3b. update script: offline dry-run parser test ──"
+
+if command -v curl >/dev/null 2>&1; then
+    TMP_DLC="$(mktemp -d)"
+    trap 'rm -rf "${TMP_DLC:-}"' EXIT
+    mkdir -p "${TMP_DLC}/data" "${TMP_DLC}/cache"
+    cat > "${TMP_DLC}/data/category-ru" <<'EOF'
+include:ozon
+ru
+EOF
+    cat > "${TMP_DLC}/data/ozon" <<'EOF'
+ozon.com
+ozonusercontent.com
+full:xapi.ozon.com @ads
+EOF
+    if RU_DOMAINS_CACHE_DIR="${TMP_DLC}/cache" \
+       bash "$UPDATE_RU_SH" --dry-run --base-url "file://${TMP_DLC}/data" --root category-ru --seed-file "$RU_SEED" > "${TMP_DLC}/out.conf"; then
+        pass "offline dry-run: generator exits 0"
+    else
+        fail "offline dry-run: generator failed"
+    fi
+    check_in_file "${TMP_DLC}/out.conf" '^ipset=/ozon\.com/ru_subnets$' "offline dry-run: keeps ozon.com exact"
+    check_in_file "${TMP_DLC}/out.conf" '^ipset=/ozonusercontent\.com/ru_subnets$' "offline dry-run: keeps ozonusercontent.com exact"
+    check_in_file "${TMP_DLC}/out.conf" '^ipset=/xapi\.ozon\.com/ru_subnets$' "offline dry-run: handles full: prefix"
+    if grep -q '^ipset=/\.com/ru_subnets$' "${TMP_DLC}/out.conf"; then
+        fail "offline dry-run: generated unsafe broad .com rule"
+    else
+        pass "offline dry-run: no unsafe broad .com rule"
+    fi
+else
+    pass "offline dry-run skipped: curl not available"
+fi
 
 # ── 4. systemd drop-in для dnsmasq ──────────────────────────────────────────
 echo ""
@@ -248,8 +308,13 @@ check_in_file "$SETUP_SCRIPT" '--dry-run'                       "флаг --dry-
 check_in_file "$SETUP_SCRIPT" '--rollback'                      "флаг --rollback"
 check_in_file "$SETUP_SCRIPT" '--guard-timeout'                  "флаг --guard-timeout"
 check_in_file "$SETUP_SCRIPT" 'apt-get install -y -qq dnsmasq ipset'  "установка dnsmasq+ipset"
+check_in_file "$SETUP_SCRIPT" 'curl ca-certificates'             "установка curl+ca-certificates для category-ru fetch"
 check_in_file "$SETUP_SCRIPT" 'Ранняя установка rollback-скрипта|/usr/local/sbin/split-tunnel-rollback\.sh installed' "ранняя установка rollback-скрипта до apply"
 check_in_file "$SETUP_SCRIPT" 'ipset create ru_subnets.*hash:ip' "создаёт ru_subnets до запуска dnsmasq"
+check_in_file "$SETUP_SCRIPT" 'Локальная генерация RU domain rules' "генерирует category-ru rules локально до SSH-мутаций"
+check_in_file "$SETUP_SCRIPT" '--dry-run[[:space:]]*\\' "генерирует готовый dnsmasq rules файл через dry-run"
+check_in_file "$SETUP_SCRIPT" 'grep -q.*ipset=/ozon\\\.com/ru_subnets' "проверяет generated Ozon rule"
+check_in_file "$SETUP_SCRIPT" 'grep -q.*ipset=/gosuslugi\\\.ru/ru_subnets' "проверяет generated Gosuslugi rule"
 check_in_file "$SETUP_SCRIPT" 'systemd-run --unit=.*--on-active=.*split-tunnel-rollback\.sh|--on-active=\$\{GUARD_TIMEOUT\}' "watchdog через systemd-run --on-active"
 check_in_file "$SETUP_SCRIPT" 'cancel_watchdog\(\)'             "функция отмены watchdog"
 check_in_file "$SETUP_SCRIPT" 'systemctl is-active --quiet \$\{WATCHDOG_UNIT\}\.timer' "cancel watchdog проверяет, что timer не остался active"
@@ -257,13 +322,20 @@ check_in_file "$SETUP_SCRIPT" 'Не удалось отменить watchdog rol
 check_in_file "$SETUP_SCRIPT" 'fail_guarded\(\)'                "guarded failure запускает rollback"
 check_in_file "$SETUP_SCRIPT" 'dig \+time=3 \+tries=1 @10\.8\.0\.2 google\.com' "local canary: google.com через 10.8.0.2"
 check_in_file "$SETUP_SCRIPT" 'dig \+time=3 \+tries=1 @10\.8\.0\.2 lenta\.ru' "local canary: lenta.ru через 10.8.0.2"
+check_in_file "$SETUP_SCRIPT" 'dig \+time=3 \+tries=1 @10\.8\.0\.2 ozon\.com' "local canary: ozon.com через 10.8.0.2"
 check_in_file "$SETUP_SCRIPT" 'ip route get "\$RU_IP" mark "\$MARK_HEX".*iif awg1' "remote canary: marked route lookup"
+check_in_file "$SETUP_SCRIPT" 'dig \+time=3 \+tries=1 @"\$\{DNSMASQ_IP\}" ozon\.com' "remote canary: ozon.com через dnsmasq"
+check_in_file "$SETUP_SCRIPT" 'ipset test "\$IPSET_NAME" "\$OZON_IP"' "remote canary: ozon.com IP попал в ipset"
+check_in_file "$SETUP_SCRIPT" 'ip route get "\$OZON_IP" mark "\$MARK_HEX".*iif awg1' "remote canary: Ozon route lookup"
 check_in_file "$SETUP_SCRIPT" 'ip route get "\$PEER_IP" from "\$DNSMASQ_IP"' "remote canary: DNS reply route lookup"
 check_in_file "$SETUP_SCRIPT" 'iptables -C FORWARD -i awg1 -o "\$MAIN_IF".*--mark "\$MARK_HEX"' "remote canary: marked FORWARD rule"
 check_in_file "$SETUP_SCRIPT" 'POSTROUTING -o awg1 -s "\$\{DNSMASQ_IP\}/32".*SNAT --to-source "\$\{VPS2_DNS_IP\}"' "remote canary: DNS reply SNAT rule"
 check_in_file "$SETUP_SCRIPT" 'iptables -C INPUT -i awg1 -d "\$\{DNSMASQ_IP\}".*--dport 53.*ACCEPT' "remote canary: DNS INPUT allow rule"
 check_in_file "$SETUP_SCRIPT" 'upload "\$\{ARTIFACTS_DIR\}/split-tunnel-apply\.sh"' "upload apply.sh (через wrapper)"
 check_in_file "$SETUP_SCRIPT" 'upload "\$\{ARTIFACTS_DIR\}/split-tunnel-rollback\.sh"' "upload rollback.sh (через wrapper)"
+check_in_file "$SETUP_SCRIPT" 'upload "\$\{ARTIFACTS_DIR\}/split-tunnel-update-ru-domains\.sh"' "upload update-ru-domains.sh (через wrapper)"
+check_in_file "$SETUP_SCRIPT" 'upload "\$\{ARTIFACTS_DIR\}/ru-domain-seed\.txt"' "upload ru-domain-seed.txt (через wrapper)"
+check_in_file "$SETUP_SCRIPT" 'upload "\$GENERATED_RU_DOMAINS_CONF"' "upload generated vpn-ru-domains.conf (через wrapper)"
 check_in_file "$SETUP_SCRIPT" 'upload "\$\{ARTIFACTS_DIR\}/split-tunnel-restore\.service"' "upload restore.service (через wrapper)"
 check_in_file "$SETUP_SCRIPT" '^upload\(\)|^remote\(\)|^remote_script\(\)'      "локальные wrapper-функции (upload/remote/remote_script)"
 check_in_file "$SETUP_SCRIPT" 'dnsmasq\.conf\.bak\.pre-split-tunneling'   "бэкап оригинального dnsmasq.conf"

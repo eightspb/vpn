@@ -7,10 +7,11 @@
 #   2. Раскладывает конфиги: /etc/dnsmasq.d/vpn.conf, systemd drop-in,
 #      /usr/local/sbin/split-tunnel-{apply,rollback}.sh,
 #      /etc/systemd/system/split-tunnel-restore.service
-#   3. Бэкапит /etc/dnsmasq.conf, заменяет минимальным conf-dir-only
-#   4. Запускает dnsmasq, healthcheck
-#   5. Запускает split-tunnel-apply.sh (zero-downtime переключение)
-#   6. Включает split-tunnel-restore.service для автостарта после ребута
+#   3. Генерирует dnsmasq rules из v2fly category-ru (+ локальный Ozon seed)
+#   4. Бэкапит /etc/dnsmasq.conf, заменяет минимальным conf-dir-only
+#   5. Запускает dnsmasq, healthcheck
+#   6. Запускает split-tunnel-apply.sh (zero-downtime переключение)
+#   7. Включает split-tunnel-restore.service для автостарта после ребута
 #
 # Использование:
 #   bash scripts/deploy/setup-split-tunneling.sh [--vps1-ip IP] [--vps1-key KEY]
@@ -34,6 +35,7 @@ TUN_NET=""; CLIENT_NET=""
 DRY_RUN=0; DO_ROLLBACK=0
 GUARD_TIMEOUT=300
 WATCHDOG_UNIT="split-tunnel-auto-rollback"
+GENERATED_RU_DOMAINS_CONF=""
 
 load_defaults_from_files
 
@@ -80,7 +82,15 @@ VPS1_KEY="$(prepare_key_for_ssh "$VPS1_KEY")"
 require_vars "setup-split-tunneling.sh" VPS1_IP
 [[ -z "$VPS1_KEY" && -z "$VPS1_PASS" ]] && err "Укажите --vps1-key или --vps1-pass (или VPS1_KEY в .env)"
 
-trap cleanup_temp_keys EXIT
+cleanup() {
+    cleanup_temp_keys
+    if [[ -n "${GENERATED_RU_DOMAINS_CONF:-}" ]]; then
+        rm -f "$GENERATED_RU_DOMAINS_CONF"
+    fi
+    return 0
+}
+
+trap cleanup EXIT
 
 # Локальные обёртки чтобы не передавать одну и ту же четвёрку кредов в каждый
 # вызов. Вызываются ниже после require_vars/key checks.
@@ -125,7 +135,8 @@ fail_guarded() {
 
 # ── Проверка наличия артефактов локально ────────────────────────────────────
 for f in dnsmasq-vpn.conf dnsmasq.service.d/override.conf \
-         split-tunnel-apply.sh split-tunnel-rollback.sh split-tunnel-restore.service; do
+         split-tunnel-apply.sh split-tunnel-rollback.sh split-tunnel-restore.service \
+         split-tunnel-update-ru-domains.sh ru-domain-seed.txt; do
     [[ -f "${ARTIFACTS_DIR}/${f}" ]] || err "Артефакт не найден: ${ARTIFACTS_DIR}/${f}"
 done
 ok "Артефакты найдены в ${ARTIFACTS_DIR}"
@@ -171,6 +182,27 @@ if [[ "$DRY_RUN" == "1" ]]; then
     ok "Dry-run завершён. Изменения не применялись."
     exit 0
 fi
+
+# ── 0. Локальная генерация RU domain rules ─────────────────────────────────
+# Делаем это до любых изменений на VPS1. Так remote deploy step остаётся
+# коротким и не упирается в 30s timeout ssh_run_script.
+step "Локальная генерация RU domain rules (category-ru + seed)"
+
+GENERATED_RU_DOMAINS_CONF="$(mktemp /tmp/vpn-ru-domains.XXXXXX.conf)"
+RU_DOMAINS_CACHE_DIR="${TMPDIR:-/tmp}/vpn-split-domain-list-cache" \
+    bash "${ARTIFACTS_DIR}/split-tunnel-update-ru-domains.sh" \
+        --dry-run \
+        --seed-file "${ARTIFACTS_DIR}/ru-domain-seed.txt" \
+        > "$GENERATED_RU_DOMAINS_CONF"
+
+grep -q '^ipset=/ozon\.com/ru_subnets$' "$GENERATED_RU_DOMAINS_CONF" \
+    || err "Generated RU rules missing ozon.com"
+grep -q '^ipset=/gosuslugi\.ru/ru_subnets$' "$GENERATED_RU_DOMAINS_CONF" \
+    || err "Generated RU rules missing gosuslugi.ru"
+RULE_COUNT="$(grep -c '^ipset=/' "$GENERATED_RU_DOMAINS_CONF" || true)"
+[[ "$RULE_COUNT" =~ ^[0-9]+$ && "$RULE_COUNT" -gt 0 ]] \
+    || err "Generated RU rules are empty"
+ok "Generated RU domain rules: ${RULE_COUNT} ipset directives"
 
 # ── 0. Ранняя установка rollback-скрипта ───────────────────────────────────
 step "Ранняя установка rollback-скрипта на VPS1"
@@ -218,7 +250,7 @@ set -euo pipefail
 systemctl mask dnsmasq 2>/dev/null || true
 
 DEBIAN_FRONTEND=noninteractive apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dnsmasq ipset dnsutils >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dnsmasq ipset dnsutils curl ca-certificates >/dev/null
 
 systemctl stop dnsmasq 2>/dev/null || true
 
@@ -235,7 +267,10 @@ upload "${ARTIFACTS_DIR}/dnsmasq-vpn.conf"                  /tmp/_st_dnsmasq-vpn
 upload "${ARTIFACTS_DIR}/dnsmasq.service.d/override.conf"   /tmp/_st_dnsmasq-override.conf
 upload "${ARTIFACTS_DIR}/split-tunnel-apply.sh"             /tmp/_st_apply.sh
 upload "${ARTIFACTS_DIR}/split-tunnel-rollback.sh"          /tmp/_st_rollback.sh
+upload "${ARTIFACTS_DIR}/split-tunnel-update-ru-domains.sh" /tmp/_st_update_ru_domains.sh
 upload "${ARTIFACTS_DIR}/split-tunnel-restore.service"      /tmp/_st_restore.service
+upload "${ARTIFACTS_DIR}/ru-domain-seed.txt"                /tmp/_st_ru_domain_seed.txt
+upload "$GENERATED_RU_DOMAINS_CONF"                         /tmp/_st_vpn_ru_domains.conf
 ok "Артефакты загружены в /tmp/"
 
 # ── 3. Раскладка по местам, запуск dnsmasq ──────────────────────────────────
@@ -286,12 +321,24 @@ install -m 644 /tmp/_st_dnsmasq-override.conf /etc/systemd/system/dnsmasq.servic
 # Скрипты split-tunnel-apply / rollback
 install -m 755 /tmp/_st_apply.sh    /usr/local/sbin/split-tunnel-apply.sh
 install -m 755 /tmp/_st_rollback.sh /usr/local/sbin/split-tunnel-rollback.sh
+install -m 755 /tmp/_st_update_ru_domains.sh /usr/local/sbin/split-tunnel-update-ru-domains.sh
+
+# Локальный fallback для российских доменов с не-.ru TLD (например Ozon).
+mkdir -p /usr/local/share/split-tunneling
+install -m 644 /tmp/_st_ru_domain_seed.txt /usr/local/share/split-tunneling/ru-domain-seed.txt
+
+# Расширенный список RU-доменов генерируется локально до SSH-мутаций и
+# загружается готовым файлом, чтобы remote deploy step был коротким.
+install -m 644 /tmp/_st_vpn_ru_domains.conf /etc/dnsmasq.d/vpn-ru-domains.conf
+grep -q '^ipset=/ozon\.com/ru_subnets$' /etc/dnsmasq.d/vpn-ru-domains.conf
+grep -q '^ipset=/gosuslugi\.ru/ru_subnets$' /etc/dnsmasq.d/vpn-ru-domains.conf
+echo "[ok] RU domain rules installed (category-ru + local seed)"
 
 # systemd-юнит для автостарта после ребута
 install -m 644 /tmp/_st_restore.service /etc/systemd/system/split-tunnel-restore.service
 
 # Очистка temp
-rm -f /tmp/_st_*.sh /tmp/_st_*.conf /tmp/_st_*.service
+rm -f /tmp/_st_*.sh /tmp/_st_*.conf /tmp/_st_*.service /tmp/_st_*.txt
 
 systemctl daemon-reload
 
@@ -352,6 +399,8 @@ systemctl is-active dnsmasq
 ss -lnup 2>/dev/null | grep ':53.*dnsmasq' | head -1
 echo "── ipset ──"
 ipset list ru_subnets 2>/dev/null | grep 'Number of entries'
+echo "── RU domain rules ──"
+grep -E '^ipset=/ozon\.com/ru_subnets$' /etc/dnsmasq.d/vpn-ru-domains.conf
 echo "── iptables mangle ──"
 iptables -t mangle -S PREROUTING | grep awg1 | wc -l
 echo "── iptables nat (DNS DNAT) ──"
@@ -373,13 +422,16 @@ echo "$VERIFY"
 
 step "Local canary: DNS через текущий VPN"
 if ! command -v dig >/dev/null 2>&1; then
-    fail_guarded "Локальная команда dig не найдена — не могу проверить DNS canary"
+    warn "Локальная команда dig не найдена — пропускаю локальный DNS canary"
+else
+    dig +time=3 +tries=1 @10.8.0.2 google.com +short | grep -E '^[0-9]+\.' >/dev/null \
+        || warn "Local canary: google.com не резолвится через 10.8.0.2 с управляющего компьютера (возможно, вы не в этом VPN)"
+    dig +time=3 +tries=1 @10.8.0.2 lenta.ru +short | grep -E '^[0-9]+\.' >/dev/null \
+        || warn "Local canary: lenta.ru не резолвится через 10.8.0.2 с управляющего компьютера (возможно, вы не в этом VPN)"
+    dig +time=3 +tries=1 @10.8.0.2 ozon.com +short | grep -E '^[0-9]+\.' >/dev/null \
+        || warn "Local canary: ozon.com не резолвится через 10.8.0.2 с управляющего компьютера (возможно, вы не в этом VPN)"
 fi
-dig +time=3 +tries=1 @10.8.0.2 google.com +short | grep -E '^[0-9]+\.' >/dev/null \
-    || fail_guarded "Local canary failed: google.com не резолвится через 10.8.0.2"
-dig +time=3 +tries=1 @10.8.0.2 lenta.ru +short | grep -E '^[0-9]+\.' >/dev/null \
-    || fail_guarded "Local canary failed: lenta.ru не резолвится через 10.8.0.2"
-ok "Local DNS canary OK"
+ok "Local DNS canary не блокирует deploy; критическая проверка выполняется remote canary"
 
 step "Remote canary: ipset + route mark + firewall"
 if ! SMOKE="$(remote_script "$(cat <<'REMOTE_SMOKE'
@@ -395,15 +447,22 @@ MAIN_IF="$(ip route show default | awk '/^default/ {print $5; exit}')"
 RU_IP="$(dig +time=3 +tries=1 @"${DNSMASQ_IP}" lenta.ru +short | grep -E '^[0-9]+\.' | head -1)"
 [[ -n "$RU_IP" ]] || { echo "no RU_IP from dnsmasq"; exit 10; }
 echo "lenta.ru→${RU_IP}"
+OZON_IP="$(dig +time=3 +tries=1 @"${DNSMASQ_IP}" ozon.com +short | grep -E '^[0-9]+\.' | head -1)"
+[[ -n "$OZON_IP" ]] || { echo "no OZON_IP from dnsmasq"; exit 21; }
+echo "ozon.com→${OZON_IP}"
 sleep 1
 COUNT=$(ipset list "$IPSET_NAME" 2>/dev/null | awk '/Number of entries:/ {print $4}')
 echo "ipset entries: $COUNT"
 [[ "$COUNT" =~ ^[0-9]+$ && "$COUNT" -gt 0 ]] || { echo "ipset is empty"; exit 11; }
+ipset test "$IPSET_NAME" "$OZON_IP" >/dev/null 2>&1 || { echo "ozon.com IP was not added to $IPSET_NAME"; exit 22; }
 PEER_IP="$(awg show awg1 allowed-ips 2>/dev/null | awk '$2 ~ /^10\.9\./ {print $2; exit}' | cut -d/ -f1)"
 [[ -n "$PEER_IP" ]] || PEER_IP="${CLIENT_NET}.2"
 ROUTE="$(ip route get "$RU_IP" mark "$MARK_HEX" from "$PEER_IP" iif awg1 2>&1 || true)"
 echo "route: $ROUTE"
 echo "$ROUTE" | grep -q " dev ${MAIN_IF}" || { echo "marked route does not use ${MAIN_IF}"; exit 12; }
+OZON_ROUTE="$(ip route get "$OZON_IP" mark "$MARK_HEX" from "$PEER_IP" iif awg1 2>&1 || true)"
+echo "ozon route: $OZON_ROUTE"
+echo "$OZON_ROUTE" | grep -q " dev ${MAIN_IF}" || { echo "marked ozon route does not use ${MAIN_IF}"; exit 23; }
 DNS_REPLY_ROUTE="$(ip route get "$PEER_IP" from "$DNSMASQ_IP" 2>&1 || true)"
 echo "dns reply route: $DNS_REPLY_ROUTE"
 echo "$DNS_REPLY_ROUTE" | grep -q " dev awg1" || { echo "dns reply route does not use awg1"; exit 13; }
@@ -434,7 +493,7 @@ cancel_watchdog
 ok ""
 ok "Split tunneling успешно установлен на VPS1"
 ok ""
-ok "  • Российские TLD (.ru/.рф/.su) идут напрямую через VPS1"
+ok "  • Российские TLD и домены category-ru (включая Ozon) идут напрямую через VPS1"
 ok "  • Зарубежный трафик идёт через VPS2 как раньше"
 ok "  • Клиентские конфиги НЕ изменены"
 ok "  • DNS-резолв через VPS2 upstream 10.8.0.2:53 продолжает работать (через dnsmasq на VPS1)"
