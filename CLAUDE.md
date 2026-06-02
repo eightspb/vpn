@@ -27,7 +27,8 @@
 
 ```bash
 # Деплой (с управляющего компьютера)
-bash manage.sh deploy                       # развернуть VPN на VPS1 + VPS2
+bash manage.sh deploy                       # maintenance deploy: auto snapshot + rollback on failure; ключи/конфиги сохраняются
+bash scripts/deploy/deploy-snapshot-rollback.sh rollback --snapshot-id ID  # ручной повторный откат к snapshot
 bash manage.sh deploy --split-tunneling --guard-timeout 300  # включить split tunneling на VPS1 с watchdog rollback
 bash manage.sh deploy --split-tunneling --rollback           # аварийный откат split tunneling
 bash scripts/deploy/rollback-split-tunneling.sh              # прямой аварийный откат
@@ -52,6 +53,7 @@ bash manage.sh admin start
 | `scripts/deploy/deploy.sh` | Основной деплой-скрипт |
 | `scripts/deploy/deploy-vps1.sh` | Деплой только VPS1 |
 | `scripts/deploy/deploy-vps2.sh` | Деплой только VPS2 |
+| `scripts/deploy/deploy-snapshot-rollback.sh` | Pre-deploy snapshot и аварийный rollback VPS1/VPS2/local `vpn-output` |
 | `scripts/deploy/setup-split-tunneling.sh` | Установка раздельного туннелирования (.ru мимо VPN) на VPS1 с watchdog rollback |
 | `scripts/deploy/rollback-split-tunneling.sh` | Локальный аварийный rollback split tunneling, не зависит от удалённого rollback-файла |
 | `scripts/deploy/split-tunneling/` | Артефакты split tunneling: dnsmasq-конфиг, apply/rollback-скрипты, systemd-юниты |

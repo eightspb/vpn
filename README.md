@@ -344,8 +344,8 @@ bash manage.sh <команда> [опции]
 
 | Команда | Описание |
 |---------|----------|
-| `deploy` | Полный деплой VPN (оба сервера) |
-| `deploy --regen-configs` | Полный ре-деплой + перегенерация `client.conf` и `phone.conf` |
+| `deploy` | Maintenance deploy VPN (оба сервера, без ротации существующих WG-ключей) |
+| `deploy --regen-configs` | Maintenance deploy + пересборка локальных `client.conf` и `phone.conf` |
 | `deploy --vps1` | Только VPS1 |
 | `deploy --vps2` | Только VPS2 |
 | `monitor` | Реалтайм-монитор в терминале |
@@ -376,10 +376,10 @@ bash manage.sh <команда> [опции]
 | `bash scripts/tools/audit-security-efficiency.sh` | Быстрый аудит кода/настроек по security + efficiency, отчёт по severity |
 
 ```bash
-# Полный деплой (параметры из .env)
+# Maintenance deploy без ротации ключей (параметры из .env)
 bash manage.sh deploy
 
-# Полный ре-деплой с автоматической перегенерацией client/phone конфигов
+# Maintenance deploy с автоматической пересборкой client/phone конфигов
 bash manage.sh deploy --regen-configs
 
 # Или с явными параметрами (перезаписывают .env)
@@ -422,9 +422,15 @@ bash manage.sh deploy --help
 Все деплой-скрипты автоматически загружают параметры из `.env` и запускают security-обновления (`security-update.sh`) и hardening (`security-harden.sh`).
 
 **Полный деплой (VPN + AdGuard Home):**
+
+Полный `bash manage.sh deploy` работает как maintenance deploy: перед изменениями автоматически создаёт rollback snapshot, существующие WG-ключи, серверные `awg0/awg1` конфиги, существующий `/opt/AdGuardHome/AdGuardHome.yaml` и локальный `vpn-output/client.conf` сохраняются. Если конфигов ещё нет, они создаются. `awg-quick@awg0/awg1` и AdGuard Home могут перезапускаться, поэтому возможна краткая пауза, но старые клиентские конфиги должны остаться валидными. Если deploy завершается с ошибкой, `manage.sh` автоматически запускает rollback к созданному snapshot и печатает команду для ручного повторного rollback.
+
 ```bash
-# Если .env заполнен:
+# Если .env заполнен, snapshot + rollback при ошибке выполняются автоматически:
 bash manage.sh deploy
+
+# Если нужно вручную откатиться, взять snapshot ID из вывода deploy:
+bash scripts/deploy/deploy-snapshot-rollback.sh rollback --snapshot-id 20260101-120000
 
 # Или с явными параметрами:
 bash manage.sh deploy \
@@ -433,8 +439,10 @@ bash manage.sh deploy \
   --adguard-pass "Strong-Password-123"
 ```
 
+Snapshot rollback сохраняет и восстанавливает конфиги VPN/AdGuard/dnsmasq, `/etc/resolv.conf`, `/etc/hosts`, состояния сервисов, firewall/ipset, split-tunneling артефакты и локальный `vpn-output`. Он не откатывает версии OS-пакетов, установленных через `apt`.
+
 **Флаги:**
-- `--adguard-pass` — пароль Web UI AdGuard Home, обязателен для полного деплоя
+- `--adguard-pass` — пароль Web UI AdGuard Home, обязателен для полного деплоя; при уже существующем `/opt/AdGuardHome/AdGuardHome.yaml` пароль не перезаписывается
 - `--regen-configs` — после полного деплоя пересобрать локальные `client.conf` и `phone.conf`
 
 **Раздельное туннелирование RU TLD на VPS1 (без перевыпуска клиентских конфигов):**
@@ -479,8 +487,8 @@ bash manage.sh deploy --vps2 --vps2-ip ... --vps2-key ... --keys-file ./vpn-outp
 
 | Что запускаем | Что перевыпускается автоматически | Что нужно сделать вручную после |
 |---|---|---|
-| `bash manage.sh deploy` (полный деплой) | Полная пересоздача WG-ключей (туннель + сервер + базовый клиент), новый `vpn-output/keys.env`, новый `vpn-output/client.conf` | Переимпортировать актуальные `.conf` на устройства (старые конфиги могут перестать работать) |
-| `bash manage.sh deploy --regen-configs` | Полный деплой + дополнительная пересборка `client.conf` и `phone.conf` через `scripts/tools/generate-all-configs.sh` | Переимпортировать оба пересобранных конфига (`client.conf`, `phone.conf`) |
+| `bash manage.sh deploy` (полный деплой) | Автоматический pre-deploy snapshot; существующие WG-ключи, `awg0/awg1`, `/opt/AdGuardHome/AdGuardHome.yaml` и `vpn-output/client.conf` сохраняются; недостающие артефакты создаются | Переимпорт клиентских конфигов не нужен; при ошибке deploy запускается auto rollback; возможна краткая пауза из-за restart `awg-quick`/AdGuard |
+| `bash manage.sh deploy --regen-configs` | Серверные ключи не ротируются, но локальные `client.conf` и `phone.conf` пересобираются через `scripts/tools/generate-all-configs.sh` | Переимпортировать только если пересобранный файл реально изменился |
 | `bash manage.sh deploy --vps1` / `bash scripts/deploy/deploy-vps1.sh` | Генерируются новые ключи для связки VPS1↔VPS2 и клиента, пересобираются `keys.env` и `client.conf` | Обязательно выполнить деплой VPS2 с этим же `keys.env`; затем переимпортировать клиентские конфиги |
 | `bash manage.sh deploy --vps2` / `bash scripts/deploy/deploy-vps2.sh --keys-file ...` | Новые ключи не генерируются (используется переданный `keys.env`) | Обычно ничего перевыпускать на клиентах не нужно, если `keys.env` не меняли |
 | `bash manage.sh deploy --split-tunneling --guard-timeout 300` | Ключи и клиентские конфиги не меняются; меняются только DNS DNAT/policy routing/firewall rules на VPS1 | Переимпорт клиентских конфигов не нужен; rollback: `bash scripts/deploy/rollback-split-tunneling.sh` |
@@ -490,7 +498,8 @@ bash manage.sh deploy --vps2 --vps2-ip ... --vps2-key ... --keys-file ./vpn-outp
 | `bash scripts/tools/repair-vps1.sh` | Восстанавливает `awg1.conf` на VPS1 без пересоздания ключей | Перевыпуск конфигов обычно не нужен |
 
 Короткое правило:
-- Если запускался скрипт, который генерирует новые WG-ключи (`deploy`, `deploy --vps1`, `deploy-vps1.sh`) — переимпорт клиентских `.conf` обязателен.
+- `bash manage.sh deploy` сохраняет существующие WG-ключи и клиентские конфиги; переимпорт обычно не нужен.
+- Если запускался скрипт, который генерирует новые WG-ключи (`deploy --vps1`, `deploy-vps1.sh`) — переимпорт клиентских `.conf` обязателен.
 - Если менялись только правила split tunneling или серверная диагностика/ремонт без ротации ключей — переимпорт обычно не нужен.
 
 ## Управление пирами (устройствами)

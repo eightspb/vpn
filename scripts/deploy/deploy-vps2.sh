@@ -253,16 +253,12 @@ ok "VPS2 (awg0) настроен"
 
 step "Шаг 4/4: Установка AdGuard Home на VPS2"
 
-AGH_PASS_HASH=$(python3 -c "
-import bcrypt, sys
-pw = sys.argv[1].encode()
-print(bcrypt.hashpw(pw, bcrypt.gensalt(10)).decode())
-" "$ADGUARD_PASS" 2>/dev/null) || \
-err "Не удалось сгенерировать bcrypt-хэш пароля. Установите python3-bcrypt: pip3 install bcrypt"
+ADGUARD_PASS_SHELL="$(printf '%q' "$ADGUARD_PASS")"
 
 run_script2 "
 export DEBIAN_FRONTEND=noninteractive
 set -e
+ADGUARD_PASS=${ADGUARD_PASS_SHELL}
 mkdir -p /etc/systemd/resolved.conf.d
 cat > /etc/systemd/resolved.conf.d/adguard.conf << 'EOF'
 [Resolve]
@@ -303,12 +299,46 @@ fi
 /opt/AdGuardHome/AdGuardHome -s stop 2>/dev/null || true
 sleep 1
 
-cat > /opt/AdGuardHome/AdGuardHome.yaml << 'AGHEOF'
+generate_adguard_hash() {
+    local hash
+    if command -v python3 >/dev/null 2>&1; then
+        hash=\$(AGH_PLAIN_PASS=\"\$ADGUARD_PASS\" python3 - <<'PY' 2>/dev/null
+import os
+import bcrypt
+
+print(bcrypt.hashpw(os.environ['AGH_PLAIN_PASS'].encode(), bcrypt.gensalt(10)).decode())
+PY
+)
+        if [[ -n \"\$hash\" ]]; then
+            printf '%s\n' \"\$hash\"
+            return 0
+        fi
+    fi
+
+    if ! command -v htpasswd >/dev/null 2>&1; then
+        apt-get -y -qq -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" install apache2-utils >/dev/null 2>&1 || true
+    fi
+    if command -v htpasswd >/dev/null 2>&1; then
+        hash=\$(printf '%s\n' \"\$ADGUARD_PASS\" | htpasswd -Bni admin 2>/dev/null | sed 's/^[^:]*://')
+        if [[ -n \"\$hash\" ]]; then
+            printf '%s\n' \"\$hash\"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+AGH_PASS_HASH=\$(generate_adguard_hash) || {
+    echo 'Не удалось сгенерировать bcrypt-хэш пароля AdGuard Home на VPS2 (python3-bcrypt или apache2-utils недоступны)' >&2
+    exit 1
+}
+
+cat > /opt/AdGuardHome/AdGuardHome.yaml << AGHEOF
 http:
   address: ${TUN_NET}.2:3000
 users:
   - name: admin
-    password: '${AGH_PASS_HASH}'
+    password: '\${AGH_PASS_HASH}'
 dns:
   bind_hosts:
     - ${TUN_NET}.2

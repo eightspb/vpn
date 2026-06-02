@@ -6,6 +6,7 @@
 # Generated VPN outputs with private keys
 vpn-output/*
 !vpn-output/.gitkeep
+vpn-output.before-rollback.*
 
 # Monitor runtime (local PID)
 scripts/monitor/vpn-output/*.pid

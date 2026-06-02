@@ -373,11 +373,18 @@ echo "[security-harden] Kernel hardening applied"
 # ── 8. AdGuard Home bind restriction (VPS2 only) ────────────────────────────
 if [[ -n "$ADGUARD_BIND" && -f /opt/AdGuardHome/AdGuardHome.yaml ]]; then
     echo "[security-harden] Restricting AdGuard Home to ${ADGUARD_BIND}..."
+    TMP_ADGUARD="$(mktemp)"
+    cp -f /opt/AdGuardHome/AdGuardHome.yaml "$TMP_ADGUARD"
     sed -i "s|address: 0.0.0.0:3000|address: ${ADGUARD_BIND}:3000|" /opt/AdGuardHome/AdGuardHome.yaml
     sed -i 's/bind_hosts:/bind_hosts:/' /opt/AdGuardHome/AdGuardHome.yaml
     sed -i "s|    - 0.0.0.0|    - ${ADGUARD_BIND}|" /opt/AdGuardHome/AdGuardHome.yaml
-    /opt/AdGuardHome/AdGuardHome -s restart 2>/dev/null || true
-    echo "[security-harden] AdGuard Home now listens on ${ADGUARD_BIND} only"
+    if cmp -s "$TMP_ADGUARD" /opt/AdGuardHome/AdGuardHome.yaml; then
+        echo "[security-harden] AdGuard Home bind already restricted to ${ADGUARD_BIND}; not restarting"
+    else
+        /opt/AdGuardHome/AdGuardHome -s restart 2>/dev/null || true
+        echo "[security-harden] AdGuard Home now listens on ${ADGUARD_BIND} only"
+    fi
+    rm -f "$TMP_ADGUARD"
 fi
 
 # ── 9. Log rotation for security logs ───────────────────────────────────────

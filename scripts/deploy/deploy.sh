@@ -251,25 +251,185 @@ upload2 "$SECURITY_HARDEN_SCRIPT" /tmp/security-harden.sh >/dev/null
 run2 "sudo bash /tmp/security-harden.sh --role vps2 --vpn-port ${VPS2_PORT} --vpn-net ${TUN_NET}.0/24 --client-net ${CLIENT_NET}.0/24 --adguard-bind ${TUN_NET}.2"
 ok "VPS2 hardening завершён"
 
-# ── Шаг 3: Генерация ключей на VPS1 ───────────────────────────────────────
-step "Шаг 3/8: Генерация WireGuard ключей"
+# ── Шаг 3: Подготовка ключей на VPS1 ──────────────────────────────────────
+step "Шаг 3/8: Подготовка WireGuard ключей"
 
-log "Генерирую ключи на VPS1..."
+log "Проверяю существующий tunnel public key на VPS2..."
+VPS2_EXISTING_TUNNEL_INFO=$(run_script2 '
+read_interface_private_key() {
+    local conf="$1"
+    awk '"'"'
+        /^\[Interface\]/{iface=1; next}
+        /^\[/{iface=0}
+        iface && /^[[:space:]]*PrivateKey[[:space:]]*=/{
+            sub(/^[^=]*=/, "", $0)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+            print $0
+            exit
+        }
+    '"'"' "$conf" 2>/dev/null || true
+}
+
+CONF=/etc/amnezia/amneziawg/awg0.conf
+if [[ ! -f "$CONF" ]]; then
+    echo "VPS2_EXISTING_TUNNEL_PUB="
+    exit 0
+fi
+
+priv="$(read_interface_private_key "$CONF")"
+[[ -n "$priv" ]] || { echo "Existing VPS2 awg0.conf has no Interface PrivateKey" >&2; exit 1; }
+if command -v awg >/dev/null 2>&1; then
+    pub="$(printf "%s\n" "$priv" | awg pubkey)"
+elif command -v wg >/dev/null 2>&1; then
+    pub="$(printf "%s\n" "$priv" | wg pubkey)"
+else
+    echo "Existing VPS2 awg0.conf found, but awg/wg is unavailable to derive its public key" >&2
+    exit 1
+fi
+echo "VPS2_EXISTING_TUNNEL_PUB=${pub}"
+') || err "Не удалось прочитать существующий tunnel public key на VPS2"
+VPS2_EXISTING_TUNNEL_PUB="$(printf "%s\n" "$VPS2_EXISTING_TUNNEL_INFO" | awk '
+    /^VPS2_EXISTING_TUNNEL_PUB=/{
+        sub(/^[^=]*=/, "", $0)
+        print $0
+        exit
+    }
+')"
+
+log "Проверяю существующие ключи на VPS1; новые создаются только если ключ отсутствует..."
 KEYS=$(run_script1 '
+VPS2_EXISTING_TUNNEL_PUB='"$(printf '%q' "$VPS2_EXISTING_TUNNEL_PUB")"'
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export UCF_FORCE_CONFFOLD=1
 apt-get -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install amneziawg-tools 2>/dev/null || true
 mkdir -p /etc/amnezia/keys && cd /etc/amnezia/keys
-for name in vps1_tunnel vps2_tunnel vps1_client client_spb; do
-    awg genkey | tee ${name}_priv | awg pubkey > ${name}_pub
-done
+
+read_interface_private_key() {
+    local conf="$1"
+    awk '"'"'
+        /^\[Interface\]/{iface=1; next}
+        /^\[/{iface=0}
+        iface && /^[[:space:]]*PrivateKey[[:space:]]*=/{
+            sub(/^[^=]*=/, "", $0)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+            print $0
+            exit
+        }
+    '"'"' "$conf" 2>/dev/null || true
+}
+
+read_first_peer_public_key() {
+    local conf="$1"
+    awk '"'"'
+        /^\[Peer\]/{peer=1; next}
+        /^\[/{peer=0}
+        peer && /^[[:space:]]*PublicKey[[:space:]]*=/{
+            sub(/^[^=]*=/, "", $0)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+            print $0
+            exit
+        }
+    '"'"' "$conf" 2>/dev/null || true
+}
+
+read_interface_value() {
+    local conf="$1" key="$2"
+    awk -v k="$key" '"'"'
+        /^\[Interface\]/{iface=1; next}
+        /^\[/{iface=0}
+        iface {
+            line=$0
+            lhs=line
+            sub(/[[:space:]]*=.*$/, "", lhs)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", lhs)
+            if (lhs == k) {
+                sub(/^[^=]*=/, "", line)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+                print line
+                exit
+            }
+        }
+    '"'"' "$conf" 2>/dev/null || true
+}
+
+ensure_key_pair() {
+    local name="$1" existing_priv="${2:-}" priv
+    if [[ -s "${name}_priv" ]]; then
+        priv="$(cat "${name}_priv")"
+        echo "[preserve] ${name}_priv"
+    elif [[ -n "$existing_priv" ]]; then
+        priv="$existing_priv"
+        printf "%s\n" "$priv" > "${name}_priv"
+        echo "[preserve] ${name}_priv from existing config"
+    else
+        priv="$(awg genkey)"
+        printf "%s\n" "$priv" > "${name}_priv"
+        echo "[create] ${name}_priv"
+    fi
+    printf "%s\n" "$priv" | awg pubkey > "${name}_pub"
+}
+
+AWG0_CONF=/etc/amnezia/amneziawg/awg0.conf
+AWG1_CONF=/etc/amnezia/amneziawg/awg1.conf
+
+ensure_key_pair vps1_tunnel "$(read_interface_private_key "$AWG0_CONF")"
+ensure_key_pair vps1_client "$(read_interface_private_key "$AWG1_CONF")"
+
+if [[ -f "$AWG0_CONF" ]]; then
+    if [[ -s vps2_tunnel_priv ]]; then
+        printf "%s\n" "$(cat vps2_tunnel_priv)" | awg pubkey > vps2_tunnel_pub
+        echo "[preserve] vps2_tunnel_priv"
+    else
+        echo "[preserve] VPS2 peer from existing awg0.conf; vps2_tunnel_priv unavailable"
+    fi
+elif [[ -n "$VPS2_EXISTING_TUNNEL_PUB" ]]; then
+    printf "%s\n" "$VPS2_EXISTING_TUNNEL_PUB" > vps2_tunnel_pub
+    echo "[preserve] VPS2 peer from existing VPS2 awg0.conf; vps2_tunnel_priv unavailable on VPS1"
+else
+    ensure_key_pair vps2_tunnel ""
+fi
+
+if [[ -s client_spb_priv ]]; then
+    printf "%s\n" "$(cat client_spb_priv)" | awg pubkey > client_spb_pub
+    echo "[preserve] client_spb_priv"
+elif [[ ! -f "$AWG1_CONF" ]]; then
+    awg genkey | tee client_spb_priv | awg pubkey > client_spb_pub
+    echo "[create] client_spb_priv"
+else
+    FIRST_CLIENT_PUB="$(read_first_peer_public_key "$AWG1_CONF")"
+    [[ -n "$FIRST_CLIENT_PUB" ]] && printf "%s\n" "$FIRST_CLIENT_PUB" > client_spb_pub
+    echo "[preserve] awg1.conf peers; client_spb_priv unavailable"
+fi
+
 chmod 600 /etc/amnezia/keys/*
-for name in vps1_tunnel vps2_tunnel vps1_client client_spb; do
-    echo "${name}_PRIV=$(cat ${name}_priv)"
-    echo "${name}_PUB=$(cat ${name}_pub)"
-done
-') || err "Не удалось сгенерировать ключи"
+
+VPS2_PEER_PUB="$(read_first_peer_public_key "$AWG0_CONF")"
+[[ -z "$VPS2_PEER_PUB" && -s vps2_tunnel_pub ]] && VPS2_PEER_PUB="$(cat vps2_tunnel_pub)"
+VPS2_TUNNEL_PRIV_OUT=""
+if [[ -n "$VPS2_PEER_PUB" && -s vps2_tunnel_priv ]]; then
+    DERIVED_VPS2_PUB="$(printf "%s\n" "$(cat vps2_tunnel_priv)" | awg pubkey 2>/dev/null || true)"
+    [[ "$DERIVED_VPS2_PUB" == "$VPS2_PEER_PUB" ]] && VPS2_TUNNEL_PRIV_OUT="$(cat vps2_tunnel_priv)"
+fi
+
+echo "vps1_tunnel_PRIV=$(cat vps1_tunnel_priv)"
+echo "vps1_tunnel_PUB=$(cat vps1_tunnel_pub)"
+echo "vps2_tunnel_PRIV=${VPS2_TUNNEL_PRIV_OUT}"
+echo "vps2_tunnel_PUB=${VPS2_PEER_PUB}"
+echo "vps1_client_PRIV=$(cat vps1_client_priv)"
+echo "vps1_client_PUB=$(cat vps1_client_pub)"
+echo "client_spb_PRIV=$(cat client_spb_priv 2>/dev/null || true)"
+echo "client_spb_PUB=$(cat client_spb_pub 2>/dev/null || true)"
+echo "Jc=$(read_interface_value "$AWG1_CONF" Jc || true)"
+echo "Jmin=$(read_interface_value "$AWG1_CONF" Jmin || true)"
+echo "Jmax=$(read_interface_value "$AWG1_CONF" Jmax || true)"
+echo "S1=$(read_interface_value "$AWG1_CONF" S1 || true)"
+echo "S2=$(read_interface_value "$AWG1_CONF" S2 || true)"
+echo "H1=$(read_interface_value "$AWG1_CONF" H1 || true)"
+echo "H2=$(read_interface_value "$AWG1_CONF" H2 || true)"
+echo "H3=$(read_interface_value "$AWG1_CONF" H3 || true)"
+echo "H4=$(read_interface_value "$AWG1_CONF" H4 || true)"
+') || err "Не удалось подготовить ключи"
 
 # Парсим ключи
 get_key() { echo "$KEYS" | grep "^${1}=" | cut -d= -f2-; }
@@ -283,16 +443,24 @@ CLIENT_PRIV=$(get_key "client_spb_PRIV")
 CLIENT_PUB=$(get_key "client_spb_PUB")
 
 [[ -z "$VPS1_TUNNEL_PUB" ]] && err "Не удалось получить ключи. Убедитесь что AmneziaWG установлен."
+[[ -z "$VPS2_TUNNEL_PUB" ]] && err "Не удалось получить публичный ключ VPS2 tunnel из существующего конфига или key store."
 
-ok "Ключи сгенерированы"
+ok "Ключи подготовлены без ротации существующих значений"
 log "VPS1 tunnel pub: $VPS1_TUNNEL_PUB"
 log "VPS2 tunnel pub: $VPS2_TUNNEL_PUB"
 log "VPS1 client pub: $VPS1_CLIENT_PUB"
 log "Client pub:      $CLIENT_PUB"
 
-# Генерируем случайные Junk параметры (H1-H4 должны быть уникальными uint32)
-H1=$((RANDOM * RANDOM + RANDOM)); H2=$((RANDOM * RANDOM + RANDOM + 1))
-H3=$((RANDOM * RANDOM + RANDOM + 2)); H4=$((RANDOM * RANDOM + RANDOM + 3))
+Jc="$(get_key "Jc")"; Jmin="$(get_key "Jmin")"; Jmax="$(get_key "Jmax")"
+S1="$(get_key "S1")"; S2="$(get_key "S2")"
+H1="$(get_key "H1")"; H2="$(get_key "H2")"; H3="$(get_key "H3")"; H4="$(get_key "H4")"
+
+Jc="${Jc:-2}"; Jmin="${Jmin:-20}"; Jmax="${Jmax:-200}"
+S1="${S1:-15}"; S2="${S2:-20}"
+H1="${H1:-$((RANDOM * RANDOM + RANDOM))}"
+H2="${H2:-$((RANDOM * RANDOM + RANDOM + 1))}"
+H3="${H3:-$((RANDOM * RANDOM + RANDOM + 2))}"
+H4="${H4:-$((RANDOM * RANDOM + RANDOM + 3))}"
 
 # ── Шаг 4: Установка AmneziaWG ─────────────────────────────────────────────
 step "Шаг 4/8: Установка AmneziaWG"
@@ -328,6 +496,10 @@ echo \"Основной интерфейс: \$MAIN_IF\"
 
 mkdir -p /etc/amnezia/amneziawg
 
+if [[ -f /etc/amnezia/amneziawg/awg0.conf ]]; then
+    echo '[preserve] /etc/amnezia/amneziawg/awg0.conf already exists; not rewriting keys/peers'
+else
+[[ -n "${VPS2_TUNNEL_PRIV}" ]] || { echo 'Missing VPS2_TUNNEL_PRIV; refusing to create new VPS2 awg0.conf with an empty key' >&2; exit 1; }
 cat > /etc/amnezia/amneziawg/awg0.conf << WGEOF
 [Interface]
 Address = ${TUN_NET}.2/24
@@ -350,6 +522,7 @@ PublicKey  = ${VPS1_TUNNEL_PUB}
 AllowedIPs = ${TUN_NET}.1/32, ${CLIENT_NET}.0/24
 PersistentKeepalive = 60
 WGEOF
+fi
 
 chmod 600 /etc/amnezia/amneziawg/awg0.conf
 
@@ -439,6 +612,9 @@ echo \"Основной интерфейс: \$MAIN_IF\"
 mkdir -p /etc/amnezia/amneziawg
 
 # awg0: туннель к VPS2
+if [[ -f /etc/amnezia/amneziawg/awg0.conf ]]; then
+    echo '[preserve] /etc/amnezia/amneziawg/awg0.conf already exists; not rewriting keys/peers'
+else
 cat > /etc/amnezia/amneziawg/awg0.conf << WGEOF
 [Interface]
 Address = ${TUN_NET}.1/24
@@ -456,8 +632,12 @@ Endpoint            = ${VPS2_IP}:${VPS2_PORT}
 AllowedIPs          = 0.0.0.0/0
 PersistentKeepalive = 60
 WGEOF
+fi
 
 # awg1: клиентский интерфейс с Junk обфускацией
+if [[ -f /etc/amnezia/amneziawg/awg1.conf ]]; then
+    echo '[preserve] /etc/amnezia/amneziawg/awg1.conf already exists; not rewriting keys/peers'
+else
 cat > /etc/amnezia/amneziawg/awg1.conf << WGEOF
 [Interface]
 Address = ${CLIENT_NET}.1/24
@@ -466,11 +646,11 @@ ListenPort = ${VPS1_PORT_CLIENTS}
 DNS = ${TUN_NET}.2
 MTU = 1360
 
-Jc   = 2
-Jmin = 20
-Jmax = 200
-S1   = 15
-S2   = 20
+Jc   = ${Jc}
+Jmin = ${Jmin}
+Jmax = ${Jmax}
+S1   = ${S1}
+S2   = ${S2}
 H1   = ${H1}
 H2   = ${H2}
 H3   = ${H3}
@@ -499,6 +679,7 @@ PostDown = iptables -D FORWARD -i awg1 -d 8.8.8.8,8.8.4.4,1.1.1.1,1.0.0.1 -p tcp
 PublicKey  = ${CLIENT_PUB}
 AllowedIPs = ${CLIENT_VPN_IP}/32
 WGEOF
+fi
 
 chmod 600 /etc/amnezia/amneziawg/*.conf
 
@@ -580,31 +761,33 @@ echo VPS1_AWG_OK
 "
 ok "VPS1 настроен"
 
-# ── Шаг 7: Установка AdGuard Home на VPS2 ─────────────────────────────────
-step "Шаг 7/8: Установка AdGuard Home на VPS2"
+# ── Шаг 7: Проверка AdGuard Home на VPS2 ──────────────────────────────────
+step "Шаг 7/8: Проверка AdGuard Home на VPS2"
 
-# Хэш пароля bcrypt для AdGuard Home
-# Используем htpasswd или python для генерации
-AGH_PASS_HASH=$(python3 -c "
-import bcrypt, sys
-pw = sys.argv[1].encode()
-print(bcrypt.hashpw(pw, bcrypt.gensalt(10)).decode())
-" "$ADGUARD_PASS" 2>/dev/null) || \
-err "Не удалось сгенерировать bcrypt-хэш пароля. Установите python3-bcrypt: pip3 install bcrypt"
+ADGUARD_PASS_SHELL="$(printf '%q' "$ADGUARD_PASS")"
 
 run_script2 "
 export DEBIAN_FRONTEND=noninteractive
 set -e
+ADGUARD_PASS=${ADGUARD_PASS_SHELL}
 
 # Освобождаем порт 53 от systemd-resolved
 mkdir -p /etc/systemd/resolved.conf.d
-cat > /etc/systemd/resolved.conf.d/adguard.conf << 'EOF'
+RESOLVED_CONF=/etc/systemd/resolved.conf.d/adguard.conf
+RESOLVED_TMP=\$(mktemp)
+cat > \"\$RESOLVED_TMP\" << 'EOF'
 [Resolve]
 DNS=127.0.0.1
 DNSStubListener=no
 EOF
-systemctl restart systemd-resolved 2>/dev/null || true
-sleep 1
+if [[ ! -f \"\$RESOLVED_CONF\" ]] || ! cmp -s \"\$RESOLVED_TMP\" \"\$RESOLVED_CONF\"; then
+    cp -f \"\$RESOLVED_TMP\" \"\$RESOLVED_CONF\"
+    systemctl restart systemd-resolved 2>/dev/null || true
+    sleep 1
+else
+    echo '[preserve] /etc/systemd/resolved.conf.d/adguard.conf unchanged; not restarting systemd-resolved'
+fi
+rm -f \"\$RESOLVED_TMP\"
 
 ADGUARD_WAS_ACTIVE=0
 if systemctl is-active --quiet AdGuardHome 2>/dev/null || systemctl is-active --quiet adguardhome 2>/dev/null; then
@@ -615,7 +798,9 @@ if systemctl is-active --quiet youtube-proxy 2>/dev/null; then
     LEGACY_YOUTUBE_PROXY_ACTIVE=1
 fi
 ADGUARD_CONFIG_BACKUP=/tmp/AdGuardHome.yaml.pre-deploy
+ADGUARD_CONFIG_EXISTED=0
 if [[ -f /opt/AdGuardHome/AdGuardHome.yaml ]]; then
+    ADGUARD_CONFIG_EXISTED=1
     cp -f /opt/AdGuardHome/AdGuardHome.yaml \"\$ADGUARD_CONFIG_BACKUP\"
 else
     rm -f \"\$ADGUARD_CONFIG_BACKUP\"
@@ -639,12 +824,49 @@ fi
 sleep 1
 
 # Конфиг
-cat > /opt/AdGuardHome/AdGuardHome.yaml << 'AGHEOF'
+if [[ \"\$ADGUARD_CONFIG_EXISTED\" == \"1\" ]]; then
+    echo '[preserve] /opt/AdGuardHome/AdGuardHome.yaml already exists; not rewriting AdGuard config'
+else
+generate_adguard_hash() {
+    local hash
+    if command -v python3 >/dev/null 2>&1; then
+        hash=\$(AGH_PLAIN_PASS=\"\$ADGUARD_PASS\" python3 - <<'PY' 2>/dev/null
+import os
+import bcrypt
+
+print(bcrypt.hashpw(os.environ['AGH_PLAIN_PASS'].encode(), bcrypt.gensalt(10)).decode())
+PY
+)
+        if [[ -n \"\$hash\" ]]; then
+            printf '%s\n' \"\$hash\"
+            return 0
+        fi
+    fi
+
+    if ! command -v htpasswd >/dev/null 2>&1; then
+        apt-get -y -qq -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" install apache2-utils >/dev/null 2>&1 || true
+    fi
+    if command -v htpasswd >/dev/null 2>&1; then
+        hash=\$(printf '%s\n' \"\$ADGUARD_PASS\" | htpasswd -Bni admin 2>/dev/null | sed 's/^[^:]*://')
+        if [[ -n \"\$hash\" ]]; then
+            printf '%s\n' \"\$hash\"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+AGH_PASS_HASH=\$(generate_adguard_hash) || {
+    echo 'Не удалось сгенерировать bcrypt-хэш пароля AdGuard Home на VPS2 (python3-bcrypt или apache2-utils недоступны)' >&2
+    exit 1
+}
+
+cat > /opt/AdGuardHome/AdGuardHome.yaml << AGHEOF
 http:
   address: ${TUN_NET}.2:3000
 users:
   - name: admin
-    password: '${AGH_PASS_HASH}'
+    password: '\${AGH_PASS_HASH}'
 dns:
   bind_hosts:
     - ${TUN_NET}.2
@@ -693,6 +915,7 @@ statistics:
   enabled: true
 schema_version: 28
 AGHEOF
+fi
 
 restore_previous_dns() {
     /opt/AdGuardHome/AdGuardHome -s stop 2>/dev/null || true
@@ -743,12 +966,15 @@ systemctl daemon-reload 2>/dev/null || true
 /opt/AdGuardHome/AdGuardHome -s status
 echo AGH_OK
 "
-ok "AdGuard Home установлен на VPS2"
+ok "AdGuard Home проверен на VPS2"
 
-# ── Шаг 8: Генерация клиентского конфига ──────────────────────────────────
-step "Шаг 8/8: Генерация клиентского конфига"
+# ── Шаг 8: Клиентский конфиг ──────────────────────────────────────────────
+step "Шаг 8/8: Проверка клиентского конфига"
 
 CLIENT_CONF="${OUTPUT_DIR}/client.conf"
+if [[ -f "$CLIENT_CONF" ]]; then
+    warn "Клиентский конфиг уже существует и сохранён без изменений: ${CLIENT_CONF}"
+elif [[ -n "$CLIENT_PRIV" && -n "$VPS1_CLIENT_PUB" ]]; then
 cat > "$CLIENT_CONF" << EOF
 [Interface]
 Address    = ${CLIENT_VPN_IP}/24
@@ -757,11 +983,11 @@ DNS        = ${TUN_NET}.2
 MTU        = 1360
 
 # AmneziaWG Junk обфускация (защита от DPI)
-Jc   = 2
-Jmin = 20
-Jmax = 200
-S1   = 15
-S2   = 20
+Jc   = ${Jc}
+Jmin = ${Jmin}
+Jmax = ${Jmax}
+S1   = ${S1}
+S2   = ${S2}
 H1   = ${H1}
 H2   = ${H2}
 H3   = ${H3}
@@ -775,9 +1001,16 @@ AllowedIPs          = 0.0.0.0/0
 PersistentKeepalive = 25
 EOF
 
-ok "Клиентский конфиг: ${BOLD}${CLIENT_CONF}${NC}"
+    chmod 600 "$CLIENT_CONF" 2>/dev/null || true
+    ok "Клиентский конфиг создан: ${BOLD}${CLIENT_CONF}${NC}"
+else
+    warn "Клиентский конфиг не создан: приватный ключ базового клиента недоступен, существующие серверные peer-блоки сохранены"
+fi
 
 # Сохраняем ключи для справки
+if [[ -f "${OUTPUT_DIR}/keys.txt" ]]; then
+    warn "Файл ключей уже существует и сохранён без изменений: ${OUTPUT_DIR}/keys.txt"
+elif [[ -n "$VPS1_TUNNEL_PRIV" && -n "$VPS2_TUNNEL_PRIV" && -n "$VPS1_CLIENT_PRIV" && -n "$CLIENT_PRIV" ]]; then
 cat > "${OUTPUT_DIR}/keys.txt" << EOF
 === AmneziaWG ключи (хранить в тайне!) ===
 
@@ -790,10 +1023,14 @@ VPS1 client public:   ${VPS1_CLIENT_PUB}
 Client private:       ${CLIENT_PRIV}
 Client public:        ${CLIENT_PUB}
 
-Junk параметры: Jc=2 Jmin=20 Jmax=200 S1=15 S2=20
+Junk параметры: Jc=${Jc} Jmin=${Jmin} Jmax=${Jmax} S1=${S1} S2=${S2}
 H1=${H1} H2=${H2} H3=${H3} H4=${H4}
 EOF
 chmod 600 "${OUTPUT_DIR}/keys.txt"
+    ok "Файл ключей создан: ${OUTPUT_DIR}/keys.txt"
+else
+    warn "Файл keys.txt не создан: часть приватных ключей недоступна локально; существующие серверные конфиги не изменялись"
+fi
 
 # ── Фиксация времени успешного деплоя на серверах ─────────────────────────
 DEPLOY_TS="$(date +%s)"
@@ -817,7 +1054,11 @@ echo ""
 echo -e "  ${GREEN}Схема:${NC}"
 echo -e "  [Клиент ${CLIENT_VPN_IP}] → AmneziaWG+Junk → [VPS1 ${VPS1_IP}] → туннель → [VPS2 ${VPS2_IP}] → Интернет"
 echo ""
-echo -e "  ${GREEN}Клиентский конфиг:${NC} ${BOLD}${CLIENT_CONF}${NC}"
+if [[ -f "$CLIENT_CONF" ]]; then
+    echo -e "  ${GREEN}Клиентский конфиг:${NC} ${BOLD}${CLIENT_CONF}${NC}"
+else
+    echo -e "  ${YELLOW}Клиентский конфиг:${NC} не создан локально; серверные peer-блоки сохранены"
+fi
 echo -e "  ${GREEN}Импортируй в:${NC} AmneziaVPN (https://amnezia.org/ru/downloads)"
 echo ""
 echo -e "  ${GREEN}AdGuard Home:${NC}"

@@ -151,6 +151,8 @@ check_in_file "$APPLY_SH" '--match-set.*IPSET_NAME.*dst'         "match ipset (�
 check_in_file "$APPLY_SH" 'IPSET_NAME=\\\$\\\{IPSET_NAME:-ru_subnets\\\}|IPSET_NAME:-ru_subnets' "default IPSET_NAME=ru_subnets"
 check_in_file "$APPLY_SH" 'MARK --set-mark'                      "MARK --set-mark"
 check_in_file "$APPLY_SH" 'ip rule add fwmark'                   "ip rule add fwmark"
+check_in_file "$APPLY_SH" 'FWMARK_RULE_PRIORITY="\$\{FWMARK_RULE_PRIORITY:-80\}"' "fwmark rule priority 80 (раньше client-net rule priority 89)"
+check_in_file "$APPLY_SH" 'ip rule add fwmark "\$MARK_HEX" table "\$ROUTE_TABLE" priority "\$FWMARK_RULE_PRIORITY"' "fwmark policy rule использует явный priority"
 check_in_file "$APPLY_SH" 'ip route replace default'             "ip route replace default (table 100)"
 check_in_file "$APPLY_SH" 'POSTROUTING.*MASQUERADE'              "MASQUERADE на основном интерфейсе"
 check_in_file "$APPLY_SH" 'filter FORWARD -i awg1 -o "\$MAIN_IF".*--mark "\$MARK_HEX".*-j ACCEPT' "FORWARD awg1→MAIN_IF только для маркированного split-трафика"
