@@ -86,6 +86,18 @@ else
     fail "deploy-admin.sh has syntax errors"
 fi
 
+if grep -q -- "grep -oP" "$DEPLOY_SCRIPT" 2>/dev/null; then
+    fail "deploy-admin.sh uses GNU-only grep -P"
+else
+    pass "deploy-admin.sh avoids GNU-only grep -P"
+fi
+
+if grep -q -- 'match($0, /pid=' "$DEPLOY_SCRIPT" 2>/dev/null; then
+    fail "deploy-admin.sh uses GNU awk match array extension"
+else
+    pass "deploy-admin.sh avoids GNU awk match array extension"
+fi
+
 # ── 4. HTML structure check ──────────────────────────────────────────────────
 
 echo ""

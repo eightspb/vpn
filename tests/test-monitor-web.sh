@@ -93,6 +93,14 @@ else
     ok "scripts/monitor/monitor-web.sh: нет UserKnownHostsFile=/dev/null"
 fi
 
+# ControlMaster is opt-in because some OpenSSH versions refuse mux sessions after VPS reboot.
+if grep -q 'CONTROLMASTER_ENABLED="${VPN_MONITOR_CONTROLMASTER:-0}"' scripts/monitor/monitor-web.sh && \
+   grep -q 'CONTROLMASTER_ENABLED.*== "1"' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: SSH ControlMaster отключён по умолчанию и включается явно"
+else
+    fail "scripts/monitor/monitor-web.sh: SSH ControlMaster должен быть opt-in"
+fi
+
 # check_internal_ips использует ping_host
 if grep -A15 '^check_internal_ips()' scripts/monitor/monitor-web.sh | grep -q 'ping_host'; then
     ok "scripts/monitor/monitor-web.sh: check_internal_ips использует ping_host()"
@@ -151,6 +159,19 @@ if grep -q 'PYTHON_CMD=' scripts/monitor/monitor-web.sh && \
     ok "scripts/monitor/monitor-web.sh: есть fallback Python runtime (python3/python/py -3)"
 else
     fail "scripts/monitor/monitor-web.sh: нет fallback Python runtime"
+fi
+
+if grep -q 'VPN_MONITOR_SLOW_INTERVAL:-60' scripts/monitor/monitor-web.sh && \
+   grep -q 'VPN_MONITOR_POLL_VPS2_FAST:-0' scripts/monitor/monitor-web.sh; then
+    ok "scripts/monitor/monitor-web.sh: VPS2 SSH polling снижает частоту и настраивается через env"
+else
+    fail "scripts/monitor/monitor-web.sh: VPS2 SSH polling должен быть разрежен и настраиваем"
+fi
+
+if grep -q 'mktemp /tmp/monweb_srv_XXXXXX.py' scripts/monitor/monitor-web.sh; then
+    fail "scripts/monitor/monitor-web.sh: mktemp использует macOS-несовместимый suffix после X"
+else
+    ok "scripts/monitor/monitor-web.sh: mktemp совместим с macOS"
 fi
 
 # ---------------------------------------------------------------------------
@@ -312,6 +333,18 @@ if grep -q 'hard_timeout\|wait_deadline' scripts/monitor/monitor-web.sh; then
     ok "scripts/monitor/monitor-web.sh: жёсткий таймаут на параллельный сбор"
 else
     fail "scripts/monitor/monitor-web.sh: нет жёсткого таймаута на сбор данных"
+fi
+
+if grep -q 'local cycle_type' scripts/monitor/monitor-web.sh; then
+    fail "scripts/monitor/monitor-web.sh: local используется вне функции в основном цикле"
+else
+    ok "scripts/monitor/monitor-web.sh: основной цикл не использует local вне функции"
+fi
+
+if grep -q 'match($0,/pid=' scripts/monitor/monitor-web.sh; then
+    fail "scripts/monitor/monitor-web.sh: cleanup HTTP-порта использует GNU awk match array extension"
+else
+    ok "scripts/monitor/monitor-web.sh: cleanup HTTP-порта совместим с macOS awk"
 fi
 
 # ---------------------------------------------------------------------------
@@ -559,8 +592,8 @@ fi
 echo ""
 echo "--- 9f. Интервал обновления ---"
 
-backend_interval=$(grep -m1 '^INTERVAL=' scripts/monitor/monitor-web.sh | head -1 | sed 's/INTERVAL=//')
-if [[ -n "$backend_interval" && "$backend_interval" -ge 5 && "$backend_interval" -le 10 ]]; then
+backend_interval=$(grep -m1 '^INTERVAL=' scripts/monitor/monitor-web.sh | head -1 | sed -E 's/.*:-([0-9]+).*/\1/; s/INTERVAL=//')
+if [[ "$backend_interval" =~ ^[0-9]+$ ]] && [[ "$backend_interval" -ge 5 ]] && [[ "$backend_interval" -le 10 ]]; then
     ok "scripts/monitor/monitor-web.sh: INTERVAL=${backend_interval}s (в безопасном диапазоне 5-10s)"
 else
     fail "scripts/monitor/monitor-web.sh: INTERVAL=${backend_interval:-?}s (должен быть в диапазоне 5-10s)"

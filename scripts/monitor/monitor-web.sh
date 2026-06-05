@@ -28,15 +28,16 @@ VPS1_INTERNAL="10.9.0.1"
 VPS2_INTERNAL=""
 
 VPS2_TUN_IP="10.8.0.2"
-INTERVAL=5
+INTERVAL="${VPN_MONITOR_INTERVAL:-10}"
 HTTP_PORT=8080
-SSH_TIMEOUT=8
+SSH_TIMEOUT="${VPN_MONITOR_SSH_TIMEOUT:-12}"
 JSON_FILE="./vpn-output/data.json"
 PID_FILE="./vpn-output/monitor-web.pid"
 LOG_FILE="./vpn-output/monitor.log"
 LOG_LEVEL="INFO"
 PYTHON_CMD=()
 HTTP_WINDOWS_RUNTIME=0
+CONTROLMASTER_ENABLED="${VPN_MONITOR_CONTROLMASTER:-0}"
 
 TEMP_KEY_FILES=()
 LAST_ERR_VPS1=""
@@ -60,9 +61,10 @@ LAST_SLEEP_INTERVAL=0
 CONTROL_SOCKET_VPS1="/tmp/vpn-monitor-ssh-vps1-$$"
 CONTROL_SOCKET_VPS2="/tmp/vpn-monitor-ssh-vps2-$$"
 # Fast/slow polling cycle
-FAST_INTERVAL=2        # fast metrics every 2 seconds
-SLOW_INTERVAL=10       # slow metrics every 10 seconds
+FAST_INTERVAL="${VPN_MONITOR_FAST_INTERVAL:-10}"   # fast metrics, primarily VPS1/client state
+SLOW_INTERVAL="${VPN_MONITOR_SLOW_INTERVAL:-60}"   # full metrics, including VPS2 SSH
 SLOW_CYCLE_COUNTER=0   # tracks when to run slow cycle
+POLL_VPS2_FAST="${VPN_MONITOR_POLL_VPS2_FAST:-0}"
 ALERT_LOAD_WARN_PCT=120
 ALERT_LOAD_CRIT_PCT=180
 ALERT_MEM_WARN_PCT=80
@@ -139,6 +141,8 @@ _is_master_alive() {
 }
 
 start_ssh_master() {
+    [[ "$CONTROLMASTER_ENABLED" == "1" ]] || return 0
+
     local server="$1" ip="$2" user="$3" key="$4" pass="$5"
     local socket
     socket="$(_get_control_socket "$server")"
@@ -208,7 +212,7 @@ ssh_exec() {
                     -o AddressFamily=inet \
                     -o ServerAliveInterval=3 -o ServerAliveCountMax=2)
     # Use ControlMaster if socket exists
-    if [[ -S "$socket" ]]; then
+    if [[ "$CONTROLMASTER_ENABLED" == "1" && -S "$socket" ]]; then
         ssh_opts+=(-o ControlPath="$socket")
     fi
     local stderr_file rc out err
@@ -242,7 +246,7 @@ ssh_exec() {
         set_last_error "$server" "rc=$rc ${err}"
         log_line "ERROR" "$server ssh failed rc=$rc target=${user}@${ip} err=${err}"
         # If control socket was used and failed, try to restart master
-        if [[ -S "$socket" ]]; then
+        if [[ "$CONTROLMASTER_ENABLED" == "1" && -S "$socket" ]]; then
             rm -f "$socket" 2>/dev/null
             log_line "INFO" "$server ControlMaster socket invalidated, will reconnect"
         fi
@@ -987,7 +991,7 @@ detect_http_python() {
 start_http_server() {
     detect_http_python
     local srv_script
-    srv_script="$(mktemp /tmp/monweb_srv_XXXXXX.py)" || {
+    srv_script="$(mktemp "${TMPDIR:-/tmp}/monweb_srv_XXXXXX")" || {
         log_line "WARN" "mktemp failed, falling back to plain http.server (no /api/ping)"
         "${HTTP_PYTHON_CMD[@]}" -m http.server "$HTTP_PORT" --bind 127.0.0.1 2>/dev/null &
         HTTP_PID="$!"; sleep 0.3; return
@@ -1307,8 +1311,8 @@ kill_previous_instance() {
     # 3) Kill leftover HTTP server on our port
     local http_pids
     http_pids="$(lsof -ti :"$HTTP_PORT" 2>/dev/null || true)"
-    if [[ -z "$http_pids" ]]; then
-        http_pids="$(ss -tlnp 2>/dev/null | awk -v p=":${HTTP_PORT}" '$4~p {match($0,/pid=([0-9]+)/,m); if(m[1]) print m[1]}' || true)"
+    if [[ -z "$http_pids" ]] && command -v ss >/dev/null 2>&1; then
+        http_pids="$(ss -tlnp 2>/dev/null | awk -v p=":${HTTP_PORT}" '$4 ~ p {print}' | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' || true)"
     fi
     for pid in $http_pids; do
         [[ "$pid" -eq "$my_pid" ]] && continue
@@ -1336,11 +1340,14 @@ echo "  Data JSON : http://127.0.0.1:${HTTP_PORT}/vpn-output/data.json"
 echo "  Fast poll : ${FAST_INTERVAL}s  |  Full poll: ${SLOW_INTERVAL}s  |  Ctrl+C to stop"
 echo ""
 
-# Establish persistent SSH connections
 check_internal_ips
-log_line "INFO" "establishing SSH ControlMaster connections..."
-start_ssh_master "VPS1" "$CURRENT_VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS"
-start_ssh_master "VPS2" "$CURRENT_VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS"
+if [[ "$CONTROLMASTER_ENABLED" == "1" ]]; then
+    log_line "INFO" "establishing SSH ControlMaster connections..."
+    start_ssh_master "VPS1" "$CURRENT_VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS"
+    start_ssh_master "VPS2" "$CURRENT_VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS"
+else
+    log_line "INFO" "SSH ControlMaster disabled; using direct SSH polling"
+fi
 
 # Keep last full data for merging with fast updates
 LAST_FULL_VPS1_DATA=""
@@ -1350,9 +1357,11 @@ while true; do
     check_internal_ips
     SLOW_CYCLE_COUNTER=$(( SLOW_CYCLE_COUNTER + 1 ))
 
-    # Ensure SSH ControlMaster connections are alive
-    start_ssh_master "VPS1" "$CURRENT_VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS"
-    start_ssh_master "VPS2" "$CURRENT_VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS"
+    # Ensure SSH ControlMaster connections are alive when explicitly enabled.
+    if [[ "$CONTROLMASTER_ENABLED" == "1" ]]; then
+        start_ssh_master "VPS1" "$CURRENT_VPS1_IP" "$VPS1_USER" "$VPS1_KEY" "$VPS1_PASS"
+        start_ssh_master "VPS2" "$CURRENT_VPS2_IP" "$VPS2_USER" "$VPS2_KEY" "$VPS2_PASS"
+    fi
 
     # Decide: full collection or fast-only
     SLOW_CYCLES=$(( SLOW_INTERVAL / FAST_INTERVAL ))
@@ -1376,7 +1385,11 @@ while true; do
         # Fast collection (traffic, handshakes, connections only)
         collect_vps1_fast > "$local_tmp1" &
         PID1=$!
-        collect_vps2_fast > "$local_tmp2" &
+        if [[ "$POLL_VPS2_FAST" == "1" ]]; then
+            collect_vps2_fast > "$local_tmp2" &
+        else
+            : > "$local_tmp2" &
+        fi
         PID2=$!
     fi
 
@@ -1398,8 +1411,10 @@ while true; do
     if [[ $IS_FULL_CYCLE -eq 1 ]]; then
         VPS1_DATA="$RAW_VPS1"
         VPS2_DATA="$RAW_VPS2"
-        [[ -n "$VPS1_DATA" ]] && LAST_FULL_VPS1_DATA="$VPS1_DATA"
-        [[ -n "$VPS2_DATA" ]] && LAST_FULL_VPS2_DATA="$VPS2_DATA"
+        [[ -z "$VPS1_DATA" && -n "$LAST_FULL_VPS1_DATA" ]] && VPS1_DATA="$LAST_FULL_VPS1_DATA"
+        [[ -z "$VPS2_DATA" && -n "$LAST_FULL_VPS2_DATA" ]] && VPS2_DATA="$LAST_FULL_VPS2_DATA"
+        [[ -n "$RAW_VPS1" ]] && LAST_FULL_VPS1_DATA="$RAW_VPS1"
+        [[ -n "$RAW_VPS2" ]] && LAST_FULL_VPS2_DATA="$RAW_VPS2"
     else
         # Merge fast metrics into the last full snapshot
         VPS1_DATA="$(merge_fast_into_full "$LAST_FULL_VPS1_DATA" "$RAW_VPS1")"
@@ -1414,7 +1429,11 @@ while true; do
     fi
 
     if [[ -n "$RAW_VPS1" ]]; then VPS1_FAIL_STREAK=0; else VPS1_FAIL_STREAK=$((VPS1_FAIL_STREAK + 1)); fi
-    if [[ -n "$RAW_VPS2" ]]; then VPS2_FAIL_STREAK=0; else VPS2_FAIL_STREAK=$((VPS2_FAIL_STREAK + 1)); fi
+    if [[ -n "$RAW_VPS2" || ( $IS_FULL_CYCLE -eq 0 && "$POLL_VPS2_FAST" != "1" && -n "$LAST_FULL_VPS2_DATA" ) ]]; then
+        VPS2_FAIL_STREAK=0
+    else
+        VPS2_FAIL_STREAK=$((VPS2_FAIL_STREAK + 1))
+    fi
     EFFECTIVE_INTERVAL="$(compute_effective_interval)"
     # Use fast interval as base, but respect backoff from failures
     ACTUAL_SLEEP=$FAST_INTERVAL
@@ -1425,7 +1444,7 @@ while true; do
         log_line "INFO" "poll interval: fast=${FAST_INTERVAL}s effective=${ACTUAL_SLEEP}s full_every=${SLOW_INTERVAL}s fail_streak_vps1=${VPS1_FAIL_STREAK} fail_streak_vps2=${VPS2_FAIL_STREAK}"
         LAST_SLEEP_INTERVAL="$ACTUAL_SLEEP"
     fi
-    local cycle_type="fast"
+    cycle_type="fast"
     [[ $IS_FULL_CYCLE -eq 1 ]] && cycle_type="FULL"
     printf "\r  [%s] %s JSON updated  (next in %ss)" "$(date '+%H:%M:%S')" "$cycle_type" "$ACTUAL_SLEEP"
     sleep "$ACTUAL_SLEEP"

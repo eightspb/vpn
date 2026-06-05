@@ -49,7 +49,16 @@ find_python() {
     for cmd in python3 python py; do
         if command -v "$cmd" &>/dev/null; then
             local ver
-            ver="$("$cmd" --version 2>&1 | grep -oP '\d+\.\d+' | head -1)"
+            ver="$("$cmd" --version 2>&1 | awk '{
+                for (i = 1; i <= NF; i++) {
+                    if ($i ~ /^[0-9]+[.][0-9]+/) {
+                        split($i, parts, ".")
+                        print parts[1] "." parts[2]
+                        exit
+                    }
+                }
+            }')"
+            [[ -z "$ver" ]] && continue
             local major="${ver%%.*}"
             if [[ "$major" -ge 3 ]]; then
                 printf "%s" "$cmd"
@@ -186,11 +195,11 @@ get_listener_pid_by_port() {
     local port="$1"
     local pid=""
 
-    if command -v ss &>/dev/null; then
-        pid="$(ss -tlnp 2>/dev/null | awk -v p=":${port}" '$4 ~ p { if (match($0, /pid=([0-9]+)/, m)) { print m[1]; exit } }')"
-    fi
-    if [[ -z "$pid" ]] && command -v lsof &>/dev/null; then
+    if command -v lsof &>/dev/null; then
         pid="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -n1 || true)"
+    fi
+    if [[ -z "$pid" ]] && command -v ss &>/dev/null; then
+        pid="$(ss -tlnp 2>/dev/null | awk -v p=":${port}" '$4 ~ p {print}' | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -n1 || true)"
     fi
     if [[ -n "$pid" ]]; then
         printf "%s" "$pid"
